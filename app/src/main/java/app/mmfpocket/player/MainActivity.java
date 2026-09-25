@@ -38,10 +38,8 @@ import java.security.NoSuchAlgorithmException;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
-import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -74,8 +72,10 @@ public final class MainActivity extends Activity {
             }
         }
     };
+    private final List<BrowserEntry> browserEntries = new ArrayList<>();
     private final List<MmfEntry> entries = new ArrayList<>();
     private final List<String> names = new ArrayList<>();
+    private final ArrayDeque<FolderLocation> folderHistory = new ArrayDeque<>();
 
     private ArrayAdapter<String> adapter;
     private TextView folderLabel;
@@ -96,6 +96,8 @@ public final class MainActivity extends Activity {
     private MmfEntry selectedEntry;
     private boolean prepared;
     private boolean batchConverting;
+    private Uri selectedTreeUri;
+    private FolderLocation currentFolder;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -188,7 +190,16 @@ public final class MainActivity extends Activity {
         listView.setChoiceMode(ListView.CHOICE_MODE_SINGLE);
         adapter = new ArrayAdapter<>(this, android.R.layout.simple_list_item_activated_1, names);
         listView.setAdapter(adapter);
-        listView.setOnItemClickListener((parent, view, position, id) -> play(entries.get(position)));
+        listView.setOnItemClickListener((parent, view, position, id) -> {
+            BrowserEntry entry = browserEntries.get(position);
+            if (entry.kind == BrowserEntry.PARENT) {
+                navigateUp();
+            } else if (entry.kind == BrowserEntry.DIRECTORY) {
+                navigateInto(entry);
+            } else {
+                play(entry.file);
+            }
+        });
         root.addView(listView, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, 0, 1));
 
@@ -335,63 +346,87 @@ public final class MainActivity extends Activity {
         currentName = null;
         stopPlayback(false);
         nowPlayingLabel.setText(R.string.no_track_selected);
+        selectedTreeUri = treeUri;
+        folderHistory.clear();
+        try {
+            String rootId = DocumentsContract.getTreeDocumentId(treeUri);
+            openDirectory(new FolderLocation(rootId, folderDisplayName(treeUri)));
+        } catch (Exception error) {
+            Toast.makeText(this, getString(R.string.folder_read_failed, error.getMessage()),
+                    Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void openDirectory(FolderLocation folder) {
+        if (selectedTreeUri == null) return;
+        cancelBatchConversion();
+        currentFolder = folder;
+        Uri treeUri = selectedTreeUri;
         int generation = scanGeneration.incrementAndGet();
-        folderLabel.setText(getString(R.string.selected_folder, folderDisplayName(treeUri)));
+        folderLabel.setText(getString(R.string.selected_folder, folder.displayPath));
         statusLabel.setText(R.string.scanning_folder);
         batchButton.setEnabled(false);
+        listView.setEnabled(false);
         worker.execute(() -> {
-            List<MmfEntry> found = queryMmfFiles(treeUri);
-            found.sort(Comparator.comparing(entry -> entry.name.toLowerCase(Locale.ROOT)));
+            List<BrowserEntry> found = queryDirectory(treeUri, folder.documentId);
+            found.sort(Comparator
+                    .comparingInt((BrowserEntry entry) -> entry.kind)
+                    .thenComparing(entry -> entry.name.toLowerCase(Locale.ROOT)));
             runOnUiThread(() -> {
                 if (generation != scanGeneration.get() || isFinishing() || isDestroyed()) return;
-                entries.clear();
-                entries.addAll(found);
+                browserEntries.clear();
                 names.clear();
-                for (MmfEntry entry : found) names.add(entry.name);
+                entries.clear();
+                if (!folderHistory.isEmpty()) {
+                    browserEntries.add(BrowserEntry.parent());
+                    names.add(getString(R.string.parent_folder));
+                }
+                int folderCount = 0;
+                for (BrowserEntry entry : found) {
+                    browserEntries.add(entry);
+                    if (entry.kind == BrowserEntry.DIRECTORY) {
+                        folderCount++;
+                        names.add(getString(R.string.folder_list_item, entry.name));
+                    } else {
+                        entries.add(entry.file);
+                        names.add(entry.name);
+                    }
+                }
                 adapter.notifyDataSetChanged();
                 listView.clearChoices();
-                batchButton.setEnabled(!found.isEmpty());
+                listView.setEnabled(true);
+                batchButton.setEnabled(!entries.isEmpty());
                 statusLabel.setText(found.isEmpty()
                         ? getString(R.string.empty_folder_ja)
-                        : getString(R.string.mmf_file_count, found.size()));
+                        : getString(R.string.folder_item_count, entries.size(), folderCount));
             });
         });
     }
 
-    private List<MmfEntry> queryMmfFiles(Uri treeUri) {
-        List<MmfEntry> result = new ArrayList<>();
+    private List<BrowserEntry> queryDirectory(Uri treeUri, String documentId) {
+        List<BrowserEntry> result = new ArrayList<>();
         try {
-            String rootId = DocumentsContract.getTreeDocumentId(treeUri);
             String[] projection = {
                     DocumentsContract.Document.COLUMN_DOCUMENT_ID,
                     DocumentsContract.Document.COLUMN_DISPLAY_NAME,
                     DocumentsContract.Document.COLUMN_MIME_TYPE
             };
-            ArrayDeque<FolderNode> pending = new ArrayDeque<>();
-            Set<String> visited = new HashSet<>();
-            pending.add(new FolderNode(rootId, ""));
-
-            while (!pending.isEmpty()) {
-                FolderNode folder = pending.removeFirst();
-                if (!visited.add(folder.documentId)) continue;
-                Uri childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(
-                        treeUri, folder.documentId);
-                try (Cursor cursor = getContentResolver().query(
-                        childrenUri, projection, null, null, null)) {
-                    if (cursor == null) continue;
-                    while (cursor.moveToNext()) {
-                        String documentId = cursor.getString(0);
-                        String name = cursor.getString(1);
-                        String mime = cursor.getString(2);
-                        if (name == null) continue;
-                        if (DocumentsContract.Document.MIME_TYPE_DIR.equals(mime)) {
-                            pending.addLast(new FolderNode(
-                                    documentId, folder.relativePath + name + "/"));
-                        } else if (name.toLowerCase(Locale.ROOT).endsWith(".mmf")) {
-                            Uri fileUri = DocumentsContract.buildDocumentUriUsingTree(
-                                    treeUri, documentId);
-                            result.add(new MmfEntry(folder.relativePath + name, fileUri));
-                        }
+            Uri childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(
+                    treeUri, documentId);
+            try (Cursor cursor = getContentResolver().query(
+                    childrenUri, projection, null, null, null)) {
+                if (cursor == null) return result;
+                while (cursor.moveToNext()) {
+                    String childId = cursor.getString(0);
+                    String name = cursor.getString(1);
+                    String mime = cursor.getString(2);
+                    if (name == null) continue;
+                    if (DocumentsContract.Document.MIME_TYPE_DIR.equals(mime)) {
+                        result.add(BrowserEntry.directory(name, childId));
+                    } else if (name.toLowerCase(Locale.ROOT).endsWith(".mmf")) {
+                        Uri fileUri = DocumentsContract.buildDocumentUriUsingTree(
+                                treeUri, childId);
+                        result.add(BrowserEntry.file(new MmfEntry(name, fileUri)));
                     }
                 }
             }
@@ -401,6 +436,18 @@ public final class MainActivity extends Activity {
                     Toast.LENGTH_LONG).show());
         }
         return result;
+    }
+
+    private void navigateInto(BrowserEntry directory) {
+        if (currentFolder == null) return;
+        folderHistory.addLast(currentFolder);
+        openDirectory(new FolderLocation(directory.documentId,
+                currentFolder.displayPath + "/" + directory.name));
+    }
+
+    private void navigateUp() {
+        if (folderHistory.isEmpty()) return;
+        openDirectory(folderHistory.removeLast());
     }
 
     private void play(MmfEntry entry) {
@@ -727,6 +774,15 @@ public final class MainActivity extends Activity {
     }
 
     @Override
+    public void onBackPressed() {
+        if (!folderHistory.isEmpty()) {
+            navigateUp();
+            return;
+        }
+        super.onBackPressed();
+    }
+
+    @Override
     protected void onDestroy() {
         playbackGeneration.incrementAndGet();
         scanGeneration.incrementAndGet();
@@ -780,13 +836,43 @@ public final class MainActivity extends Activity {
         }
     }
 
-    private static final class FolderNode {
+    private static final class FolderLocation {
         final String documentId;
-        final String relativePath;
+        final String displayPath;
 
-        FolderNode(String documentId, String relativePath) {
+        FolderLocation(String documentId, String displayPath) {
             this.documentId = documentId;
-            this.relativePath = relativePath;
+            this.displayPath = displayPath;
+        }
+    }
+
+    private static final class BrowserEntry {
+        static final int PARENT = 0;
+        static final int DIRECTORY = 1;
+        static final int FILE = 2;
+
+        final int kind;
+        final String name;
+        final String documentId;
+        final MmfEntry file;
+
+        private BrowserEntry(int kind, String name, String documentId, MmfEntry file) {
+            this.kind = kind;
+            this.name = name;
+            this.documentId = documentId;
+            this.file = file;
+        }
+
+        static BrowserEntry parent() {
+            return new BrowserEntry(PARENT, "", null, null);
+        }
+
+        static BrowserEntry directory(String name, String documentId) {
+            return new BrowserEntry(DIRECTORY, name, documentId, null);
+        }
+
+        static BrowserEntry file(MmfEntry file) {
+            return new BrowserEntry(FILE, file.name, null, file);
         }
     }
 }
