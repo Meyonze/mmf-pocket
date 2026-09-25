@@ -22,28 +22,26 @@ class PhoneSpeakerFilter {
 public:
     void process(float* samples, int frames) {
         constexpr float dt = 1.0f / static_cast<float>(kSampleRate);
-        // Deliberately obvious small-handset-speaker coloration: mono, narrow
-        // speech-band response, light sample-and-hold loss and soft saturation.
+        // Small-handset-speaker coloration: mono, narrow response and mild
+        // saturation. Avoid sample-rate reduction: it adds synthetic grit that
+        // was not a stable characteristic of the handset speaker itself.
         // This models the speaker path only; it does not pretend to provide a
         // proprietary handset ROM instrument bank.
-        constexpr float highPassHz = 480.0f;
-        constexpr float lowPassHz = 3400.0f;
+        constexpr float highPassHz = 420.0f;
+        constexpr float lowPassHz = 3600.0f;
         constexpr float pi = 3.14159265358979323846f;
         constexpr float highRc = 1.0f / (2.0f * pi * highPassHz);
         constexpr float lowRc = 1.0f / (2.0f * pi * lowPassHz);
         constexpr float highAlpha = highRc / (highRc + dt);
         constexpr float lowAlpha = dt / (lowRc + dt);
-        constexpr float drive = 2.8f;
-        const float driveScale = 0.82f / std::tanh(drive);
+        constexpr float drive = 1.55f;
+        const float driveScale = 0.86f / std::tanh(drive);
 
         for (int frame = 0; frame < frames; ++frame) {
             const int index = frame * 2;
             const float mono = (samples[index] + samples[index + 1]) * 0.5f;
-            // 22.05 kHz sample-and-hold makes the mode audible without adding
-            // an artificial bit-crusher hiss.
-            if ((sampleCounter_++ & 1u) == 0) heldInput_ = mono;
-            highPass_ = highAlpha * (highPass_ + heldInput_ - previousInput_);
-            previousInput_ = heldInput_;
+            highPass_ = highAlpha * (highPass_ + mono - previousInput_);
+            previousInput_ = mono;
             lowPass_ += lowAlpha * (highPass_ - lowPass_);
             const float speaker = std::tanh(lowPass_ * drive) * driveScale;
             samples[index] = speaker;
@@ -53,10 +51,8 @@ public:
 
 private:
     float previousInput_ = 0.0f;
-    float heldInput_ = 0.0f;
     float highPass_ = 0.0f;
     float lowPass_ = 0.0f;
-    uint32_t sampleCounter_ = 0;
 };
 
 void write16(std::ostream& stream, uint16_t value) {

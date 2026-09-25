@@ -522,7 +522,8 @@ const ParsedVoice* MaPlayer::resolveVoice_(int ch, int note) const {
 
 // start a sampled (pcm) note on a free pcm slot. drums play at native rate,
 // melodic pcm is pitched from a fixed root note.
-void MaPlayer::startPcm_(int ch, int rawNote, int soundingNote, const ParsedVoice& v, const Chan& c) {
+void MaPlayer::startPcm_(int ch, int rawNote, int soundingNote, const ParsedVoice& v,
+                         const Chan& c, float noteVelocity) {
     // bind the wave: prefer the voice's WaveID, else the first non-empty wave so
     // a kit with a mis-indexed id still makes a sound rather than silence.
     const PcmSample* ws = nullptr;
@@ -552,7 +553,10 @@ void MaPlayer::startPcm_(int ch, int rawNote, int soundingNote, const ParsedVoic
     pv.loop = v.pcm.loop && !isDrum;   // drums are one-shot
     pv.env.configure(v.pcm.env, double(rate_)); pv.env.keyOn();
     pv.gain = float(std::pow(10.0, -0.75 * double(v.pcm.env.tl) / 20.0));
-    pv.vel = (c.volume * c.expression);
+    // Match FM voices: authored note velocity is part of the musical balance,
+    // not just channel volume. Ignoring it made sampled drums and instruments
+    // dominate quieter FM parts.
+    pv.vel = c.volume * c.expression * noteVelocity;
     pv.pan = (c.pan != 0.0f) ? c.pan : 0.0f;
     pv.channel = ch; pv.keyNote = rawNote; pv.active = true;
 }
@@ -652,16 +656,22 @@ void MaPlayer::fireEvent_(const Ev& e) {
         } break;
         case Ev::NoteOn: {
             int soundingNote = e.a + c.octShift;
+            float vel01 = (e.b ? e.b : 100) / 127.0f;
+            float noteVelocity = vel01 * vel01;
             const ParsedVoice* rv = resolveVoice_(e.ch, e.a);
             if (rv && rv->isPcm) {                      // sampled (drum / pcm) voice
                 if (rv->valid && !waveBank_.empty()) {
-                    startPcm_(e.ch, e.a, soundingNote, *rv, c);
+                    startPcm_(e.ch, e.a, soundingNote, *rv, c, noteVelocity);
                     break;
                 }
                 // Some files select a handset-ROM PCM voice but do not carry
                 // the referenced waveform. The proprietary ROM is deliberately
                 // not bundled, so use the built-in FM approximation instead of
-                // turning every note into silence.
+                // turning every note into silence. Preserve the authored PCM
+                // total-level attenuation; otherwise a quiet ROM layer becomes
+                // a full-volume fallback instrument and upsets the whole mix.
+                noteVelocity *= float(std::pow(
+                        10.0, -0.75 * double(rv->pcm.env.tl) / 20.0));
                 rv = nullptr;
             }
             // a rhythm-channel note with no bound voice gets a percussion hit,
@@ -682,8 +692,7 @@ void MaPlayer::fireEvent_(const Ev& e) {
             pool_[slot].setVolume(c.volume * c.expression);
             // gm-style squared velocity curve: linear velocity made every mid-
             // velocity note nearly full-scale and the mix bus pump the limiter.
-            float vel01 = (e.b ? e.b : 100) / 127.0f;
-            pool_[slot].noteOn(patch, freq, vel01 * vel01);
+            pool_[slot].noteOn(patch, freq, noteVelocity);
             poolPan_[slot] = (c.pan != 0.0f) ? c.pan : patch.panDefault;
         } break;
     }
@@ -695,8 +704,11 @@ int MaPlayer::render(float* out, int frames) {
     // after the song safety limit. Previously the inner loop broke here but a
     // following render() call produced one more frame again, so a caller could
     // spend hours draining an effectively endless release tail.
-    const uint64_t absoluteEnd = endSample_ + rate_;
-    if (cursor_ > absoluteEnd) return 0;
+    // endSample_ already includes the one-second release allowance added by
+    // init(). Do not add a second hidden second here: it made long-release
+    // patches audibly smear the end and made the WAV longer than totalSamples().
+    const uint64_t absoluteEnd = endSample_;
+    if (cursor_ >= absoluteEnd) return 0;
 
     int produced = 0;
     while (produced < frames) {
@@ -705,8 +717,8 @@ int MaPlayer::render(float* out, int frames) {
             fireEvent_(events_[nextEvent_]);
             ++nextEvent_;
         }
-        if (nextEvent_ >= events_.size() && cursor_ >= endSample_ && activeVoices_() == 0)
-            break;   // song done + voices rung out
+        if (nextEvent_ >= events_.size() && activeVoices_() == 0)
+            break;   // all events fired and their releases have genuinely ended
 
         float l = 0.0f, r = 0.0f;
         // 0.32 mix headroom: a dense tune runs a dozen voices at once; at 0.5
@@ -741,7 +753,7 @@ int MaPlayer::render(float* out, int frames) {
         out[produced * 2 + 1] = r;
         ++produced;
         ++cursor_;
-        if (cursor_ > absoluteEnd) break;   // absolute backstop
+        if (cursor_ >= absoluteEnd) break;   // one-second release backstop
     }
     return produced;
 }

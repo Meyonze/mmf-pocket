@@ -1,10 +1,26 @@
 # Changelog
 
+## 1.4.0-beta.6
+
+- Limited post-song release rendering to the declared one-second allowance;
+  the renderer no longer adds a second hidden second of sustained audio.
+- Preserved note velocity for embedded PCM and total-level attenuation when a
+  proprietary handset-ROM PCM voice falls back to the ROM-free FM bank.
+- Removed artificial sample-rate reduction from the handset-speaker effect and
+  reduced its saturation to avoid buzzy noise on dense arrangements.
+- Invalidated older converted WAV caches automatically (renderer r5).
+
+## 1.4.0-beta.5
+
+- Replaced the recursive flat MMF list with hierarchical folder browsing.
+- Folders are listed before MMF files and can be opened or left with the parent
+  entry or Android Back action.
+- Limited batch conversion to the currently displayed folder.
+
 ## 1.4.0-beta.4
 
 - Enlarged the launcher artwork and reduced transparent outer padding so the
   retro flip-phone mark is easier to recognize at normal launcher-icon sizes.
-- Added the same artwork as the round launcher icon.
 
 ## 1.4.0-beta.3
 

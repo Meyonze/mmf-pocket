@@ -98,7 +98,8 @@ private:
     std::array<PcmVoice, kPcmPool> pcmPool_{};
     void buildWaveBank_(const SmafFile& file);
     const ParsedVoice* resolveVoice_(int ch, int note) const;
-    void startPcm_(int ch, int rawNote, int soundingNote, const ParsedVoice& v, const Chan& c);
+    void startPcm_(int ch, int rawNote, int soundingNote, const ParsedVoice& v,
+                   const Chan& c, float noteVelocity);
 
     // ── clock ────────────────────────────────────────────────────────────────
     uint32_t rate_ = 48000;

@@ -2,6 +2,7 @@
 // Synthetic fixtures only. No copyrighted ringtone data is embedded.
 #include "ma_player.h"
 #include "smaf_voice.h"
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
@@ -24,6 +25,15 @@ SmafFile fixture(int format = 2) {
     t.sequenceData = {0,0x90,60,100,10, 10,0xff,0x2f,0};
     f.tracks.push_back(t);
     return f;
+}
+float firstBlockPeak(const SmafFile& file) {
+    MaPlayer p;
+    check(p.init(file, 8000), "peak fixture initializes");
+    float samples[512 * 2];
+    int count = p.render(samples, 512);
+    float peak = 0;
+    for (int i = 0; i < count * 2; ++i) peak = std::max(peak, std::fabs(samples[i]));
+    return peak;
 }
 int main() {
     FmOpPatch p;
@@ -75,12 +85,30 @@ int main() {
     int total=0, n;
     while((n=player.render(buffer,512))>0) {
         total+=n;
-        check(total<=16801, "render ends within tail backstop");
+        check(total<=8800, "render ends within declared tail backstop");
         for(int i=0;i<n*2;++i) check(std::isfinite(buffer[i]), "finite output");
     }
     check(player.render(buffer,512)==0, "repeated render stays ended");
     player.seekToStart();
     check(player.render(buffer,512)>0, "seek restarts");
+
+    // A handset-ROM PCM patch without bundled wave data falls back to FM, but
+    // must retain its authored total-level attenuation instead of becoming a
+    // full-volume layer.
+    SmafFile plainFallback = fixture();
+    SmafFile quietFallback = fixture();
+    std::vector<uint8_t> pcmVoice = {
+        0x43,0x79,0x07,0x7f,0x01, 0,0,0,0,1,
+        0x1f,0x40,0,0,0,0,0, uint8_t(28 << 2), 0,0,0,0,0,0,0,0
+    };
+    quietFallback.tracks[0].setupData = {0xf0, uint8_t(pcmVoice.size() + 1)};
+    quietFallback.tracks[0].setupData.insert(quietFallback.tracks[0].setupData.end(),
+                                             pcmVoice.begin(), pcmVoice.end());
+    quietFallback.tracks[0].setupData.push_back(0xf7);
+    float plainPeak = firstBlockPeak(plainFallback);
+    float quietPeak = firstBlockPeak(quietFallback);
+    check(quietPeak < plainPeak * 0.15f, "ROM PCM fallback preserves total level");
+
     check(!player.init(fixture(3),8000), "MA7 rejected by core");
     check(!player.init(fixture(4),8000), "unknown format rejected by core");
 
@@ -88,7 +116,7 @@ int main() {
     f.tracks[0].sequenceData={0,0x90,60,100,0xff,0xff,0x7f,0,0xff,0x2f,0};
     check(player.init(f,10), "long gate fixture initializes");
     total=0;
-    while((n=player.render(buffer,512))>0) { total+=n; check(total<=6011,"hard cap"); }
+    while((n=player.render(buffer,512))>0) { total+=n; check(total<=6000,"hard cap"); }
     check(player.render(buffer,512)==0,"hard cap remains ended");
     std::cout << "Audio regression checks passed\n";
 }
