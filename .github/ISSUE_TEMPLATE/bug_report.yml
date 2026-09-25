@@ -1,0 +1,44 @@
+name: Bug report
+description: Report a reproducible MMF Pocket problem without publishing private audio.
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Do not attach copyrighted, private, or potentially malicious MMF files to a public issue.
+  - type: input
+    id: version
+    attributes:
+      label: App version
+      placeholder: 1.4.0-beta.4
+    validations:
+      required: true
+  - type: input
+    id: android
+    attributes:
+      label: Android version and device
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened?
+      description: Include what you expected and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: true
+  - type: dropdown
+    id: file_safety
+    attributes:
+      label: MMF sharing status
+      options:
+        - No file is needed
+        - I can provide a minimal synthetic file I own
+        - A private reporting channel is needed
+    validations:
+      required: true

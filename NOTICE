@@ -1,0 +1,21 @@
+MMF Pocket
+Copyright 2026 MMF Pocket contributors
+
+This product includes and modifies yamaha-smaf-player:
+Copyright 2026 Akustikrausch (Andreas Wendorf)
+https://github.com/akustikrausch/yamaha-smaf-player
+
+The vendored source is based on upstream commit
+627f7ad8583ce34c5fec0269ef9778167af080d6.
+
+MMF Pocket modifications include Android integration, bounded handling of
+untrusted input, corrected SMAF timebases, expanded VM35 operator waveforms,
+and an FM fallback when a file references handset-ROM PCM without bundling the
+required waveform.
+
+Licensed under the Apache License, Version 2.0. See LICENSE and
+THIRD_PARTY_NOTICES.md.
+
+Yamaha and SMAF names are used only to describe file-format compatibility.
+This project is not affiliated with or endorsed by Yamaha Corporation or any
+handset manufacturer.

@@ -1,0 +1,17 @@
+.gradle/
+.idea/
+local.properties
+**/build/
+*.iml
+.cxx/
+captures/
+app/release/
+local-test-data/
+test-output/
+*.jks
+*.keystore
+keystore.properties
+.env
+.env.local
+Thumbs.db
+.DS_Store
