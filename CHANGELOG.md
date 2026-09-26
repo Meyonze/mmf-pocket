@@ -8,6 +8,8 @@
   across interactive and batch rendering.
 - Keep a compact batch-progress badge visible in the top-right corner while the
   conversion is running.
+- Allow batch conversion to pause safely between files and resume from the next
+  unprocessed file.
 
 ## 1.4.0
 

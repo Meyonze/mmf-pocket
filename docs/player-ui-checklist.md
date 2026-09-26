@@ -10,6 +10,7 @@ These checks require an Android device; they are not marked passed by a build.
 - Toggle repeatedly then Play: only the latest setting is used.
 - Stop then Play: the selected song starts from the beginning.
 - Batch conversion: browsing, playback controls and the speaker switch remain usable; a progress badge stays visible in the top-right corner.
+- Batch pause: after the current file completes, progress stops; Resume continues with the next unprocessed file.
 - Change folder: old selection cleared, Play disabled until a new song is chosen.
 - Conversion error: Play remains available to retry, no stale audio starts.
 - Background/foreground: audio stays stopped; Play can restart the retained song.

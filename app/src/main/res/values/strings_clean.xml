@@ -25,7 +25,11 @@
     <string name="paused_file">一時停止: %1$s</string>
     <string name="playback_stopped">停止しました</string>
     <string name="convert_folder_compact">一括変換</string>
+    <string name="pause_batch_compact">一時停止</string>
+    <string name="resume_batch_compact">再開</string>
     <string name="batch_progress_compact">一括変換 %1$d/%2$d</string>
+    <string name="batch_pause_pending_compact">停止待ち %1$d/%2$d</string>
+    <string name="batch_paused_compact">一時停止中 %1$d/%2$d</string>
     <string name="batch_progress">変換中 %1$d/%2$d: %3$s</string>
     <string name="batch_complete">一括変換完了：新規 %1$d件、キャッシュ済み %2$d件、失敗 %3$d件</string>
     <string name="cache_create_failed">変換キャッシュを作成できません</string>

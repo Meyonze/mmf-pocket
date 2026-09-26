@@ -60,6 +60,7 @@ public final class MainActivity extends Activity {
 
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private final ExecutorService batchWorker = Executors.newSingleThreadExecutor();
+    private final Object batchPauseLock = new Object();
     private final AtomicInteger playbackGeneration = new AtomicInteger();
     private final AtomicInteger scanGeneration = new AtomicInteger();
     private final AtomicInteger batchGeneration = new AtomicInteger();
@@ -92,6 +93,7 @@ public final class MainActivity extends Activity {
     private SeekBar playbackProgress;
     private Button chooseButton;
     private Button batchButton;
+    private Button batchPauseButton;
     private Switch phoneSoundSwitch;
     private ImageButton playPauseButton;
     private ImageButton stopButton;
@@ -103,6 +105,9 @@ public final class MainActivity extends Activity {
     private MmfEntry selectedEntry;
     private boolean prepared;
     private boolean batchConverting;
+    private volatile boolean batchPaused;
+    private volatile int batchCompletedCount;
+    private volatile int batchTotalCount;
     private Uri selectedTreeUri;
     private FolderLocation currentFolder;
 
@@ -211,6 +216,19 @@ public final class MainActivity extends Activity {
                 LinearLayout.LayoutParams.WRAP_CONTENT);
         batchParams.leftMargin = dp(4);
         folderControls.addView(batchButton, batchParams);
+
+        batchPauseButton = new Button(this);
+        batchPauseButton.setText(R.string.pause_batch_compact);
+        batchPauseButton.setTextSize(12);
+        batchPauseButton.setMinWidth(0);
+        batchPauseButton.setMinimumWidth(0);
+        batchPauseButton.setVisibility(View.GONE);
+        batchPauseButton.setOnClickListener(v -> toggleBatchPause());
+        LinearLayout.LayoutParams batchPauseParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT);
+        batchPauseParams.leftMargin = dp(4);
+        folderControls.addView(batchPauseButton, batchPauseParams);
         root.addView(folderControls, folderControlsParams);
 
         listView = new ListView(this);
@@ -559,7 +577,12 @@ public final class MainActivity extends Activity {
         List<MmfEntry> snapshot = new ArrayList<>(entries);
         boolean phoneSpeakerMode = phoneSoundSwitch.isChecked();
         batchConverting = true;
+        batchPaused = false;
+        batchCompletedCount = 0;
+        batchTotalCount = snapshot.size();
         batchButton.setEnabled(false);
+        batchPauseButton.setText(R.string.pause_batch_compact);
+        batchPauseButton.setVisibility(View.VISIBLE);
         batchStatusLabel.setText(getString(R.string.batch_progress_compact, 0, snapshot.size()));
         batchStatusLabel.setVisibility(View.VISIBLE);
 
@@ -570,10 +593,11 @@ public final class MainActivity extends Activity {
             int failed = 0;
             for (int i = 0; i < snapshot.size(); i++) {
                 if (generation != batchGeneration.get() || Thread.currentThread().isInterrupted()) return;
+                if (!waitWhileBatchPaused(generation, i, snapshot.size())) return;
                 MmfEntry entry = snapshot.get(i);
                 int position = i + 1;
                 runOnUiThread(() -> {
-                    if (generation == batchGeneration.get()) {
+                    if (generation == batchGeneration.get() && !batchPaused) {
                         batchStatusLabel.setText(getString(R.string.batch_progress_compact,
                                 position, snapshot.size()));
                         batchStatusLabel.setContentDescription(getString(R.string.batch_progress,
@@ -592,6 +616,7 @@ public final class MainActivity extends Activity {
                 } catch (Exception ignored) {
                     failed++;
                 }
+                batchCompletedCount = position;
             }
 
             int finalConverted = converted;
@@ -600,7 +625,9 @@ public final class MainActivity extends Activity {
             runOnUiThread(() -> {
                 if (generation != batchGeneration.get() || isFinishing() || isDestroyed()) return;
                 batchConverting = false;
+                batchPaused = false;
                 batchButton.setEnabled(!entries.isEmpty());
+                batchPauseButton.setVisibility(View.GONE);
                 batchStatusLabel.setVisibility(View.GONE);
                 Toast.makeText(this, getString(R.string.batch_complete,
                         finalConverted, finalReused, finalFailed), Toast.LENGTH_LONG).show();
@@ -608,11 +635,53 @@ public final class MainActivity extends Activity {
         });
     }
 
+    private boolean waitWhileBatchPaused(int generation, int completed, int total) {
+        synchronized (batchPauseLock) {
+            while (batchPaused && generation == batchGeneration.get()) {
+                runOnUiThread(() -> {
+                    if (generation == batchGeneration.get() && batchPaused) {
+                        batchStatusLabel.setText(getString(R.string.batch_paused_compact,
+                                completed, total));
+                    }
+                });
+                try {
+                    batchPauseLock.wait();
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    return false;
+                }
+            }
+        }
+        return generation == batchGeneration.get() && !Thread.currentThread().isInterrupted();
+    }
+
+    private void toggleBatchPause() {
+        if (!batchConverting) return;
+        synchronized (batchPauseLock) {
+            batchPaused = !batchPaused;
+            if (!batchPaused) batchPauseLock.notifyAll();
+        }
+        if (batchPaused) {
+            batchPauseButton.setText(R.string.resume_batch_compact);
+            batchStatusLabel.setText(getString(R.string.batch_pause_pending_compact,
+                    batchCompletedCount, batchTotalCount));
+        } else {
+            batchPauseButton.setText(R.string.pause_batch_compact);
+            batchStatusLabel.setText(getString(R.string.batch_progress_compact,
+                    batchCompletedCount, batchTotalCount));
+        }
+    }
+
     private void cancelBatchConversion() {
         batchGeneration.incrementAndGet();
         if (!batchConverting) return;
         batchConverting = false;
+        synchronized (batchPauseLock) {
+            batchPaused = false;
+            batchPauseLock.notifyAll();
+        }
         batchButton.setEnabled(!entries.isEmpty());
+        batchPauseButton.setVisibility(View.GONE);
         batchStatusLabel.setVisibility(View.GONE);
     }
 
