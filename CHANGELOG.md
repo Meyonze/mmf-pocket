@@ -8,6 +8,8 @@
 - Start uncached songs after a short prebuffer and show rendered versus played
   progress separately while conversion continues.
 - Display the detected MA generation and raw SMAF score format in the player.
+- Use a proper adaptive launcher icon so Android does not add a second layer of
+  legacy-icon padding around the artwork.
 - Include cache reuse, folder batch conversion and the optional handset-speaker
   effect, with no ads, analytics or network permission.
 
