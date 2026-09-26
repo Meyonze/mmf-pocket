@@ -67,8 +67,11 @@ public final class MainActivity extends Activity {
         @Override
         public void run() {
             updatePlayerProgress();
-            if (prepared && mediaPlayer != null && mediaPlayer.isPlaying()) {
-                progressHandler.postDelayed(this, 500);
+            boolean keepUpdating = progressivePlayback != null
+                    && (!progressivePlayback.isRenderingComplete()
+                    || progressivePlayback.isPlaying());
+            if (keepUpdating || prepared && mediaPlayer != null && mediaPlayer.isPlaying()) {
+                progressHandler.postDelayed(this, 250);
             }
         }
     };
@@ -80,6 +83,7 @@ public final class MainActivity extends Activity {
     private ArrayAdapter<String> adapter;
     private TextView folderLabel;
     private TextView statusLabel;
+    private TextView formatLabel;
     private TextView nowPlayingLabel;
     private TextView timeLabel;
     private ListView listView;
@@ -90,6 +94,7 @@ public final class MainActivity extends Activity {
     private ImageButton playPauseButton;
     private ImageButton stopButton;
     private MediaPlayer mediaPlayer;
+    private ProgressivePlayback progressivePlayback;
     private File currentWav;
     private String currentName;
     // The selected source survives stop/mode changes; a prepared WAV does not.
@@ -245,11 +250,20 @@ public final class MainActivity extends Activity {
         playbackProgress.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override
             public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
-                if (!fromUser || !prepared || mediaPlayer == null) return;
-                int duration = mediaPlayer.getDuration();
-                int position = (int) ((long) duration * progress / seekBar.getMax());
-                timeLabel.setText(getString(R.string.playback_time,
-                        formatTime(position), formatTime(duration)));
+                if (!fromUser || !prepared) return;
+                if (progressivePlayback != null) {
+                    long totalFrames = progressivePlayback.getTimelineFrames();
+                    long requested = totalFrames * progress / seekBar.getMax();
+                    long available = progressivePlayback.getRenderedFrames();
+                    long preview = Math.min(requested, available);
+                    timeLabel.setText(getString(R.string.playback_time,
+                            formatFrames(preview), formatFrames(totalFrames)));
+                } else if (mediaPlayer != null) {
+                    int duration = mediaPlayer.getDuration();
+                    int position = (int) ((long) duration * progress / seekBar.getMax());
+                    timeLabel.setText(getString(R.string.playback_time,
+                            formatTime(position), formatTime(duration)));
+                }
             }
 
             @Override
@@ -259,7 +273,14 @@ public final class MainActivity extends Activity {
 
             @Override
             public void onStopTrackingTouch(SeekBar seekBar) {
-                if (prepared && mediaPlayer != null) {
+                if (prepared && progressivePlayback != null) {
+                    long totalFrames = progressivePlayback.getTimelineFrames();
+                    long requested = totalFrames * seekBar.getProgress() / seekBar.getMax();
+                    long actual = progressivePlayback.seekTo(requested);
+                    seekBar.setProgress((int) (actual * seekBar.getMax()
+                            / Math.max(1, totalFrames)));
+                    startProgressUpdates();
+                } else if (prepared && mediaPlayer != null) {
                     int duration = mediaPlayer.getDuration();
                     mediaPlayer.seekTo((int) ((long) duration
                             * seekBar.getProgress() / seekBar.getMax()));
@@ -301,13 +322,30 @@ public final class MainActivity extends Activity {
         controls.addView(stopButton, stopParams);
         playerPanel.addView(controls);
 
+        LinearLayout playerFooter = new LinearLayout(this);
+        playerFooter.setOrientation(LinearLayout.HORIZONTAL);
+        playerFooter.setGravity(Gravity.CENTER_VERTICAL);
+        playerFooter.setPadding(0, dp(6), 0, 0);
+
         statusLabel = new TextView(this);
         statusLabel.setText(R.string.select_mmf_prompt);
         statusLabel.setTextSize(12);
-        statusLabel.setPadding(0, dp(6), 0, 0);
         statusLabel.setSingleLine(true);
         statusLabel.setEllipsize(TextUtils.TruncateAt.END);
-        playerPanel.addView(statusLabel);
+        playerFooter.addView(statusLabel, new LinearLayout.LayoutParams(
+                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+
+        formatLabel = new TextView(this);
+        formatLabel.setTextSize(12);
+        formatLabel.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        formatLabel.setGravity(Gravity.END);
+        formatLabel.setSingleLine(true);
+        formatLabel.setPadding(dp(10), 0, 0, 0);
+        playerFooter.addView(formatLabel, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        playerPanel.addView(playerFooter);
         root.addView(playerPanel, playerParams);
         return root;
     }
@@ -346,6 +384,7 @@ public final class MainActivity extends Activity {
         currentName = null;
         stopPlayback(false);
         nowPlayingLabel.setText(R.string.no_track_selected);
+        formatLabel.setText("");
         selectedTreeUri = treeUri;
         folderHistory.clear();
         try {
@@ -458,33 +497,39 @@ public final class MainActivity extends Activity {
         releasePlayer();
         currentName = entry.name;
         nowPlayingLabel.setText(entry.name);
+        formatLabel.setText("");
         prepared = false;
         playPauseButton.setEnabled(false);
         stopButton.setEnabled(true);
         statusLabel.setText(getString(R.string.converting_file, entry.name));
 
         worker.execute(() -> {
-            RenderResult result;
+            PlaybackSource source;
             try {
-                result = renderOrGetCached(entry, phoneSpeakerMode);
+                source = preparePlaybackSource(entry, phoneSpeakerMode);
             } catch (Exception exception) {
                 String message = exception.getMessage() == null
                         ? exception.getClass().getSimpleName() : exception.getMessage();
-                result = new RenderResult(null, message, false);
+                source = PlaybackSource.error(message);
             }
 
-            RenderResult finalResult = result;
+            PlaybackSource finalSource = source;
             runOnUiThread(() -> {
                 if (generation != playbackGeneration.get() || isFinishing() || isDestroyed()) {
                     return;
                 }
-                if (!finalResult.error.isEmpty()) {
-                    statusLabel.setText(getString(R.string.playback_failed, finalResult.error));
+                if (!finalSource.error.isEmpty()) {
+                    statusLabel.setText(getString(R.string.playback_failed, finalSource.error));
                     playPauseButton.setEnabled(selectedEntry != null && !batchConverting);
                     stopButton.setEnabled(false);
                     return;
                 }
-                startMediaPlayer(finalResult.file, entry.name);
+                formatLabel.setText(finalSource.formatLabel);
+                if (finalSource.cached != null) {
+                    startMediaPlayer(finalSource.cached, entry.name);
+                } else {
+                    startProgressivePlayback(finalSource, entry.name, generation);
+                }
             });
         });
     }
@@ -558,8 +603,10 @@ public final class MainActivity extends Activity {
         listView.setEnabled(true);
     }
 
-    private RenderResult renderOrGetCached(MmfEntry entry, boolean phoneSpeakerMode) throws IOException {
+    private PlaybackSource preparePlaybackSource(
+            MmfEntry entry, boolean phoneSpeakerMode) throws IOException {
         byte[] bytes = readMmf(entry.uri);
+        String formatLabel = NativeMmfRenderer.detectFormat(bytes);
         File cacheDirectory = new File(getCacheDir(), CACHE_DIR_NAME);
         if (!cacheDirectory.isDirectory() && !cacheDirectory.mkdirs()) {
             throw new IOException(getString(R.string.cache_create_failed));
@@ -571,21 +618,30 @@ public final class MainActivity extends Activity {
         if (cached.isFile() && cached.length() > 44) {
             //noinspection ResultOfMethodCallIgnored
             cached.setLastModified(System.currentTimeMillis());
-            return new RenderResult(cached, "", true);
+            return new PlaybackSource(
+                    bytes, cached, cached, null, phoneSpeakerMode, formatLabel, "");
         }
 
         File partial = new File(cacheDirectory, key + "-" + System.nanoTime() + ".part");
+        return new PlaybackSource(
+                bytes, null, cached, partial, phoneSpeakerMode, formatLabel, "");
+    }
+
+    private RenderResult renderOrGetCached(MmfEntry entry, boolean phoneSpeakerMode) throws IOException {
+        PlaybackSource source = preparePlaybackSource(entry, phoneSpeakerMode);
+        if (source.cached != null) return new RenderResult(source.cached, "", true);
         String error = NativeMmfRenderer.renderToWav(
-                bytes, partial.getAbsolutePath(), phoneSpeakerMode);
+                source.bytes, source.partial.getAbsolutePath(), phoneSpeakerMode);
         if (error == null) error = "";
         if (!error.isEmpty()) {
             //noinspection ResultOfMethodCallIgnored
-            partial.delete();
+            source.partial.delete();
             return new RenderResult(null, error, false);
         }
-        Files.move(partial.toPath(), cached.toPath(), StandardCopyOption.REPLACE_EXISTING);
-        trimCache(cacheDirectory, cached);
-        return new RenderResult(cached, "", false);
+        Files.move(source.partial.toPath(), source.target.toPath(),
+                StandardCopyOption.REPLACE_EXISTING);
+        trimCache(source.target.getParentFile(), source.target);
+        return new RenderResult(source.target, "", false);
     }
 
     private String sha256(byte[] bytes) {
@@ -636,6 +692,67 @@ public final class MainActivity extends Activity {
         }
     }
 
+    private void startProgressivePlayback(
+            PlaybackSource source, String name, int generation) {
+        statusLabel.setText(getString(R.string.buffering_file, name));
+        playbackProgress.setProgress(0);
+        playbackProgress.setSecondaryProgress(0);
+        playbackProgress.setEnabled(false);
+        playPauseButton.setEnabled(false);
+        stopButton.setEnabled(true);
+
+        ProgressivePlayback playback = new ProgressivePlayback(
+                source.bytes, source.phoneSpeakerMode, source.partial, source.target,
+                new ProgressivePlayback.Listener() {
+                    @Override
+                    public void onReady() {
+                        runOnUiThread(() -> {
+                            if (generation != playbackGeneration.get()
+                                    || isFinishing() || isDestroyed()) return;
+                            prepared = true;
+                            playbackProgress.setEnabled(true);
+                            playPauseButton.setEnabled(true);
+                            stopButton.setEnabled(true);
+                            showPauseIcon();
+                            statusLabel.setText(getString(R.string.playing_file, name));
+                            startProgressUpdates();
+                        });
+                    }
+
+                    @Override
+                    public void onCacheReady(File cached) {
+                        trimCache(cached.getParentFile(), cached);
+                        runOnUiThread(() -> {
+                            if (generation == playbackGeneration.get()) currentWav = cached;
+                        });
+                    }
+
+                    @Override
+                    public void onCompleted() {
+                        runOnUiThread(() -> {
+                            if (generation != playbackGeneration.get()
+                                    || isFinishing() || isDestroyed()) return;
+                            updatePlayerProgress();
+                            showPlayIcon();
+                            statusLabel.setText(getString(R.string.playback_finished, name));
+                        });
+                    }
+
+                    @Override
+                    public void onError(String message) {
+                        runOnUiThread(() -> {
+                            if (generation != playbackGeneration.get()
+                                    || isFinishing() || isDestroyed()) return;
+                            releasePlayer();
+                            statusLabel.setText(getString(R.string.playback_failed, message));
+                        });
+                    }
+                });
+        progressivePlayback = playback;
+        playback.start();
+        startProgressUpdates();
+    }
+
     private void startMediaPlayer(File wav, String name) {
         releasePlayer();
         playPauseButton.setEnabled(false);
@@ -648,6 +765,7 @@ public final class MainActivity extends Activity {
                 prepared = true;
                 player.start();
                 playbackProgress.setEnabled(true);
+                playbackProgress.setSecondaryProgress(playbackProgress.getMax());
                 playPauseButton.setEnabled(true);
                 showPauseIcon();
                 stopButton.setEnabled(true);
@@ -676,6 +794,29 @@ public final class MainActivity extends Activity {
 
     private void togglePlayback() {
         if (batchConverting) return;
+        if (progressivePlayback != null) {
+            if (!prepared) return;
+            if (progressivePlayback.isPlaybackComplete()) {
+                File replay = currentWav;
+                if (replay != null && replay.isFile()) {
+                    releasePlayer();
+                    startMediaPlayer(replay, currentName);
+                } else if (selectedEntry != null) {
+                    play(selectedEntry);
+                }
+            } else if (progressivePlayback.isPlaying()) {
+                progressivePlayback.pause();
+                updatePlayerProgress();
+                showPlayIcon();
+                statusLabel.setText(getString(R.string.paused_file, currentName));
+            } else {
+                progressivePlayback.resume();
+                startProgressUpdates();
+                showPauseIcon();
+                statusLabel.setText(getString(R.string.playing_file, currentName));
+            }
+            return;
+        }
         if (!prepared || mediaPlayer == null) {
             if (selectedEntry != null) play(selectedEntry);
             return;
@@ -706,6 +847,10 @@ public final class MainActivity extends Activity {
     private void releasePlayer() {
         progressHandler.removeCallbacks(progressUpdater);
         prepared = false;
+        if (progressivePlayback != null) {
+            progressivePlayback.cancel();
+            progressivePlayback = null;
+        }
         if (mediaPlayer != null) {
             mediaPlayer.setOnPreparedListener(null);
             mediaPlayer.setOnCompletionListener(null);
@@ -720,6 +865,7 @@ public final class MainActivity extends Activity {
         playPauseButton.setEnabled(selectedEntry != null && !batchConverting);
         stopButton.setEnabled(false);
         playbackProgress.setProgress(0);
+        playbackProgress.setSecondaryProgress(0);
         playbackProgress.setEnabled(false);
         timeLabel.setText(R.string.zero_playback_time);
     }
@@ -751,14 +897,33 @@ public final class MainActivity extends Activity {
     }
 
     private void updatePlayerProgress() {
+        if (progressivePlayback != null) {
+            long total = progressivePlayback.getTimelineFrames();
+            long position = progressivePlayback.getPositionFrames();
+            long rendered = progressivePlayback.getRenderedFrames();
+            int max = playbackProgress.getMax();
+            playbackProgress.setProgress((int) (Math.min(position, total) * max
+                    / Math.max(1, total)));
+            playbackProgress.setSecondaryProgress((int) (Math.min(rendered, total) * max
+                    / Math.max(1, total)));
+            timeLabel.setText(getString(R.string.playback_time,
+                    formatFrames(position), formatFrames(total)));
+            return;
+        }
         if (!prepared || mediaPlayer == null) return;
         int duration = Math.max(0, mediaPlayer.getDuration());
         int position = Math.max(0, mediaPlayer.getCurrentPosition());
         int progress = duration == 0 ? 0
                 : (int) ((long) position * playbackProgress.getMax() / duration);
         playbackProgress.setProgress(progress);
+        playbackProgress.setSecondaryProgress(playbackProgress.getMax());
         timeLabel.setText(getString(R.string.playback_time,
                 formatTime(position), formatTime(duration)));
+    }
+
+    private String formatFrames(long frames) {
+        return formatTime((int) Math.min(Integer.MAX_VALUE,
+                frames * 1000 / ProgressivePlayback.SAMPLE_RATE));
     }
 
     private String formatTime(int milliseconds) {
@@ -823,6 +988,31 @@ public final class MainActivity extends Activity {
             this.file = file;
             this.error = error;
             this.cacheHit = cacheHit;
+        }
+    }
+
+    private static final class PlaybackSource {
+        final byte[] bytes;
+        final File cached;
+        final File target;
+        final File partial;
+        final boolean phoneSpeakerMode;
+        final String formatLabel;
+        final String error;
+
+        PlaybackSource(byte[] bytes, File cached, File target, File partial,
+                       boolean phoneSpeakerMode, String formatLabel, String error) {
+            this.bytes = bytes;
+            this.cached = cached;
+            this.target = target;
+            this.partial = partial;
+            this.phoneSpeakerMode = phoneSpeakerMode;
+            this.formatLabel = formatLabel;
+            this.error = error;
+        }
+
+        static PlaybackSource error(String message) {
+            return new PlaybackSource(null, null, null, null, false, "", message);
         }
     }
 

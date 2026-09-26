@@ -46,6 +46,7 @@ struct ParsedVoice {
     VoiceKey     key;
     FmVoicePatch patch;
     PcmParams    pcm;             // valid when isPcm
+    int          keyHigh = 127;   // upper split key; 127 when unsplit
     bool         isPcm = false;   // pcm voices play a sampled wave, not fm
     bool         valid = false;
 };

@@ -6,10 +6,12 @@
 #include "smaf_file.h"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cmath>
 #include <exception>
 #include <fstream>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -55,6 +57,23 @@ private:
     float lowPass_ = 0.0f;
 };
 
+struct RenderSession {
+    fxchain::smaf::MaPlayer player;
+    PhoneSpeakerFilter phoneSpeaker;
+    bool phoneSpeakerMode = false;
+};
+
+std::string initializePlayer(const uint8_t* bytes, size_t size,
+                             fxchain::smaf::MaPlayer& player) {
+    if (size < 12) return "MMFファイルが空か、短すぎます";
+
+    fxchain::smaf::SmafFile file;
+    if (!file.parse(bytes, size)) return "有効なSMAF/MMFファイルではありません";
+
+    if (!player.init(file, kSampleRate)) return "再生可能なトラックがありません";
+    return {};
+}
+
 void write16(std::ostream& stream, uint16_t value) {
     const char bytes[] = {
         static_cast<char>(value & 0xff),
@@ -91,25 +110,16 @@ void writeHeader(std::ostream& stream, uint32_t dataBytes) {
 
 std::string render(const uint8_t* bytes, size_t size, const char* outputPath,
                    bool phoneSpeakerMode) {
-    if (size < 12) return "MMFファイルが空か、短すぎます";
-
-    fxchain::smaf::SmafFile file;
-    if (!file.parse(bytes, size)) return "有効なSMAF/MMFファイルではありません";
-
-    const bool hasMa7Score = std::any_of(file.tracks.begin(), file.tracks.end(),
-        [](const fxchain::smaf::TrackChunk& track) {
-            return !track.isAudioTrack && track.formatType == 0x03;
-        });
-    if (hasMa7Score) return "MA-7形式（Format 3）は現在未対応です";
-
     fxchain::smaf::MaPlayer player;
-    if (!player.init(file, kSampleRate)) return "再生可能なトラックがありません";
+    std::string initError = initializePlayer(bytes, size, player);
+    if (!initError.empty()) return initError;
 
     std::fstream output(outputPath, std::ios::binary | std::ios::out | std::ios::trunc);
     if (!output) return "一時音声ファイルを作成できません";
     writeHeader(output, 0);
 
     float samples[kBlockFrames * 2];
+    std::array<char, kBlockFrames * 4> pcmBytes{};
     PhoneSpeakerFilter phoneSpeaker;
     uint64_t framesWritten = 0;
     float peak = 0.0f;
@@ -121,8 +131,13 @@ std::string render(const uint8_t* bytes, size_t size, const char* outputPath,
             float sample = std::clamp(samples[i], -1.0f, 1.0f);
             peak = std::max(peak, sample < 0.0f ? -sample : sample);
             int value = static_cast<int>(sample * 32767.0f);
-            write16(output, static_cast<uint16_t>(static_cast<int16_t>(value)));
+            uint16_t encoded = static_cast<uint16_t>(static_cast<int16_t>(value));
+            pcmBytes[i * 2] = static_cast<char>(encoded & 0xff);
+            pcmBytes[i * 2 + 1] = static_cast<char>((encoded >> 8) & 0xff);
         }
+        // One write per render block avoids millions of two-byte stream calls
+        // on long songs while preserving the exact little-endian PCM bytes.
+        output.write(pcmBytes.data(), static_cast<std::streamsize>(count) * 4);
         framesWritten += static_cast<uint64_t>(count);
     }
 
@@ -140,7 +155,59 @@ jstring toJavaString(JNIEnv* env, const std::string& text) {
     return env->NewStringUTF(text.c_str());
 }
 
+bool copyJavaBytes(JNIEnv* env, jbyteArray source, std::vector<uint8_t>& destination) {
+    if (source == nullptr) return false;
+    jsize size = env->GetArrayLength(source);
+    destination.resize(static_cast<size_t>(size));
+    if (size > 0) {
+        env->GetByteArrayRegion(source, 0, size,
+                                reinterpret_cast<jbyte*>(destination.data()));
+        if (env->ExceptionCheck()) {
+            env->ExceptionClear();
+            return false;
+        }
+    }
+    return true;
+}
+
+std::string detectFormat(const uint8_t* bytes, size_t size) {
+    fxchain::smaf::SmafFile file;
+    if (!file.parse(bytes, size)) return {};
+
+    int highestScoreFormat = -1;
+    bool hasAudioTrack = false;
+    for (const fxchain::smaf::TrackChunk& track : file.tracks) {
+        if (track.isAudioTrack) {
+            hasAudioTrack = true;
+        } else {
+            highestScoreFormat = std::max(highestScoreFormat, track.formatType);
+        }
+    }
+
+    switch (highestScoreFormat) {
+    case 0x03: return "MA-7 \xC2\xB7 F3";
+    case 0x02: return "MA-3/5 \xC2\xB7 F2";
+    case 0x01: return "MA-3/5 \xC2\xB7 F1";
+    case 0x00: return "MA-1/2 \xC2\xB7 F0";
+    default: return hasAudioTrack ? "SMAF \xC2\xB7 Audio" : "SMAF";
+    }
+}
+
 } // namespace
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_app_mmfpocket_player_NativeMmfRenderer_detectFormat(
+        JNIEnv* env, jclass, jbyteArray mmfData) {
+    if (mmfData == nullptr) return toJavaString(env, {});
+
+    std::vector<uint8_t> bytes;
+    if (!copyJavaBytes(env, mmfData, bytes)) return toJavaString(env, {});
+    try {
+        return toJavaString(env, detectFormat(bytes.data(), bytes.size()));
+    } catch (...) {
+        return toJavaString(env, {});
+    }
+}
 
 extern "C" JNIEXPORT jstring JNICALL
 Java_app_mmfpocket_player_NativeMmfRenderer_renderToWav(
@@ -150,15 +217,9 @@ Java_app_mmfpocket_player_NativeMmfRenderer_renderToWav(
         return toJavaString(env, "入力データがありません");
     }
 
-    jsize size = env->GetArrayLength(mmfData);
-    std::vector<uint8_t> bytes(static_cast<size_t>(size));
-    if (size > 0) {
-        env->GetByteArrayRegion(mmfData, 0, size, reinterpret_cast<jbyte*>(bytes.data()));
-        if (env->ExceptionCheck()) {
-            env->ExceptionClear();
-            return toJavaString(env, "MMFデータを読み込めません");
-        }
-    }
+    std::vector<uint8_t> bytes;
+    if (!copyJavaBytes(env, mmfData, bytes))
+        return toJavaString(env, "MMFデータを読み込めません");
 
     const char* path = env->GetStringUTFChars(outputPath, nullptr);
     if (path == nullptr) return toJavaString(env, "一時ファイルのパスを取得できません");
@@ -173,4 +234,75 @@ Java_app_mmfpocket_player_NativeMmfRenderer_renderToWav(
     }
     env->ReleaseStringUTFChars(outputPath, path);
     return toJavaString(env, result);
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_app_mmfpocket_player_NativeMmfRenderer_createSession(
+        JNIEnv* env, jclass, jbyteArray mmfData, jboolean phoneSpeakerMode,
+        jlongArray sessionInfo) {
+    if (mmfData == nullptr || sessionInfo == nullptr || env->GetArrayLength(sessionInfo) < 3)
+        return toJavaString(env, "入力データがありません");
+
+    std::vector<uint8_t> bytes;
+    if (!copyJavaBytes(env, mmfData, bytes))
+        return toJavaString(env, "MMFデータを読み込めません");
+
+    try {
+        auto session = std::make_unique<RenderSession>();
+        std::string error = initializePlayer(bytes.data(), bytes.size(), session->player);
+        if (!error.empty()) return toJavaString(env, error);
+        session->phoneSpeakerMode = phoneSpeakerMode == JNI_TRUE;
+        const jlong values[3] = {
+            reinterpret_cast<jlong>(session.get()),
+            static_cast<jlong>(session->player.scoreEndSamples()),
+            static_cast<jlong>(session->player.totalSamples())
+        };
+        env->SetLongArrayRegion(sessionInfo, 0, 3, values);
+        if (env->ExceptionCheck()) {
+            env->ExceptionClear();
+            return toJavaString(env, "再生セッションを作成できません");
+        }
+        session.release();
+        return toJavaString(env, {});
+    } catch (const std::exception& error) {
+        return toJavaString(env, std::string("変換に失敗しました: ") + error.what());
+    } catch (...) {
+        return toJavaString(env, "変換中に不明なエラーが発生しました");
+    }
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_app_mmfpocket_player_NativeMmfRenderer_renderSession(
+        JNIEnv* env, jclass, jlong handle, jshortArray stereoPcm) {
+    auto* session = reinterpret_cast<RenderSession*>(handle);
+    if (session == nullptr || stereoPcm == nullptr) return -1;
+    const jsize sampleCapacity = env->GetArrayLength(stereoPcm);
+    const int frameCapacity = std::min<int>(kBlockFrames, sampleCapacity / 2);
+    if (frameCapacity <= 0) return -1;
+
+    try {
+        std::array<float, kBlockFrames * 2> samples{};
+        std::array<jshort, kBlockFrames * 2> pcm{};
+        const int count = session->player.render(samples.data(), frameCapacity);
+        if (count <= 0) return 0;
+        if (session->phoneSpeakerMode) session->phoneSpeaker.process(samples.data(), count);
+        for (int i = 0; i < count * 2; ++i) {
+            const float sample = std::clamp(samples[i], -1.0f, 1.0f);
+            pcm[i] = static_cast<jshort>(static_cast<int>(sample * 32767.0f));
+        }
+        env->SetShortArrayRegion(stereoPcm, 0, count * 2, pcm.data());
+        if (env->ExceptionCheck()) {
+            env->ExceptionClear();
+            return -1;
+        }
+        return count;
+    } catch (...) {
+        return -1;
+    }
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_app_mmfpocket_player_NativeMmfRenderer_destroySession(
+        JNIEnv*, jclass, jlong handle) {
+    delete reinterpret_cast<RenderSession*>(handle);
 }

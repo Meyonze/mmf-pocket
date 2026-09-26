@@ -14,6 +14,7 @@
     <string name="folder_list_item">📁  %1$s</string>
     <string name="folder_read_failed">フォルダを読み込めません: %1$s</string>
     <string name="converting_file">%1$s を変換しています…</string>
+    <string name="buffering_file">%1$s を読み込んでいます…</string>
     <string name="playback_failed">再生できません: %1$s</string>
     <string name="file_open_failed">ファイルを開けません</string>
     <string name="file_too_large">ファイルが大きすぎます（上限16MB）</string>

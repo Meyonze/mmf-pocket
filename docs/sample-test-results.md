@@ -9,6 +9,7 @@ Results are regenerated with `tools/corpus-test.cpp` after decoder changes.
 | 2026-09-25 | 1.4.0-beta.2 | 382 | 321 | 61 | All MA-1/2/3/5 files parsed and initialized; 61 MA-7 Format 3 files were correctly rejected as unsupported |
 | 2026-09-25 | 1.4.0-beta.3 | 382 | 321 | 61 | All 321 supported files produced finite, audible output during a 10-second probe; 61 MA-7 files remain unsupported |
 | 2026-09-25 | 1.4.0-beta.6 | 382 | 321 | 61 | Audio-tail, ROM-PCM fallback level and speaker-filter changes passed a 10-second finite/audible probe for every supported file; the same 61 MA-7 files remain unsupported |
+| 2026-09-26 | 1.4.0-beta.10 | 382 | 382 | 0 | Format 3 event decoding and MA-7 FM/WT folding enabled; all 61 MA-7 files and all 321 earlier-format files produced finite, audible output in a 10-second probe |
 
 beta.3 also rendered the three privately attached examples to their natural end
 (approximately 194 seconds total scheduled duration). This tests conversion and

@@ -119,6 +119,28 @@ void applyMa3Packed(const uint8_t* body, size_t n, int operatorCount, FmVoicePat
 // operator count from the algorithm nibble (alg 0-1 = 2op, 2-7 = 4op).
 int opCountFromAlg(int alg) { return (alg & 7) <= 1 ? 2 : 4; }
 
+bool applyPcmBody(const uint8_t* b, size_t n, ParsedVoice& out) {
+    if (!b || n < 16) return false;
+    PcmParams& pc = out.pcm;
+    pc.fs     = (int(b[0]) << 8) | b[1];
+    pc.panEnabled = (b[2] & 1) != 0;
+    pc.pan = panpotToPan(b[2] >> 3);
+    pc.env.tl = (b[7] >> 2) & 0x3f;
+    pc.env.sr = (b[4] >> 4) & 0x0f;
+    pc.env.rr = (b[5] >> 4) & 0x0f;
+    pc.env.dr =  b[5] & 0x0f;
+    pc.env.ar = (b[6] >> 4) & 0x0f;
+    pc.env.sl =  b[6] & 0x0f;
+    pc.env.egType = true;
+    pc.env.xof = (b[4] & 8) != 0;
+    pc.loopPt = (int(b[11]) << 8) | b[12];
+    pc.endPt  = (int(b[13]) << 8) | b[14];
+    pc.rom    = (b[15] & 0x80) != 0;
+    pc.loop   = pc.loopPt < pc.endPt;
+    pc.waveId =  b[15] & 0x7f;
+    return pc.fs >= 1500 && pc.fs <= 48000;
+}
+
 } // namespace
 
 std::vector<uint8_t> unpackMa3Bytes(const uint8_t* p, size_t n, size_t maxOutput) {
@@ -143,6 +165,61 @@ ParsedVoice parseVoiceExclusive(const uint8_t* p, size_t n) {
     if (!p || n < 5) return out;
     if (p[0] != 0x43) return out;   // not a yamaha maker id
 
+    // MA-7 Format 3 tone setting: 43 79 08 7F 21 followed by
+    // bankMSB, bankLSB, program, note/split, key-high, then the expanded
+    // MA-7 register image. The six exact image shapes below were validated
+    // over the local corpus and match Yamaha's 2-op/4-op/WT + AL layouts.
+    // AL's filter tail is intentionally dropped; the oscillator/envelope body
+    // still folds losslessly into the VM35 engine representation.
+    if (n >= 11 && p[1] == 0x79 && p[2] == 0x08 && p[3] == 0x7f && p[4] == 0x21) {
+        out.key.bankMSB = p[5];
+        out.key.bankLSB = p[6];
+        out.key.pc = p[7];
+        out.key.drumNote = (p[5] == 0x7d) ? p[8] : 0;
+        out.keyHigh = (p[5] == 0x7d || p[9] == 0) ? 127 : p[9];
+        const uint8_t* voice = p + 10;
+        const size_t vn = n - 10;
+        const int flags = voice[0] & 0x03;
+
+        int operators = 0;
+        if (flags == 0 && vn == 24) operators = 2;
+        else if (flags == 0 && vn == 44) operators = 4;
+        else if (flags == 2 && vn == 40) operators = 2;
+        else if (flags == 2 && vn == 60) operators = 4;
+        if (operators) {
+            uint8_t vm35[3 + 7 * 4]{};
+            vm35[0] = voice[1];
+            vm35[1] = voice[2];
+            vm35[2] = voice[3];
+            for (int op = 0; op < operators; ++op) {
+                const size_t src = 4 + size_t(op) * 10;
+                const size_t dst = 3 + size_t(op) * 7;
+                vm35[dst]     = voice[src];
+                vm35[dst + 1] = voice[src + 1];
+                vm35[dst + 2] = voice[src + 2];
+                vm35[dst + 3] = voice[src + 3];
+                vm35[dst + 4] = voice[src + 4];
+                vm35[dst + 5] = voice[src + 9];
+                vm35[dst + 6] = voice[src + 6];
+            }
+            applyVm35Body(vm35, 3 + size_t(operators) * 7, operators, out.patch);
+            out.valid = true;
+            return out;
+        }
+
+        const bool wt = (flags == 1 && vn == 18) || (flags == 3 && vn == 34);
+        if (wt) {
+            uint8_t vm35[16]{};
+            std::copy(voice + 1, voice + 10, vm35);
+            std::copy(voice + 11, voice + 17, vm35 + 9);
+            vm35[15] = voice[(flags == 3) ? 33 : 17];
+            out.isPcm = true;
+            out.valid = applyPcmBody(vm35, sizeof(vm35), out);
+            return out;
+        }
+        return out;
+    }
+
     // MA-3 / MA-5 long form: 43 79 06|07 7F 01 [bank...] body
     if (n >= 11 && p[1] == 0x79 && (p[2] == 0x06 || p[2] == 0x07) && p[3] == 0x7f && p[4] == 0x01) {
         out.key.bankMSB = p[5]; out.key.bankLSB = p[6]; out.key.pc = p[7];
@@ -161,27 +238,7 @@ ParsedVoice parseVoiceExclusive(const uint8_t* p, size_t n) {
                 unpacked = unpackMa3Bytes(b, bn, 32);
                 b = unpacked.data(); bn = unpacked.size();
             }
-            if (bn >= 16) {
-                PcmParams& pc = out.pcm;
-                pc.fs     = (int(b[0]) << 8) | b[1];        // Fs, u16 BE
-                pc.panEnabled = (b[2] & 1) != 0;
-                pc.pan = panpotToPan(b[2] >> 3);
-                pc.env.tl = (b[7] >> 2) & 0x3f;             // TL
-                pc.env.sr = (b[4] >> 4) & 0x0f;             // SR
-                pc.env.rr = (b[5] >> 4) & 0x0f;             // RR
-                pc.env.dr =  b[5] & 0x0f;                   // DR
-                pc.env.ar = (b[6] >> 4) & 0x0f;             // AR
-                pc.env.sl =  b[6] & 0x0f;                   // SL
-                pc.env.egType = true;
-                pc.env.xof = (b[4] & 8) != 0;
-                pc.loopPt = (int(b[11]) << 8) | b[12];      // LP, u16 BE (sample idx)
-                pc.endPt  = (int(b[13]) << 8) | b[14];      // EP, u16 BE
-                pc.rom    = (b[15] & 0x80) != 0;            // ROM/RAM selection
-                pc.loop   = pc.loopPt < pc.endPt;
-                pc.waveId =  b[15] & 0x7f;                  // WaveID
-                if (pc.fs < 1500 || pc.fs > 48000) return out;
-                out.valid = true;
-            }
+            out.valid = applyPcmBody(b, bn, out);
             return out;
         }
         const uint8_t* body = p + 10;

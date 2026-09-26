@@ -126,10 +126,10 @@ bool MaPlayer::init(const SmafFile& file, uint32_t sampleRate) {
     for (auto& c : chans_) c = Chan{};
     for (auto& v : pool_) { v = FmVoice{}; v.setSampleRate(double(rate_)); }
     for (auto& pv : pcmPool_) pv.active = false;
-    // Reject at engine level too, not only in the Android bridge. Unknown
-    // grammars must never silently produce plausible-looking wrong events.
+    // Reject at engine level too. Unknown grammars must never silently produce
+    // plausible-looking wrong events; Format 3 is the validated MA-7 SEQU path.
     for (const auto& t : file.tracks)
-        if (!t.isAudioTrack && (t.formatType < 0 || t.formatType > 2)) return false;
+        if (!t.isAudioTrack && (t.formatType < 0 || t.formatType > 3)) return false;
     poolNoteId_.fill(0);
     // ~10 kHz analog-lite output filter (two 1-pole stages).
     lpCoef_ = float(1.0 - std::exp(-2.0 * 3.14159265358979 * 10000.0 / double(rate_)));
@@ -148,7 +148,9 @@ bool MaPlayer::init(const SmafFile& file, uint32_t sampleRate) {
         const TrackChunk& t = file.tracks[idx];
         // handyphone = 4 channels/track, mobile = 16. global channel base keeps
         // multi-track files from colliding.
-        int base = (t.formatType == 0x00) ? t.trackNumber * 4 : t.trackNumber * 16;
+        int base = (t.formatType == 0x00) ? t.trackNumber * 4
+                 : (t.formatType == 0x03) ? 0
+                 : t.trackNumber * 16;
         if (base < 0 || base > 112) base = 0;
         decodeTrack_(t, base);
     }
@@ -314,8 +316,10 @@ void MaPlayer::decodeTrack_(const TrackChunk& t, int base) {
         auto inflated = smafHuffmanInflate(t.sequenceData.data(), t.sequenceData.size());
         if (!inflated.empty())
             decodeMobile_(inflated.data(), inflated.size(), base, tbD, tbG);
-    } else {
+    } else if (t.formatType == 0x02) {
         decodeMobile_(t.sequenceData.data(), t.sequenceData.size(), base, tbD, tbG);
+    } else if (t.formatType == 0x03) {
+        decodeMa7_(t.sequenceData.data(), t.sequenceData.size(), base, tbD, tbG);
     }
 }
 
@@ -523,7 +527,9 @@ const FmVoicePatch& MaPlayer::patchFor_(int ch, int note, bool& isPcmOut) const 
     for (const ParsedVoice& v : voiceTable_) {
         if (v.key.bankMSB == c.bankMsb && v.key.bankLSB == c.bankLsb && v.key.pc == c.program) {
             if (v.key.drumNote != 0) { if (v.key.drumNote == note) { if (v.isPcm){isPcmOut=true;} return v.patch; } }
-            else { melodyHit = &v; }
+            else if (note <= v.keyHigh && (!melodyHit || v.keyHigh < melodyHit->keyHigh)) {
+                melodyHit = &v;
+            }
         }
     }
     if (melodyHit) { if (melodyHit->isPcm) isPcmOut = true; return melodyHit->patch; }
@@ -538,7 +544,8 @@ const ParsedVoice* MaPlayer::resolveVoice_(int ch, int note) const {
     for (const ParsedVoice& v : voiceTable_) {
         if (v.key.bankMSB == c.bankMsb && v.key.bankLSB == c.bankLsb && v.key.pc == c.program) {
             if (v.key.drumNote != 0) { if (v.key.drumNote == note) return &v; }
-            else if (!melodyHit) melodyHit = &v;
+            else if (note <= v.keyHigh && (!melodyHit || v.keyHigh < melodyHit->keyHigh))
+                melodyHit = &v;
         }
     }
     return melodyHit;
@@ -554,6 +561,111 @@ int MaPlayer::allocatePcmSlot_() {
     ++diagnostics_.stolenPcm;
     if (slot<0) { slot=pcmSteal_++%kPcmPool; ++diagnostics_.stolenHeldPcm; }
     return slot;
+}
+
+// ── MA-7 SEQU event stream ─────────────────────────────────────────────────
+// Format 3 keeps the Mobile event classes, but exposes 32 channels. Status bit
+// 7 selects channels 16..31 and bits 3..0 select the channel inside that bank:
+//   0x00/0x80 note (running velocity), 0x10/0x90 note+velocity,
+//   0x30/0xB0 control, 0x40/0xC0 program, 0x60/0xE0 pitch bend.
+// This grammar consumes every event in the local 61-file MA-7 corpus exactly;
+// reserved classes are skipped with their specified Mobile payload widths.
+void MaPlayer::decodeMa7_(const uint8_t* p, size_t n, int base,
+                          double tbDms, double tbGms) {
+    const uint8_t* end = p + n;
+    double curMs = 0.0;
+    auto msToSample = [&](double ms) { return uint64_t(ms * rate_ / 1000.0); };
+    uint8_t runVel[32];
+    for (auto& v : runVel) v = 64;
+
+    int guard = 0;
+    while (p < end && guard++ < 4000000 && events_.size() < kMaxEvents) {
+        uint32_t dur = readVlq(p, end);
+        curMs += dur * tbDms;
+        if (p >= end) break;
+        uint8_t status = *p++;
+        uint64_t at = msToSample(curMs);
+
+        if (status == 0xF0) {
+            uint32_t len = readVlq(p, end);
+            if (len > size_t(end - p)) break;
+            size_t plen = len;
+            if (plen && p[plen - 1] == 0xF7) --plen;
+            ParsedVoice v = parseVoiceExclusive(p, plen);
+            if ((v.valid || v.isPcm) && voiceTable_.size() < kMaxCustomVoices)
+                voiceTable_.push_back(v);
+            p += len;
+            continue;
+        }
+        if (status == 0xFF) {
+            if (p >= end) break;
+            uint8_t meta = *p++;
+            if (meta == 0x00) continue;
+            if (meta == 0x2F) {
+                if (p < end) ++p; // zero-length byte
+                break;
+            }
+            if (p >= end) break;
+            uint32_t len = readVlq(p, end);
+            p += std::min<size_t>(len, size_t(end - p));
+            continue;
+        }
+
+        const int local = (status & 0x0F) + ((status & 0x80) ? 16 : 0);
+        const int ch = base + local;
+        const int eventClass = status & 0x70;
+        switch (eventClass) {
+            case 0x00:
+            case 0x10: {
+                if (p >= end) { p = end; break; }
+                int note = *p++ & 0x7F;
+                int vel = runVel[local];
+                if (eventClass == 0x10) {
+                    if (p >= end) { p = end; break; }
+                    vel = *p++ & 0x7F;
+                    runVel[local] = uint8_t(vel);
+                }
+                uint32_t gate = readVlq(p, end);
+                if (gate == 0) break;
+                uint64_t off = at + msToSample(gate * tbGms);
+                const uint64_t id = nextNoteId_++;
+                events_.push_back({at, Ev::NoteOn, uint16_t(ch), int16_t(note), int16_t(vel), id});
+                events_.push_back({off, Ev::NoteOff, uint16_t(ch), int16_t(note), 0, id});
+            } break;
+            case 0x20: // reserved, two data bytes
+                p += std::min<size_t>(2, size_t(end - p));
+                break;
+            case 0x30: {
+                if (size_t(end - p) < 2) { p = end; break; }
+                int cc = *p++, val = *p++;
+                switch (cc) {
+                    case 0x00: events_.push_back({at, Ev::BankMsb, uint16_t(ch), int16_t(val), 0}); break;
+                    case 0x20: events_.push_back({at, Ev::BankLsb, uint16_t(ch), int16_t(val), 0}); break;
+                    case 0x07: events_.push_back({at, Ev::Volume, uint16_t(ch), int16_t(val), 0}); break;
+                    case 0x0A: events_.push_back({at, Ev::Pan, uint16_t(ch), int16_t(val), 0}); break;
+                    case 0x0B: events_.push_back({at, Ev::Expression, uint16_t(ch), int16_t(val), 0}); break;
+                    case 0x01: events_.push_back({at, Ev::Modulation, uint16_t(ch), int16_t(val), 0}); break;
+                    default: break;
+                }
+            } break;
+            case 0x40:
+                if (p < end)
+                    events_.push_back({at, Ev::Program, uint16_t(ch), int16_t(*p++ & 0x7F), 0});
+                break;
+            case 0x50: // reserved, one data byte
+                if (p < end) ++p;
+                break;
+            case 0x60: {
+                if (size_t(end - p) < 2) { p = end; break; }
+                int lsb = *p++, msb = *p++;
+                int v14 = ((msb & 0x7F) << 7) | (lsb & 0x7F);
+                events_.push_back({at, Ev::PitchBend, uint16_t(ch), int16_t(v14 - 8192), 0});
+            } break;
+            default:
+                p = end; // 0x70 is reserved and has no validated width.
+                break;
+        }
+    }
 }
 
 bool MaPlayer::startPcm_(int ch, int rawNote, int soundingNote, const ParsedVoice& v,

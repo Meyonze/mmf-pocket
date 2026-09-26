@@ -55,10 +55,10 @@ sampled controllers, zero velocity and natural/safety endings. Sanitizer CI
 also exercises malformed voice-wave packets. `tools/corpus-test.cpp` reports
 fallback/PCM counts, stolen voices and safety endings without saving audio.
 
-The beta.7 release candidate was rebuilt for all three Android ABIs and passed
-lint plus the synthetic audio/security tests on 2026-09-26. A private 382-file
-ten-second probe produced 321 supported results and 61 explicit MA-7 rejects,
-with no unexpected failures or tail-limit hits; 97 files exercised real PCM.
+The beta.10 test build was rebuilt for all three Android ABIs and passed lint
+plus the synthetic audio/security tests on 2026-09-26. A private 382-file
+ten-second probe produced 382 finite, audible results, including all 61 MA-7
+Format 3 files, with no unexpected failures; 97 earlier-format files exercised real PCM.
 No held PCM voice was stolen. One non-target file saturated all held FM slots
 (19 steals). Four longer focus files were rendered completely in normal and
 phone-speaker modes with no held-voice steals or tail-limit hits. These local
@@ -69,18 +69,26 @@ Still uncalibrated: FM modulation/feedback amplitudes, algorithm output gain,
 envelope rate/key-scaling precision, waveforms, PCM vibrato/tremolo/damper,
 ROM percussion and handset acoustics. Inline voice/wave updates are collected
 at load time rather than changed during playback. MA-5 bulk-wave variants and
-MA-7 require separate validation. Future work must distinguish specification
+MA-7 device effects require separate validation. Future work must distinguish specification
 corrections, tested transport decoding and listening/hardware calibration;
 do not substitute global EQ or shorter tails for those tasks.
 
 ## MA-7 investigation
 
-Format 3 must not be decoded as Mobile Standard format 2. Local MA-7 files use
-different sequence commands and `43 79 08` voice messages. The `SEQU` branch in
-vavi-sound is explicitly marked uncertain for format 3 and describes a four-channel
-grammar; it is not sufficient evidence for the 32-channel MA-7 files here.
-Keep format 3 rejected until event and voice decoding can be validated together.
-Do not turn an audible but incorrectly decoded result into a compatibility claim.
+Format 3 is not Mobile Standard format 2. Its SEQU stream keeps the Mobile event
+classes but uses status bit 7 as a second 16-channel bank: `0x00/0x80` are
+running-velocity notes, `0x10/0x90` are explicit-velocity notes, and the
+control/program/pitch classes follow the same pairing. This grammar consumed
+all 2,065,941 sequence bytes across 61 local files, reaching one EOS per file.
+
+MA-7 `43 79 08 7F 21` tone messages carry expanded 2/4-op FM or WT register
+images, optionally followed by an Analog Lite filter. The oscillator,
+envelope and WT sections are folded into the existing VM35 representation;
+the AL filter tail is intentionally omitted. Exact message lengths and type
+flags are checked before conversion, and unknown shapes remain rejected. The
+61 files all produced finite, audible output in the ten-second corpus probe.
+This establishes compatible transport/event decoding, not cycle-accurate
+YMU786 or handset-ROM emulation.
 
 ## beta.3 implementation and limits
 
@@ -95,7 +103,7 @@ Do not turn an audible but incorrectly decoded result into a compatibility claim
 - KSL order and LFO rates follow the related manual. MULTI retains SMAF's linear
   interpretation; the YMF825 multiplier table differs, so it is not copied.
 - No new ROM samples or third-party audio assets are included. The existing
-  fallback drum bank, FM modulation depth, waveforms and PCM path remain
-  approximations. MA-7 cannot yet be enabled safely.
+  fallback drum bank, FM modulation depth, waveforms, PCM path and MA-7 AL
+  filter omission remain approximations.
 - Phone-speaker mode remains an optional generic effect, with no handset preset
   or claim of SH51/905SH acoustic calibration.

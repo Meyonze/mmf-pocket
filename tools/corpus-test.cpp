@@ -89,13 +89,6 @@ Result testOne(const fs::path& path) {
             result.tracks = description.str();
         }
 
-        if (std::any_of(file.tracks.begin(), file.tracks.end(), [](const auto& track) {
-                return !track.isAudioTrack && track.formatType == 0x03;
-            })) {
-            result.status = "unsupported_ma7";
-            return result;
-        }
-
         MaPlayer player;
         if (!player.init(file, kSampleRate)) {
             result.status = "no_playable_track";

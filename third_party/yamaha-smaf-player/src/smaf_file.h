@@ -18,6 +18,8 @@
 //   format 0x01  "Mobile Standard, huffman-compressed" (MA-3/5)
 //   format 0x02  "Mobile Standard, uncompressed"       (MA-3/5) 16-ch,
 //                midi-flavoured status bytes + variable-length delta times
+//   format 0x03  "SEQU"                                (MA-7)   32-ch,
+//                paired status banks + variable-length delta/gate times
 //
 // this header is the QT-FREE half of the smaf stack: pure parsing, no
 // synthesis, no allocation tricks, everything lands in plain std::vector so
@@ -54,11 +56,11 @@ struct WaveData {
 struct TrackChunk {
     int  trackNumber   = 0;         // 4th byte of the chunk id
     bool isAudioTrack  = false;     // ATR* (pcm-only track) vs MTR* (score)
-    int  formatType    = -1;        // 0x00/0x01/0x02 (see banner)
+    int  formatType    = -1;        // 0x00/0x01/0x02/0x03 (see banner)
     int  sequenceType  = 0;         // 0x00 stream / 0x01 sub-sequence
     int  durationTimeBase = 0;      // raw byte, use timeBaseMs() to decode
     int  gateTimeBase     = 0;
-    std::vector<uint8_t> channelStatus; // HandyPhone: 2 B, Mobile: 16 B
+    std::vector<uint8_t> channelStatus; // HandyPhone: 2 B, Mobile: 16 B, MA-7: 32 B
     std::vector<uint8_t> setupData;     // Mtsu payload: voice exclusives
     std::vector<uint8_t> sequenceData;  // Mtsq payload: the event stream
     std::vector<WaveData> waves;        // Mtsp/Mwa (score-track pcm)

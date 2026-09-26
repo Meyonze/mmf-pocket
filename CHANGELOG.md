@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.4.0-beta.11
+
+- Show the selected file's MA generation and raw SMAF score format in the
+  player's lower-right corner. Shared legacy formats are labeled MA-1/2 or
+  MA-3/5 rather than guessing a chip generation the file does not identify.
+
+## 1.4.0-beta.10
+
+- Add experimental MA-7 Score Format 3 playback with its validated 32-channel
+  SEQU event grammar.
+- Fold MA-7 2/4-operator FM and wavetable tone images into the existing
+  ROM-free engine, including split-key selection. Analog Lite filter tails and
+  device-ROM-specific effects remain approximations or unsupported.
+- Validate all 61 local MA-7 files through a ten-second finite/audible probe;
+  all 382 files in the private compatibility corpus pass.
+
+## 1.4.0-beta.9
+
+- Start uncached songs after a short PCM prebuffer while rendering and caching
+  the remainder in parallel. The seek bar shows generated audio as secondary
+  progress and limits seeking to the available prefix.
+
+## 1.4.0-beta.8
+
+- Buffer each rendered PCM block and write it to the WAV cache in one operation.
+  Generated audio and the renderer cache identity are unchanged.
+
 ## 1.4.0-beta.7
 
 - Decode MA-3 packed PCM parameters and embedded voice-wave ADPCM blocks that

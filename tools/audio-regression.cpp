@@ -184,6 +184,51 @@ void checkGateIdentity() {
     }
 }
 
+void checkMa7Sequ() {
+    // Format 3 encodes channels 0..15 with the Mobile event classes minus
+    // 0x80, and channels 16..31 with the familiar MIDI-looking statuses.
+    auto mobile = fixture(2), lowBank = fixture(3), highBank = fixture(3);
+    mobile.tracks[0].sequenceData = {
+        0,0xc0,5, 0,0xb0,7,100, 0,0xe0,0,64,
+        0,0x90,60,80,10, 10,0x80,62,10, 10,0xff,0x2f,0};
+    lowBank.tracks[0].sequenceData = {
+        0,0x40,5, 0,0x30,7,100, 0,0x60,0,64,
+        0,0x10,60,80,10, 10,0x00,62,10, 10,0xff,0x2f,0};
+    highBank.tracks[0].sequenceData = mobile.tracks[0].sequenceData;
+    check(renderAll(lowBank) == renderAll(mobile), "MA7 low channel bank event mapping");
+    check(renderAll(highBank) == renderAll(mobile), "MA7 high channel bank event mapping");
+}
+
+void checkMa7Voices() {
+    std::vector<uint8_t> fm = {
+        0x43,0x79,0x08,0x7f,0x21, 0x7c,1,2,0,60,
+        0, 0,1,0, // flags, KeyNumber, Pan/BO, LFO/PE/ALG
+        0xa1,0xbc,0xd4,0xfc,0x31,0,0x15,0,0,0x67,
+        0x01,0x22,0xf3,0x40,0x00,0,0x08,0,0,0x10};
+    check(fm.size()==34, "MA7 synthetic 2-op image size");
+    auto v=parseVoiceExclusive(fm.data(),fm.size());
+    check(v.valid && !v.isPcm && v.key.bankMSB==0x7c && v.key.bankLSB==1 &&
+          v.key.pc==2 && v.key.drumNote==0 && v.keyHigh==60,
+          "MA7 FM key and split mapping");
+    check(v.patch.ops[0].sr==10 && v.patch.ops[0].ksr==1 &&
+          v.patch.ops[0].rr==11 && v.patch.ops[0].dr==12 &&
+          v.patch.ops[0].ar==13 && v.patch.ops[0].sl==4 &&
+          v.patch.ops[0].multi==6 && v.patch.ops[0].dt==7 &&
+          v.patch.ops[0].wave==2 && v.patch.ops[0].fb==5,
+          "MA7 expanded operator folds to VM35");
+
+    std::vector<uint8_t> wt = {
+        0x43,0x79,0x08,0x7f,0x21, 0x7d,0,0,40,0,
+        1, 0x1f,0x40,0,0,0,0x90,0xf0,0,0,
+        0,0,0,0,0,0,80,1};
+    check(wt.size()==28, "MA7 synthetic WT image size");
+    v=parseVoiceExclusive(wt.data(),wt.size());
+    check(v.valid && v.isPcm && v.key.bankMSB==0x7d && v.key.drumNote==40 &&
+          v.pcm.fs==8000 && v.pcm.env.rr==9 && v.pcm.env.ar==15 &&
+          v.pcm.waveId==1 && !v.pcm.rom,
+          "MA7 WT folds to VM35 PCM voice");
+}
+
 void checkAlgorithms() {
     // Independently assemble algorithm 3: op0 + (op1 -> op2) feeds op3.
     FmVoicePatch patch;
@@ -248,6 +293,8 @@ void checkVoiceStealing() {
 }
 
 int main() {
+    checkMa7Sequ();
+    checkMa7Voices();
     checkGateIdentity();
     checkAlgorithms();
     checkVoiceStealing();
@@ -361,7 +408,7 @@ int main() {
     check(releaseAudio.back() == 0 && releaseAudio[releaseAudio.size()-2] == 0,
           "safety boundary fades to zero without abrupt cutoff");
 
-    check(!player.init(fixture(3),8000), "MA7 rejected by core");
+    check(player.init(fixture(3),8000), "MA7 accepted by core");
     check(!player.init(fixture(4),8000), "unknown format rejected by core");
 
     // A long-gated event cannot keep conversion alive indefinitely.

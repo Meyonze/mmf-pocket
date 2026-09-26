@@ -145,6 +145,9 @@ private:
     void decodeHandyPhone_(const uint8_t* p, size_t n, int base, double tbDms, double tbGms,
                            bool atrWaveMode = false);
     void decodeMobile_(const uint8_t* p, size_t n, int base, double tbDms, double tbGms);
+    // Format 3 / MA-7 SEQU: mobile-style events extended from 16 to 32
+    // channels by using status bit 7 as the channel-bank selector.
+    void decodeMa7_(const uint8_t* p, size_t n, int base, double tbDms, double tbGms);
 
     // resolve a channel's current patch (voice table hit or gm fallback).
     const FmVoicePatch& patchFor_(int ch, int note, bool& isPcmOut) const;
