@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.4.1
+
+- Run folder batch conversion on its own low-priority worker so browsing,
+  playback controls, track selection and speaker-mode changes remain usable.
+- Show batch progress separately from player status and serialize cache cleanup
+  across interactive and batch rendering.
+
 ## 1.4.0
 
 - Publish the first generally downloadable Android release of MMF Pocket.

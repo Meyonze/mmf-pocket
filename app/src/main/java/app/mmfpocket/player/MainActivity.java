@@ -59,6 +59,7 @@ public final class MainActivity extends Activity {
     private static final String CACHE_DIR_NAME = "converted";
 
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
+    private final ExecutorService batchWorker = Executors.newSingleThreadExecutor();
     private final AtomicInteger playbackGeneration = new AtomicInteger();
     private final AtomicInteger scanGeneration = new AtomicInteger();
     private final AtomicInteger batchGeneration = new AtomicInteger();
@@ -82,6 +83,7 @@ public final class MainActivity extends Activity {
 
     private ArrayAdapter<String> adapter;
     private TextView folderLabel;
+    private TextView batchStatusLabel;
     private TextView statusLabel;
     private TextView formatLabel;
     private TextView nowPlayingLabel;
@@ -190,6 +192,16 @@ public final class MainActivity extends Activity {
         batchParams.leftMargin = dp(4);
         folderControls.addView(batchButton, batchParams);
         root.addView(folderControls, folderControlsParams);
+
+        batchStatusLabel = new TextView(this);
+        batchStatusLabel.setTextSize(11);
+        batchStatusLabel.setSingleLine(true);
+        batchStatusLabel.setEllipsize(TextUtils.TruncateAt.MIDDLE);
+        batchStatusLabel.setPadding(0, dp(2), 0, dp(2));
+        batchStatusLabel.setVisibility(View.GONE);
+        root.addView(batchStatusLabel, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT));
 
         listView = new ListView(this);
         listView.setChoiceMode(ListView.CHOICE_MODE_SINGLE);
@@ -379,7 +391,6 @@ public final class MainActivity extends Activity {
     }
 
     private void loadFolder(Uri treeUri) {
-        cancelBatchConversion();
         selectedEntry = null;
         currentName = null;
         stopPlayback(false);
@@ -398,7 +409,6 @@ public final class MainActivity extends Activity {
 
     private void openDirectory(FolderLocation folder) {
         if (selectedTreeUri == null) return;
-        cancelBatchConversion();
         currentFolder = folder;
         Uri treeUri = selectedTreeUri;
         int generation = scanGeneration.incrementAndGet();
@@ -434,7 +444,7 @@ public final class MainActivity extends Activity {
                 adapter.notifyDataSetChanged();
                 listView.clearChoices();
                 listView.setEnabled(true);
-                batchButton.setEnabled(!entries.isEmpty());
+                batchButton.setEnabled(!entries.isEmpty() && !batchConverting);
                 statusLabel.setText(found.isEmpty()
                         ? getString(R.string.empty_folder_ja)
                         : getString(R.string.folder_item_count, entries.size(), folderCount));
@@ -490,7 +500,6 @@ public final class MainActivity extends Activity {
     }
 
     private void play(MmfEntry entry) {
-        if (batchConverting) return;
         selectedEntry = entry;
         boolean phoneSpeakerMode = phoneSoundSwitch.isChecked();
         int generation = playbackGeneration.incrementAndGet();
@@ -520,7 +529,7 @@ public final class MainActivity extends Activity {
                 }
                 if (!finalSource.error.isEmpty()) {
                     statusLabel.setText(getString(R.string.playback_failed, finalSource.error));
-                    playPauseButton.setEnabled(selectedEntry != null && !batchConverting);
+                    playPauseButton.setEnabled(selectedEntry != null);
                     stopButton.setEnabled(false);
                     return;
                 }
@@ -536,18 +545,15 @@ public final class MainActivity extends Activity {
 
     private void convertAllFiles() {
         if (entries.isEmpty() || batchConverting) return;
-        stopPlayback(false);
         int generation = batchGeneration.incrementAndGet();
         List<MmfEntry> snapshot = new ArrayList<>(entries);
         boolean phoneSpeakerMode = phoneSoundSwitch.isChecked();
         batchConverting = true;
-        playPauseButton.setEnabled(false);
-        phoneSoundSwitch.setEnabled(false);
-        chooseButton.setEnabled(false);
         batchButton.setEnabled(false);
-        listView.setEnabled(false);
+        batchStatusLabel.setVisibility(View.VISIBLE);
 
-        worker.execute(() -> {
+        batchWorker.execute(() -> {
+            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND);
             int converted = 0;
             int reused = 0;
             int failed = 0;
@@ -557,7 +563,7 @@ public final class MainActivity extends Activity {
                 int position = i + 1;
                 runOnUiThread(() -> {
                     if (generation == batchGeneration.get()) {
-                        statusLabel.setText(getString(R.string.batch_progress,
+                        batchStatusLabel.setText(getString(R.string.batch_progress,
                                 position, snapshot.size(), entry.name));
                     }
                 });
@@ -581,12 +587,8 @@ public final class MainActivity extends Activity {
             runOnUiThread(() -> {
                 if (generation != batchGeneration.get() || isFinishing() || isDestroyed()) return;
                 batchConverting = false;
-                phoneSoundSwitch.setEnabled(true);
-                playPauseButton.setEnabled(selectedEntry != null);
-                chooseButton.setEnabled(true);
                 batchButton.setEnabled(!entries.isEmpty());
-                listView.setEnabled(true);
-                statusLabel.setText(getString(R.string.batch_complete,
+                batchStatusLabel.setText(getString(R.string.batch_complete,
                         finalConverted, finalReused, finalFailed));
             });
         });
@@ -596,11 +598,8 @@ public final class MainActivity extends Activity {
         batchGeneration.incrementAndGet();
         if (!batchConverting) return;
         batchConverting = false;
-        phoneSoundSwitch.setEnabled(true);
-        playPauseButton.setEnabled(selectedEntry != null);
-        chooseButton.setEnabled(true);
         batchButton.setEnabled(!entries.isEmpty());
-        listView.setEnabled(true);
+        batchStatusLabel.setVisibility(View.GONE);
     }
 
     private PlaybackSource preparePlaybackSource(
@@ -655,7 +654,7 @@ public final class MainActivity extends Activity {
         }
     }
 
-    private void trimCache(File cacheDirectory, File protectedFile) {
+    private synchronized void trimCache(File cacheDirectory, File protectedFile) {
         File[] files = cacheDirectory.listFiles((directory, name) -> name.endsWith(".wav"));
         if (files == null) return;
         List<File> sorted = new ArrayList<>();
@@ -793,7 +792,6 @@ public final class MainActivity extends Activity {
     }
 
     private void togglePlayback() {
-        if (batchConverting) return;
         if (progressivePlayback != null) {
             if (!prepared) return;
             if (progressivePlayback.isPlaybackComplete()) {
@@ -862,7 +860,7 @@ public final class MainActivity extends Activity {
             currentWav = null;
         }
         showPlayIcon();
-        playPauseButton.setEnabled(selectedEntry != null && !batchConverting);
+        playPauseButton.setEnabled(selectedEntry != null);
         stopButton.setEnabled(false);
         playbackProgress.setProgress(0);
         playbackProgress.setSecondaryProgress(0);
@@ -955,6 +953,7 @@ public final class MainActivity extends Activity {
         progressHandler.removeCallbacks(progressUpdater);
         releasePlayer();
         worker.shutdownNow();
+        batchWorker.shutdownNow();
         super.onDestroy();
     }
 
