@@ -145,11 +145,31 @@ public final class MainActivity extends Activity {
             return windowInsets;
         });
 
+        LinearLayout titleRow = new LinearLayout(this);
+        titleRow.setOrientation(LinearLayout.HORIZONTAL);
+        titleRow.setGravity(Gravity.CENTER_VERTICAL);
+
         TextView title = new TextView(this);
         title.setText(getString(R.string.app_name));
         title.setTextSize(24);
         title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        root.addView(title, new LinearLayout.LayoutParams(
+        titleRow.addView(title, new LinearLayout.LayoutParams(
+                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+
+        batchStatusLabel = new TextView(this);
+        batchStatusLabel.setTextSize(11);
+        batchStatusLabel.setTextColor(0xFFFFFFFF);
+        batchStatusLabel.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        batchStatusLabel.setSingleLine(true);
+        batchStatusLabel.setGravity(Gravity.CENTER);
+        batchStatusLabel.setPadding(dp(9), dp(5), dp(9), dp(5));
+        batchStatusLabel.setBackgroundResource(R.drawable.batch_status_background);
+        batchStatusLabel.setVisibility(View.GONE);
+        titleRow.addView(batchStatusLabel, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        root.addView(titleRow, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
 
         LinearLayout folderControls = new LinearLayout(this);
@@ -192,16 +212,6 @@ public final class MainActivity extends Activity {
         batchParams.leftMargin = dp(4);
         folderControls.addView(batchButton, batchParams);
         root.addView(folderControls, folderControlsParams);
-
-        batchStatusLabel = new TextView(this);
-        batchStatusLabel.setTextSize(11);
-        batchStatusLabel.setSingleLine(true);
-        batchStatusLabel.setEllipsize(TextUtils.TruncateAt.MIDDLE);
-        batchStatusLabel.setPadding(0, dp(2), 0, dp(2));
-        batchStatusLabel.setVisibility(View.GONE);
-        root.addView(batchStatusLabel, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT));
 
         listView = new ListView(this);
         listView.setChoiceMode(ListView.CHOICE_MODE_SINGLE);
@@ -550,6 +560,7 @@ public final class MainActivity extends Activity {
         boolean phoneSpeakerMode = phoneSoundSwitch.isChecked();
         batchConverting = true;
         batchButton.setEnabled(false);
+        batchStatusLabel.setText(getString(R.string.batch_progress_compact, 0, snapshot.size()));
         batchStatusLabel.setVisibility(View.VISIBLE);
 
         batchWorker.execute(() -> {
@@ -563,7 +574,9 @@ public final class MainActivity extends Activity {
                 int position = i + 1;
                 runOnUiThread(() -> {
                     if (generation == batchGeneration.get()) {
-                        batchStatusLabel.setText(getString(R.string.batch_progress,
+                        batchStatusLabel.setText(getString(R.string.batch_progress_compact,
+                                position, snapshot.size()));
+                        batchStatusLabel.setContentDescription(getString(R.string.batch_progress,
                                 position, snapshot.size(), entry.name));
                     }
                 });
@@ -588,8 +601,9 @@ public final class MainActivity extends Activity {
                 if (generation != batchGeneration.get() || isFinishing() || isDestroyed()) return;
                 batchConverting = false;
                 batchButton.setEnabled(!entries.isEmpty());
-                batchStatusLabel.setText(getString(R.string.batch_complete,
-                        finalConverted, finalReused, finalFailed));
+                batchStatusLabel.setVisibility(View.GONE);
+                Toast.makeText(this, getString(R.string.batch_complete,
+                        finalConverted, finalReused, finalFailed), Toast.LENGTH_LONG).show();
             });
         });
     }

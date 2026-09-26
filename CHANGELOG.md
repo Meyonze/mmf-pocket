@@ -6,6 +6,8 @@
   playback controls, track selection and speaker-mode changes remain usable.
 - Show batch progress separately from player status and serialize cache cleanup
   across interactive and batch rendering.
+- Keep a compact batch-progress badge visible in the top-right corner while the
+  conversion is running.
 
 ## 1.4.0
 
