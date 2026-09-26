@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Modified by MMF Pocket contributors in 2026. See docs/audio-fidelity.md.
 #pragma once
 //
 // ma_fm_core.h -- the fm voice engine of the yamaha MA-series ringtone chips.
@@ -132,6 +133,8 @@ public:
     void setVolume(float v) { volume_ = v; }   // channel volume 0..1
     float tick();                          // one mono sample, ~[-1,1]
     bool  active() const { return active_; }
+    bool  released() const { return released_; }
+    float recentLevel() const { return recentLevel_; }
     int   note() const { return note_; }
     int   channel = -1;                    // owning smaf channel (for stealing)
     int   note_   = -1;
@@ -142,6 +145,8 @@ private:
     float  velocity_ = 1.0f;
     float  volume_   = 1.0f;
     bool   active_   = false;
+    bool   released_ = false;
+    float  recentLevel_ = 0.0f;
     bool   fourOp_   = false;
     uint8_t algo_    = 0;
     uint8_t feedback_= 0;

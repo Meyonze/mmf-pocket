@@ -45,6 +45,26 @@ int main() {
     exercise(std::vector<uint8_t>(11, 0));
 
     std::mt19937 random(0x4d4d4650u);
+    // Enter packed PCM/voice-wave paths directly; random container headers
+    // alone rarely reach a valid setup exclusive. No real media is included.
+    for (int iteration=0;iteration<512;++iteration) {
+        std::vector<uint8_t> payload{0x43,0x79,6,0x7f,3,1,0};
+        size_t length=random()%96;
+        for(size_t i=0;i<length;++i) payload.push_back(uint8_t(random() & 127));
+        if (iteration%3==0 && payload.size()>7) payload.back()=0xff;
+        fxchain::smaf::TrackChunk track;
+        track.trackNumber=0; track.formatType=2;
+        track.setupData={0xf0,uint8_t(payload.size()+1)};
+        track.setupData.insert(track.setupData.end(),payload.begin(),payload.end());
+        track.setupData.push_back(0xf7);
+        track.sequenceData={0,0x90,60,100,10,10,0xff,0x2f,0};
+        SmafFile file; file.tracks.push_back(track);
+        MaPlayer player;
+        if (player.init(file,8000)) { float audio[128*2]; player.render(audio,128); }
+        payload[4]=1;
+        if(payload.size()>9) payload[9]=1;
+        (void)fxchain::smaf::parseVoiceExclusive(payload.data(),payload.size());
+    }
     constexpr std::array<std::array<uint8_t, 4>, 4> ids{{
         {{'C', 'N', 'T', 'I'}},
         {{'O', 'P', 'D', 'A'}},

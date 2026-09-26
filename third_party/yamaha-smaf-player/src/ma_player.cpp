@@ -119,6 +119,10 @@ bool MaPlayer::init(const SmafFile& file, uint32_t sampleRate) {
     rate_ = sampleRate ? sampleRate : 48000;
     events_.clear(); voiceTable_.clear();
     nextEvent_ = 0; cursor_ = 0; endSample_ = 0;
+    nextNoteId_ = 1;
+    fmSteal_ = pcmSteal_ = 0;
+    scoreEndSample_ = 0; ended_ = false; diagnostics_ = {};
+    for (auto& wave : voiceWaveBank_) wave = PcmSample{};
     for (auto& c : chans_) c = Chan{};
     for (auto& v : pool_) { v = FmVoice{}; v.setSampleRate(double(rate_)); }
     for (auto& pv : pcmPool_) pv.active = false;
@@ -126,7 +130,7 @@ bool MaPlayer::init(const SmafFile& file, uint32_t sampleRate) {
     // grammars must never silently produce plausible-looking wrong events.
     for (const auto& t : file.tracks)
         if (!t.isAudioTrack && (t.formatType < 0 || t.formatType > 2)) return false;
-    poolKeyNote_.fill(-1);
+    poolNoteId_.fill(0);
     // ~10 kHz analog-lite output filter (two 1-pole stages).
     lpCoef_ = float(1.0 - std::exp(-2.0 * 3.14159265358979 * 10000.0 / double(rate_)));
     lp1L_ = lp1R_ = lp2L_ = lp2R_ = 0.0f;
@@ -199,8 +203,11 @@ bool MaPlayer::init(const SmafFile& file, uint32_t sampleRate) {
                          return !isNote(a) && isNote(b);
                      });
 
-    // song end = last event + a short tail so releases ring out.
-    endSample_ = events_.back().sample + uint64_t(rate_);   // +1 s tail
+    // Let real envelopes finish, rather than cutting every song at +1 s.
+    // Ten seconds is only a safety ceiling for held/very slow envelopes;
+    // render() normally ends earlier and fades the safety boundary if reached.
+    scoreEndSample_ = events_.back().sample;
+    endSample_ = scoreEndSample_ + uint64_t(rate_) * 10;
     uint64_t cap = uint64_t(kSafetySeconds * rate_);
     if (endSample_ > cap) endSample_ = cap;
     return true;
@@ -241,6 +248,19 @@ void MaPlayer::collectVoices_(const SmafFile& file) {
     }
 }
 
+void MaPlayer::addVoiceWave_(const uint8_t* p, size_t n) {
+    // Observed MA-3 voice-wave command: 43 79 06 7f 03 ID 00 packed ADPCM.
+    // Only this transport/codec combination is enabled. Unknown variants are
+    // not guessed. 16-bit LP/EP addressing bounds a wave to 65536 samples.
+    if (!p || n < 9 || p[0] != 0x43 || p[1] != 0x79 || p[2] != 0x06 ||
+        p[3] != 0x7f || p[4] != 3 || p[5] >= 128 || p[6] != 0) return;
+    auto bytes = unpackMa3Bytes(p + 7, n - 7, 32768);
+    if (bytes.empty()) return;
+    YamahaAdpcm decoder;
+    voiceWaveBank_[p[5]].pcm = decoder.decodeAll(bytes.data(), bytes.size(), false);
+    // Playback rate belongs to the selecting PCM patch's Fs, not this block.
+}
+
 // walk a setup-data blob and pull every yamaha voice exclusive out of it.
 // hps setup: {FF F0 len payload}* ; mobile setup: {F0 len payload}* ; we accept
 // an optional leading FF either way and both length encodings.
@@ -261,6 +281,7 @@ void MaPlayer::addExclusivesFrom_(const std::vector<uint8_t>& buf, bool mobile) 
         // payload includes the trailing F7; parse from the maker id up to it.
         size_t plen = len;
         if (plen && p[plen - 1] == 0xF7) --plen;
+        addVoiceWave_(p, plen);
         ParsedVoice v = parseVoiceExclusive(p, plen);
         if ((v.valid || v.isPcm) && voiceTable_.size() < kMaxCustomVoices)
             voiceTable_.push_back(v);
@@ -401,8 +422,9 @@ void MaPlayer::decodeHandyPhone_(const uint8_t* p, size_t n, int base, double tb
         int midi = note + octave * 12 + 36;
         uint64_t on = msToSample(curMs);
         uint64_t off = on + msToSample(gate * tbGms);
-        events_.push_back({on,  Ev::NoteOn,  uint16_t(ch), int16_t(midi), 127});
-        events_.push_back({off, Ev::NoteOff, uint16_t(ch), int16_t(midi), 0});
+        const uint64_t id = nextNoteId_++;
+        events_.push_back({on,  Ev::NoteOn,  uint16_t(ch), int16_t(midi), 127, id});
+        events_.push_back({off, Ev::NoteOff, uint16_t(ch), int16_t(midi), 0, id});
     }
 }
 
@@ -439,8 +461,9 @@ void MaPlayer::decodeMobile_(const uint8_t* p, size_t n, int base, double tbDms,
                 uint32_t gate = readVlq(p, end);
                 if (gate == 0) break;
                 uint64_t off = at + msToSample(gate * tbGms);
-                events_.push_back({at,  Ev::NoteOn,  uint16_t(ch), int16_t(note & 0x7f), int16_t(vel & 0x7f)});
-                events_.push_back({off, Ev::NoteOff, uint16_t(ch), int16_t(note & 0x7f), 0});
+                const uint64_t id = nextNoteId_++;
+                events_.push_back({at,  Ev::NoteOn,  uint16_t(ch), int16_t(note & 0x7f), int16_t(vel & 0x7f), id});
+                events_.push_back({off, Ev::NoteOff, uint16_t(ch), int16_t(note & 0x7f), 0, id});
             } break;
             case 0xA0: p += (end - p >= 2 ? 2 : (end - p)); break;   // reserved
             case 0xB0: {                                // control change
@@ -470,6 +493,7 @@ void MaPlayer::decodeMobile_(const uint8_t* p, size_t n, int base, double tbDms,
                     uint32_t len = readVlq(p, end);
                     if (len > size_t(end - p)) { p = end; break; }
                     size_t plen = len; if (plen && p[plen-1]==0xF7) --plen;
+                    addVoiceWave_(p, plen);
                     ParsedVoice v = parseVoiceExclusive(p, plen);
                     if ((v.valid || v.isPcm) && voiceTable_.size() < kMaxCustomVoices)
                         voiceTable_.push_back(v);
@@ -522,62 +546,80 @@ const ParsedVoice* MaPlayer::resolveVoice_(int ch, int note) const {
 
 // start a sampled (pcm) note on a free pcm slot. drums play at native rate,
 // melodic pcm is pitched from a fixed root note.
-void MaPlayer::startPcm_(int ch, int rawNote, int soundingNote, const ParsedVoice& v,
-                         const Chan& c, float noteVelocity) {
-    // bind the wave: prefer the voice's WaveID, else the first non-empty wave so
-    // a kit with a mis-indexed id still makes a sound rather than silence.
+int MaPlayer::allocatePcmSlot_() {
+    for (int i=0;i<kPcmPool;++i) if (!pcmPool_[i].active) return i;
+    int slot=-1;
+    for (int i=0;i<kPcmPool;++i)
+        if (pcmPool_[i].released && (slot<0 || pcmPool_[i].recentLevel<pcmPool_[slot].recentLevel)) slot=i;
+    ++diagnostics_.stolenPcm;
+    if (slot<0) { slot=pcmSteal_++%kPcmPool; ++diagnostics_.stolenHeldPcm; }
+    return slot;
+}
+
+bool MaPlayer::startPcm_(int ch, int rawNote, int soundingNote, const ParsedVoice& v,
+                         const Chan& c, float noteVelocity, uint64_t noteId) {
+    // Bind ONLY the referenced wave. An unrelated short sample is not a
+    // substitute for a missing instrument and can sound like random noise.
     const PcmSample* ws = nullptr;
     int wid = v.pcm.waveId;
-    if (wid >= 0 && size_t(wid) < waveBank_.size() && !waveBank_[wid].pcm.empty())
+    if (v.pcm.rom) return false; // ROM IDs must never alias a local RAM sample
+    if (wid >= 0 && wid < 128 && !voiceWaveBank_[wid].pcm.empty())
+        ws = &voiceWaveBank_[wid];
+    else if (wid >= 0 && size_t(wid) < waveBank_.size() && !waveBank_[wid].pcm.empty())
         ws = &waveBank_[wid];
-    // fallback for a mis-indexed id: pick the SHORTEST non-empty wave, not the
-    // first. a drum one-shot is short; grabbing "the first" could fire a
-    // song-length melodic sample at full level. shortest biases to the drum hit.
-    if (!ws) for (const auto& w : waveBank_)
-        if (!w.pcm.empty() && (!ws || w.pcm.size() < ws->pcm.size())) ws = &w;
-    if (!ws) return;
+    if (!ws) return false;
+    if (v.pcm.endPt == 0) return true; // EP=0 intentionally does not pronounce
 
-    int slot = -1;
-    for (int i = 0; i < kPcmPool; ++i) if (!pcmPool_[i].active) { slot = i; break; }
-    if (slot < 0) { static thread_local int rr = 0; slot = (rr++) % kPcmPool; }
+    int slot = allocatePcmSlot_();
     PcmVoice& pv = pcmPool_[slot];
     pv.pcm = ws->pcm.data(); pv.len = ws->pcm.size();
     bool isDrum = v.key.drumNote != 0;
-    double base = double(ws->fs) / double(rate_);
+    double base = double(v.pcm.fs) / double(rate_);
     double semis = isDrum ? 0.0 : double(soundingNote - 60);   // root C4
-    pv.rate = base * std::pow(2.0, semis / 12.0);
+    pv.baseRate = base * std::pow(2.0, semis / 12.0);
+    pv.rate = pv.baseRate * std::pow(2.0, c.bend / 12.0);
     pv.pos = 0.0;
     // LP/EP are sample indices into the decoded stream; clamp to the wave.
     pv.loopEnd   = (v.pcm.endPt > 0 && size_t(v.pcm.endPt) <= pv.len) ? size_t(v.pcm.endPt) : pv.len;
     pv.loopStart = (size_t(v.pcm.loopPt) < pv.loopEnd) ? size_t(v.pcm.loopPt) : 0;
-    pv.loop = v.pcm.loop && !isDrum;   // drums are one-shot
+    pv.loop = v.pcm.loop && v.pcm.loopPt >= 0 && size_t(v.pcm.loopPt) < pv.loopEnd;
     pv.env.configure(v.pcm.env, double(rate_)); pv.env.keyOn();
     pv.gain = float(std::pow(10.0, -0.75 * double(v.pcm.env.tl) / 20.0));
     // Match FM voices: authored note velocity is part of the musical balance,
     // not just channel volume. Ignoring it made sampled drums and instruments
     // dominate quieter FM parts.
     pv.vel = c.volume * c.expression * noteVelocity;
-    pv.pan = (c.pan != 0.0f) ? c.pan : 0.0f;
+    pv.noteVelocity = noteVelocity;
+    pv.pan = v.pcm.panEnabled ? v.pcm.pan : c.pan;
+    pv.panLocked = v.pcm.panEnabled;
     pv.channel = ch; pv.keyNote = rawNote; pv.active = true;
+    pv.noteId = noteId;
+    pv.released = false; pv.recentLevel = 0;
+    ++diagnostics_.pcmNotes;
+    return true;
 }
 
 float MaPlayer::PcmVoice::tick() {
     if (!active || !pcm || len == 0) { active = false; return 0.0f; }
     size_t end = (loopEnd > 0 && loopEnd <= len) ? loopEnd : len;
     if (pos >= double(end)) {
-        if (loop && loopEnd > loopStart) pos = double(loopStart) + (pos - double(end));
+        if (loop && loopEnd > loopStart)
+            pos = double(loopStart) + std::fmod(pos - double(end), double(loopEnd - loopStart));
         else { active = false; return 0.0f; }
     }
     size_t i = size_t(pos);
     if (i >= len) { active = false; return 0.0f; }
     float frac = float(pos - double(i));
     float s0 = pcm[i] * (1.0f / 32768.0f);
-    float s1 = pcm[(i + 1 < len) ? i + 1 : i] * (1.0f / 32768.0f);
+    size_t next = i + 1 < end ? i + 1 : (loop ? loopStart : i);
+    float s1 = pcm[next] * (1.0f / 32768.0f);
     float s = s0 + (s1 - s0) * frac;
     pos += rate;
     float e = env.advance();
     if (env.isFinished()) active = false;
-    return s * e * gain * vel;
+    float result = s * e * gain * vel;
+    recentLevel += (std::fabs(result) - recentLevel) * 0.01f;
+    return result;
 }
 
 double MaPlayer::noteToFreq_(int midiNote) const {
@@ -602,38 +644,53 @@ void MaPlayer::fireEvent_(const Ev& e) {
             break;
         case Ev::Volume: {
             c.volume = (e.a & 0x7f) / 127.0f;
+            for (auto& voice : pcmPool_)
+                if (voice.active && voice.channel == int(e.ch) && voice.keyNote >= 0)
+                    voice.vel = voice.noteVelocity * c.volume * c.expression;
             for (int i = 0; i < kPoolSize; ++i)
                 if (pool_[i].active() && pool_[i].channel == int(e.ch))
                     pool_[i].setVolume(c.volume * c.expression);
         } break;
         case Ev::Expression: {
             c.expression = (e.a & 0x7f) / 127.0f;
+            for (auto& voice : pcmPool_)
+                if (voice.active && voice.channel == int(e.ch) && voice.keyNote >= 0)
+                    voice.vel = voice.noteVelocity * c.volume * c.expression;
             for (int i = 0; i < kPoolSize; ++i)
                 if (pool_[i].active() && pool_[i].channel == int(e.ch))
                     pool_[i].setVolume(c.volume * c.expression);
         } break;
-        case Ev::Pan:       c.pan = ((e.a & 0x7f) - 64) / 64.0f; break;
+        case Ev::Pan:
+            c.pan = ((e.a & 0x7f) - 64) / 64.0f;
+            for (auto& voice : pcmPool_)
+                if (voice.active && voice.channel == int(e.ch) && voice.keyNote >= 0 && !voice.panLocked)
+                    voice.pan = c.pan;
+            break;
         case Ev::Modulation:
             if (e.b == 1) c.octShift = e.a - 1000;    // octave-shift marker
             break;
         case Ev::PitchBend: {
             c.bend = double(e.a) / 8192.0 * 2.0;       // +-2 semitones default range
+            for (auto& voice : pcmPool_)
+                if (voice.active && voice.channel == int(e.ch) && voice.keyNote >= 0)
+                    voice.rate = voice.baseRate * std::pow(2.0, c.bend / 12.0);
             for (int i = 0; i < kPoolSize; ++i)
                 if (pool_[i].active() && pool_[i].channel == int(e.ch))
                     pool_[i].setPitch(noteToFreq_(pool_[i].note_) * std::pow(2.0, c.bend / 12.0));
         } break;
         case Ev::NoteOff: {
-            // match against the RAW note-on key, NOT the sounding (transposed)
-            // pitch: octave-shift + basic-octave transpose mean note_ != e.a, so
-            // matching note_ would never find the voice and the note would drone.
+            // Every scheduled gate belongs to one note instance. Same-pitch
+            // notes may overlap, finish out of order, or reuse a stolen slot.
             for (int i = 0; i < kPoolSize; ++i)
-                if (pool_[i].active() && pool_[i].channel == int(e.ch) && poolKeyNote_[i] == e.a) {
+                if (pool_[i].active() && poolNoteId_[i] == e.noteId) {
                     pool_[i].noteOff();
                     break;
                 }
             for (int i = 0; i < kPcmPool; ++i)          // release a held pcm note
-                if (pcmPool_[i].active && pcmPool_[i].channel == int(e.ch) && pcmPool_[i].keyNote == e.a)
+                if (pcmPool_[i].active && pcmPool_[i].noteId == e.noteId) {
                     pcmPool_[i].env.keyOff();
+                    pcmPool_[i].released = true;
+                }
         } break;
         case Ev::WaveOn: {
             // ATR wave trigger: play wave e.a one-shot at its native rate, no
@@ -641,9 +698,7 @@ void MaPlayer::fireEvent_(const Ev& e) {
             int wid = e.a;
             if (wid < 0 || size_t(wid) >= waveBank_.size() || waveBank_[wid].pcm.empty()) break;
             const PcmSample& ws = waveBank_[wid];
-            int slot = -1;
-            for (int i = 0; i < kPcmPool; ++i) if (!pcmPool_[i].active) { slot = i; break; }
-            if (slot < 0) { static thread_local int rr = 0; slot = (rr++) % kPcmPool; }
+            int slot = allocatePcmSlot_();
             PcmVoice& pv = pcmPool_[slot];
             pv.pcm = ws.pcm.data(); pv.len = ws.pcm.size();
             pv.rate = double(ws.fs) / double(rate_);
@@ -653,27 +708,31 @@ void MaPlayer::fireEvent_(const Ev& e) {
             pv.env.configure(flat, double(rate_)); pv.env.keyOn();
             pv.gain = 1.0f; pv.vel = 1.0f; pv.pan = 0.0f;
             pv.channel = int(e.ch); pv.keyNote = -1; pv.active = true;
+            pv.noteId = 0; // ATR one-shots have no scheduled key-off
+            pv.released = false; pv.recentLevel = 0;
+            ++diagnostics_.pcmNotes;
         } break;
         case Ev::NoteOn: {
             int soundingNote = e.a + c.octShift;
-            float vel01 = (e.b ? e.b : 100) / 127.0f;
+            if (e.b <= 0) break; // explicit/running zero velocity is silent
+            float vel01 = e.b / 127.0f;
             float noteVelocity = vel01 * vel01;
             const ParsedVoice* rv = resolveVoice_(e.ch, e.a);
             if (rv && rv->isPcm) {                      // sampled (drum / pcm) voice
-                if (rv->valid && !waveBank_.empty()) {
-                    startPcm_(e.ch, e.a, soundingNote, *rv, c, noteVelocity);
+                if (rv->valid && startPcm_(e.ch, e.a, soundingNote, *rv, c, noteVelocity, e.noteId)) {
                     break;
                 }
                 // Some files select a handset-ROM PCM voice but do not carry
                 // the referenced waveform. The proprietary ROM is deliberately
                 // not bundled, so use the built-in FM approximation instead of
-                // turning every note into silence. Preserve the authored PCM
-                // total-level attenuation; otherwise a quiet ROM layer becomes
-                // a full-volume fallback instrument and upsets the whole mix.
-                noteVelocity *= float(std::pow(
-                        10.0, -0.75 * double(rv->pcm.env.tl) / 20.0));
+                // turning every note into silence. Do NOT transfer PCM TL onto
+                // an independently voiced FM patch: its gain/envelope and the
+                // ROM's native waveform level have not been calibrated. The
+                // beta.6 compensation made some fallback layers ~21 dB quieter.
                 rv = nullptr;
             }
+            ++diagnostics_.fmNotes;
+            if (!rv) ++diagnostics_.fallbackNotes;
             // a rhythm-channel note with no bound voice gets a percussion hit,
             // never a melodic gm patch (the "drums play piano" class).
             const FmVoicePatch& patch = rv ? rv->patch
@@ -681,14 +740,21 @@ void MaPlayer::fireEvent_(const Ev& e) {
                                        : FmVoicePatch::gmApprox(c.program);
             int slot = -1;
             for (int i = 0; i < kPoolSize; ++i) if (!pool_[i].active()) { slot = i; break; }
-            if (slot < 0) {                            // steal: round-robin
-                static thread_local int rr = 0; slot = (rr++) % kPoolSize;
+            if (slot < 0) {
+                // Preserve held melody notes when release tails fill the pool.
+                // Prefer the quietest released voice; fully held pools use
+                // deterministic per-player round-robin, reset on seek/init.
+                for (int i = 0; i < kPoolSize; ++i)
+                    if (pool_[i].released() &&
+                        (slot < 0 || pool_[i].recentLevel() < pool_[slot].recentLevel())) slot = i;
+                if (slot < 0) { slot = fmSteal_++ % kPoolSize; ++diagnostics_.stolenHeldFm; }
+                ++diagnostics_.stolenFm;
             }
             int midi = soundingNote + patch.noteShift;
             double freq = noteToFreq_(midi) * std::pow(2.0, c.bend / 12.0);
             pool_[slot].channel = e.ch;
             pool_[slot].note_   = midi;                 // sounding pitch (for bend)
-            poolKeyNote_[slot]  = e.a;                  // raw key (for note-off)
+            poolNoteId_[slot] = e.noteId;
             pool_[slot].setVolume(c.volume * c.expression);
             // gm-style squared velocity curve: linear velocity made every mid-
             // velocity note nearly full-scale and the mix bus pump the limiter.
@@ -704,11 +770,8 @@ int MaPlayer::render(float* out, int frames) {
     // after the song safety limit. Previously the inner loop broke here but a
     // following render() call produced one more frame again, so a caller could
     // spend hours draining an effectively endless release tail.
-    // endSample_ already includes the one-second release allowance added by
-    // init(). Do not add a second hidden second here: it made long-release
-    // patches audibly smear the end and made the WAV longer than totalSamples().
     const uint64_t absoluteEnd = endSample_;
-    if (cursor_ >= absoluteEnd) return 0;
+    if (ended_ || cursor_ >= absoluteEnd) { ended_ = true; return 0; }
 
     int produced = 0;
     while (produced < frames) {
@@ -717,8 +780,12 @@ int MaPlayer::render(float* out, int frames) {
             fireEvent_(events_[nextEvent_]);
             ++nextEvent_;
         }
-        if (nextEvent_ >= events_.size() && activeVoices_() == 0)
-            break;   // all events fired and their releases have genuinely ended
+        if (nextEvent_ >= events_.size() && activeVoices_() == 0 &&
+            std::max({std::fabs(lp1L_), std::fabs(lp1R_),
+                      std::fabs(lp2L_), std::fabs(lp2R_)}) < 1e-7f) {
+            ended_ = true;
+            break; // envelopes AND filter history have drained
+        }
 
         float l = 0.0f, r = 0.0f;
         // 0.32 mix headroom: a dense tune runs a dozen voices at once; at 0.5
@@ -749,23 +816,37 @@ int MaPlayer::render(float* out, int frames) {
         float peak = std::max(std::fabs(l), std::fabs(r));
         limEnv_ = std::max(peak, limEnv_ * limRelease_);   // instant attack
         if (limEnv_ > 0.92f) { float g = 0.92f / limEnv_; l *= g; r *= g; }
+        // Do not introduce a discontinuity when a pathological envelope or
+        // the ten-minute file limit reaches the hard safety boundary.
+        const uint64_t fadeFrames = std::max<uint64_t>(2, rate_ / 50);
+        const uint64_t remaining = absoluteEnd - cursor_;
+        if (remaining <= fadeFrames) {
+            float gain = float(remaining - 1) / float(fadeFrames - 1);
+            l *= gain; r *= gain;
+        }
         out[produced * 2]     = l;
         out[produced * 2 + 1] = r;
         ++produced;
         ++cursor_;
-        if (cursor_ >= absoluteEnd) break;   // one-second release backstop
+        if (cursor_ >= absoluteEnd) {
+            diagnostics_.tailLimitReached = activeVoices_() > 0;
+            ended_ = true;
+            break;
+        }
     }
     return produced;
 }
 
 void MaPlayer::seekToStart() {
     nextEvent_ = 0; cursor_ = 0;
+    ended_ = false; diagnostics_ = {};
     // the rhythm flag is init-time state (MTR channel status), not runtime
     // state; it must survive the channel reset or drums degrade after a seek.
     for (auto& c : chans_) { bool rh = c.rhythm; c = Chan{}; c.rhythm = rh; }
     for (auto& v : pool_) { v = FmVoice{}; v.setSampleRate(double(rate_)); }
     for (auto& pv : pcmPool_) pv.active = false;
-    poolKeyNote_.fill(-1);
+    poolNoteId_.fill(0);
+    fmSteal_ = pcmSteal_ = 0;
     lp1L_ = lp1R_ = lp2L_ = lp2R_ = 0.0f;
     limEnv_ = 0.0f;
 }

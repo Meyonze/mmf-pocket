@@ -37,6 +37,8 @@ struct Result {
     double probedSeconds = 0.0;
     float peak = 0.0f;
     std::string tracks;
+    bool finished = false;
+    MaPlayer::Diagnostics audio;
 };
 
 std::string pathUtf8(const fs::path& path) {
@@ -117,6 +119,8 @@ Result testOne(const fs::path& path) {
             frames += uint64_t(count);
         }
         result.probedSeconds = double(frames) / kSampleRate;
+        result.finished = player.finished();
+        result.audio = player.diagnostics();
         result.status = result.peak >= 0.0001f ? "ok" : "ok_probe_silent";
     } catch (const std::exception& error) {
         result.status = "exception";
@@ -168,7 +172,8 @@ int run(const fs::path& root, const fs::path& reportPath) {
 
     size_t passed = 0;
     double totalSeconds = 0.0;
-    *report << "status\tseconds\tprobed_seconds\tpeak\ttracks\tfile\tdetail\n";
+    *report << "status\tseconds\tprobed_seconds\tpeak\ttracks\tfile\tdetail"
+            << "\tfinished\tfm_notes\tpcm_notes\tfallback_notes\tstolen_fm\tstolen_pcm\ttail_limit\tstolen_held_fm\tstolen_held_pcm\n";
     for (const Result& result : results) {
         if (result.status.rfind("ok", 0) == 0) ++passed;
         totalSeconds += result.seconds;
@@ -177,7 +182,12 @@ int run(const fs::path& root, const fs::path& reportPath) {
                 << result.peak << '\t'
                 << result.tracks << '\t'
                 << pathUtf8(result.path.lexically_relative(root)) << '\t'
-                << result.detail << '\n';
+                << result.detail << '\t' << result.finished
+                << '\t' << result.audio.fmNotes << '\t' << result.audio.pcmNotes
+                << '\t' << result.audio.fallbackNotes << '\t' << result.audio.stolenFm
+                << '\t' << result.audio.stolenPcm << '\t' << result.audio.tailLimitReached
+                << '\t' << result.audio.stolenHeldFm
+                << '\t' << result.audio.stolenHeldPcm << '\n';
     }
     std::cerr << "SUMMARY total=" << results.size()
               << " passed=" << passed

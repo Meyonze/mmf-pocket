@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.4.0-beta.7
+
+- Decode MA-3 packed PCM parameters and embedded voice-wave ADPCM blocks that
+  previously fell back to unrelated FM instruments. Distinguish ROM from RAM;
+  RM is not a loop flag. Use authored Fs, loop/end points, pan and XOF.
+- Apply live volume, expression, pan and pitch bend to sampled voices; handle
+  interpolation and large rate steps at loop boundaries.
+- Pair each gate with its note instance, fixing overlapping/repeated-key FM
+  and PCM notes that released too early or kept sounding.
+- Correct FM algorithm 3 routing, retire voices when their output carriers
+  finish, and prefer quiet release tails when the FM voice pool is full.
+- Replace the fixed one-second cutoff with natural envelope/filter draining,
+  retaining bounded conversion and a fade at the safety boundary.
+- Remove beta.6's uncalibrated PCM-to-FM level compensation. Do not substitute
+  unrelated embedded waves or treat Analog Lite voice data as PCM.
+- Honor zero velocity; make pool allocation deterministic after seek/reset.
+- Expand synthetic audio/security tests and local corpus diagnostics.
+- Invalidate previous WAV caches automatically (renderer r6).
+
 ## 1.4.0-beta.6
 
 - Limited post-song release rendering to the declared one-second allowance;

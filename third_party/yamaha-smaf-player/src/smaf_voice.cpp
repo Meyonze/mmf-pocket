@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Modified by MMF Pocket contributors in 2026. See docs/audio-fidelity.md.
 //
 // smaf_voice.cpp -- the VM35 / VMA exclusive -> FmVoicePatch decode.
 // ----------------------------------------------------------------------------
@@ -120,6 +121,22 @@ int opCountFromAlg(int alg) { return (alg & 7) <= 1 ? 2 : 4; }
 
 } // namespace
 
+std::vector<uint8_t> unpackMa3Bytes(const uint8_t* p, size_t n, size_t maxOutput) {
+    std::vector<uint8_t> out;
+    if (!p || !n || n > maxOutput + (maxOutput + 6) / 7) return out;
+    out.reserve(std::min(n, maxOutput));
+    size_t i = 0;
+    while (i < n) {
+        const uint8_t mask = p[i++];
+        if (mask & 0x80 || i == n) return {};
+        for (int bit = 6; bit >= 0 && i < n; --bit) {
+            if (p[i] & 0x80 || out.size() >= maxOutput) return {};
+            out.push_back(uint8_t(p[i++] | (((mask >> bit) & 1) << 7)));
+        }
+    }
+    return out;
+}
+
 ParsedVoice parseVoiceExclusive(const uint8_t* p, size_t n) {
     ParsedVoice out;
     out.patch = FmVoicePatch::defaultPatch();
@@ -131,12 +148,24 @@ ParsedVoice parseVoiceExclusive(const uint8_t* p, size_t n) {
         out.key.bankMSB = p[5]; out.key.bankLSB = p[6]; out.key.pc = p[7];
         out.key.drumNote = p[8];
         int voiceType = p[9];
-        if (voiceType != 0) {                        // PCM (sampled) voice
+        // Type 2 is Analog Lite, NOT PCM. Unknown voice bodies must not be
+        // interpreted as PCM sample offsets and envelopes.
+        if (voiceType > 1) return out;
+        if (voiceType == 1) {                        // PCM (sampled) voice
             out.isPcm = true;
             const uint8_t* b = p + 10; size_t bn = n - 10;
+            // MA-3 PCM uses the same 7-bit transport packing as FM. Reading
+            // its masks as parameters corrupted Fs, TL, envelopes and WaveID.
+            std::vector<uint8_t> unpacked;
+            if (p[2] == 0x06) {
+                unpacked = unpackMa3Bytes(b, bn, 32);
+                b = unpacked.data(); bn = unpacked.size();
+            }
             if (bn >= 16) {
                 PcmParams& pc = out.pcm;
                 pc.fs     = (int(b[0]) << 8) | b[1];        // Fs, u16 BE
+                pc.panEnabled = (b[2] & 1) != 0;
+                pc.pan = panpotToPan(b[2] >> 3);
                 pc.env.tl = (b[7] >> 2) & 0x3f;             // TL
                 pc.env.sr = (b[4] >> 4) & 0x0f;             // SR
                 pc.env.rr = (b[5] >> 4) & 0x0f;             // RR
@@ -144,11 +173,13 @@ ParsedVoice parseVoiceExclusive(const uint8_t* p, size_t n) {
                 pc.env.ar = (b[6] >> 4) & 0x0f;             // AR
                 pc.env.sl =  b[6] & 0x0f;                   // SL
                 pc.env.egType = true;
+                pc.env.xof = (b[4] & 8) != 0;
                 pc.loopPt = (int(b[11]) << 8) | b[12];      // LP, u16 BE (sample idx)
                 pc.endPt  = (int(b[13]) << 8) | b[14];      // EP, u16 BE
-                pc.loop   = (b[15] & 0x80) != 0;            // RM flag
+                pc.rom    = (b[15] & 0x80) != 0;            // ROM/RAM selection
+                pc.loop   = pc.loopPt < pc.endPt;
                 pc.waveId =  b[15] & 0x7f;                  // WaveID
-                if (pc.fs < 2000 || pc.fs > 48000) pc.fs = 8000;
+                if (pc.fs < 1500 || pc.fs > 48000) return out;
                 out.valid = true;
             }
             return out;

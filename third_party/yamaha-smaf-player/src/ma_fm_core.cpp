@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Modified by MMF Pocket contributors in 2026. See docs/audio-fidelity.md.
 //
 // ma_fm_core.cpp -- the fm dsp. phase generator, exponential adsr, operators,
 //                   2-op/4-op algorithms, and a compact built-in gm patch bank.
@@ -339,9 +340,12 @@ void FmVoice::noteOn(const FmVoicePatch& patch, double freqHz, float velocity) {
         ops_[i].noteOn(freqHz);
     }
     active_ = true;
+    released_ = false;
+    recentLevel_ = 0.0f;
 }
 
 void FmVoice::noteOff() {
+    released_ = true;
     int nops = fourOp_ ? 4 : 2;
     for (int i = 0; i < nops; ++i) ops_[i].noteOff();
 }
@@ -396,8 +400,8 @@ float FmVoice::tick() {
         case 3: {                                   // (FB(1)+2->3)->4
             double a = modOp_(0, 0.0);
             double b = modOp_(1, 0.0);
-            double c = modOp_(2, (a + b) * d);
-            out = modOp_(3, c * d);
+            double c = modOp_(2, b * d);
+            out = modOp_(3, (a + c) * d);
         } break;
         case 4: {                                   // FB(1)->2->3->4 (serial)
             double a = modOp_(0, 0.0);
@@ -428,13 +432,18 @@ float FmVoice::tick() {
         } break;
     }
 
-    // all operators finished -> voice is done.
+    // Only carriers reach the output. A held modulator (e.g. XOF/SR=0)
+    // must not retain a silent slot and cause audible notes to be stolen.
+    static constexpr unsigned carriers[8] = {2, 3, 15, 8, 8, 10, 9, 13};
     bool anyLive = false;
     int nops = fourOp_ ? 4 : 2;
-    for (int i = 0; i < nops; ++i) if (!ops_[i].finished()) { anyLive = true; break; }
+    for (int i = 0; i < nops; ++i)
+        if ((carriers[algo_] & (1u << i)) && !ops_[i].finished()) { anyLive = true; break; }
     if (!anyLive) active_ = false;
 
-    return float(out * velocity_ * volume_ * 0.7);
+    float result = float(out * velocity_ * volume_ * 0.7);
+    recentLevel_ += (std::fabs(result) - recentLevel_) * 0.01f;
+    return result;
 }
 
 } // namespace fxchain::smaf

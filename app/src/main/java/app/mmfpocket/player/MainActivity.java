@@ -51,7 +51,7 @@ public final class MainActivity extends Activity {
     private static final String PREF_PHONE_SOUND = "phone_sound";
     // Bump whenever synthesis, timing or post-processing changes so an older
     // WAV cannot hide a renderer fix behind a valid content hash.
-    private static final String RENDER_CACHE_VERSION = "r5";
+    private static final String RENDER_CACHE_VERSION = "r6";
     // Ringtones are normally tiny. Keeping a conservative ceiling limits memory
     // amplification in the native decoder when opening an untrusted file.
     private static final int MAX_MMF_BYTES = 16 * 1024 * 1024;

@@ -19,6 +19,9 @@ MMF Pocket changes the vendored source in the following ways:
 - MA-7 Score Format 3 is detected and rejected rather than decoded with the incompatible MA-3/MA-5 grammar.
 - Envelope sustain, zero rates, decay curves, detune and LFO behaviour are
   corrected using related Yamaha documentation; see `docs/audio-fidelity.md`.
+- Note-instance gate matching, FM routing/voice retirement and release draining
+  are corrected. MA-3 PCM parameters/voice-wave blocks are unpacked and played
+  with ROM/RAM separation, authored pitch/loop settings and live controllers.
 
 Modified source files carry a modification notice as required by Apache-2.0.
 

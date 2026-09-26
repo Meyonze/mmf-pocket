@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Modified by MMF Pocket contributors in 2026. See docs/audio-fidelity.md.
 #pragma once
 //
 // smaf_voice.h -- decode yamaha VM35 / VMA voice exclusives into an FmVoicePatch.
@@ -34,7 +35,10 @@ struct PcmParams {
     int      waveId  = 0;      // binds to the Mwa/Awa wave with this number
     int      loopPt  = 0;      // loop point (sample index into the decoded wave)
     int      endPt   = 0;      // end point  (sample index; 0 = whole wave)
-    bool     loop    = false;  // RM flag: loop between loopPt and endPt
+    bool     loop    = false;  // loopPt < endPt; equal points mean one-shot
+    bool     rom     = false;  // RM selects ROM, NOT looping
+    bool     panEnabled = false;
+    float    pan = 0.0f;
     FmOpPatch env;             // AR/DR/SR/RR/SL/TL reused for the amplitude EG
 };
 
@@ -50,5 +54,9 @@ struct ParsedVoice {
 // F7, i.e. starting at the 0x43 maker id). returns valid=false for anything we
 // do not synthesise (pcm voices, unknown makers).
 ParsedVoice parseVoiceExclusive(const uint8_t* p, size_t n);
+
+// MA-3 SysEx packing: each mask's bits 6..0 supply bit7 of the next
+// seven data bytes. Empty result means malformed/oversize input.
+std::vector<uint8_t> unpackMa3Bytes(const uint8_t* p, size_t n, size_t maxOutput);
 
 } // namespace fxchain::smaf
