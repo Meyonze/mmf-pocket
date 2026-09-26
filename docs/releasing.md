@@ -15,11 +15,17 @@ keyPassword=...
 
 Back up the keystore and password separately. Losing the signing key prevents normal updates to existing installations.
 
+The passwords may instead be supplied only for the current process through
+`MMF_POCKET_STORE_PASSWORD` and `MMF_POCKET_KEY_PASSWORD`. On Windows,
+`tools/build-signed-release.ps1` prompts without echoing the password and sets
+those variables only while Gradle is running. The current release key uses the
+same password for the keystore and key entry.
+
 ## Build and verify
 
 ```powershell
 $env:JAVA_HOME = 'D:\Android\Jdk17'
-.\gradlew.bat clean lint assembleRelease
+.\tools\build-signed-release.ps1
 ```
 
 Before publishing:
@@ -28,12 +34,13 @@ Before publishing:
 2. Install it on at least one physical Android 10+ device.
 3. Confirm folder selection, conversion, cache reuse, player controls and the 携帯スピーカー風 mode.
 4. Record the APK SHA-256 and certificate SHA-256 fingerprint.
-5. Tag the exact commit and create a prerelease on GitHub.
+5. Tag the exact commit and create a release on GitHub. Mark beta builds as a
+   prerelease; stable builds use a normal release.
 
 Do not upload `keystore.properties`, a keystore, sample MMFs or generated WAV files.
 
 ## GitHub release notes
 
-Mark beta builds as a prerelease. Attach only the signed universal APK and a
-SHA-256 checksum file. Include the signing certificate SHA-256 fingerprint in
-the release text. Do not distribute the debug APK produced by CI.
+Attach only the signed universal APK and a SHA-256 checksum file. Include the
+signing certificate SHA-256 fingerprint in the release text. Mark beta builds
+as a prerelease. Do not distribute the debug APK produced by CI.

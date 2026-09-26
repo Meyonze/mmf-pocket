@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.4.0
+
+- Publish the first generally downloadable Android release of MMF Pocket.
+- Browse folders and play MA-1/2/3/5 files plus experimental MA-7 Score
+  Format 3 without a proprietary handset ROM.
+- Start uncached songs after a short prebuffer and show rendered versus played
+  progress separately while conversion continues.
+- Display the detected MA generation and raw SMAF score format in the player.
+- Include cache reuse, folder batch conversion and the optional handset-speaker
+  effect, with no ads, analytics or network permission.
+
 ## 1.4.0-beta.11
 
 - Show the selected file's MA generation and raw SMAF score format in the

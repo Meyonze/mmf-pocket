@@ -11,6 +11,10 @@ def hasReleaseSigning = signingPropertiesFile.isFile()
 if (hasReleaseSigning) {
     signingPropertiesFile.withInputStream { signingProperties.load(it) }
 }
+def releaseStorePassword = System.getenv("MMF_POCKET_STORE_PASSWORD")
+        ?: signingProperties["storePassword"]
+def releaseKeyPassword = System.getenv("MMF_POCKET_KEY_PASSWORD")
+        ?: signingProperties["keyPassword"]
 
 android {
     namespace "app.mmfpocket.player"
@@ -21,8 +25,8 @@ android {
         applicationId "app.mmfpocket.player"
         minSdk 29
         targetSdk 35
-        versionCode 20
-        versionName "1.4.0-beta.11"
+        versionCode 21
+        versionName "1.4.0"
 
         externalNativeBuild {
             cmake {
@@ -39,9 +43,9 @@ android {
         if (hasReleaseSigning) {
             release {
                 storeFile file(signingProperties["storeFile"])
-                storePassword signingProperties["storePassword"]
+                storePassword releaseStorePassword
                 keyAlias signingProperties["keyAlias"]
-                keyPassword signingProperties["keyPassword"]
+                keyPassword releaseKeyPassword
             }
         }
     }
