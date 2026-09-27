@@ -1,12 +1,11 @@
 package app.mmfpocket.player;
 
 import android.app.Activity;
-import android.content.ContentResolver;
+import android.content.ComponentName;
 import android.content.Intent;
 import android.database.Cursor;
 import android.graphics.Insets;
 import android.graphics.Typeface;
-import android.media.MediaPlayer;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -27,14 +26,6 @@ import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import java.io.ByteArrayOutputStream;
-import java.io.File;
-import java.io.IOException;
-import java.io.InputStream;
-import java.nio.file.Files;
-import java.nio.file.StandardCopyOption;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -44,24 +35,25 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import androidx.media3.common.C;
+import androidx.media3.common.MediaItem;
+import androidx.media3.common.MediaMetadata;
+import androidx.media3.common.Player;
+import androidx.media3.common.util.UnstableApi;
+import androidx.media3.session.MediaController;
+import androidx.media3.session.SessionToken;
+
+import com.google.common.util.concurrent.ListenableFuture;
+
+@UnstableApi
 public final class MainActivity extends Activity {
     private static final int REQUEST_FOLDER = 1001;
     private static final String PREFS = "mmf_player";
     private static final String PREF_TREE_URI = "tree_uri";
     private static final String PREF_PHONE_SOUND = "phone_sound";
-    // Bump whenever synthesis, timing or post-processing changes so an older
-    // WAV cannot hide a renderer fix behind a valid content hash.
-    private static final String RENDER_CACHE_VERSION = "r6";
-    // Ringtones are normally tiny. Keeping a conservative ceiling limits memory
-    // amplification in the native decoder when opening an untrusted file.
-    private static final int MAX_MMF_BYTES = 16 * 1024 * 1024;
-    private static final long MAX_CACHE_BYTES = 512L * 1024 * 1024;
-    private static final String CACHE_DIR_NAME = "converted";
-
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private final ExecutorService batchWorker = Executors.newSingleThreadExecutor();
     private final Object batchPauseLock = new Object();
-    private final AtomicInteger playbackGeneration = new AtomicInteger();
     private final AtomicInteger scanGeneration = new AtomicInteger();
     private final AtomicInteger batchGeneration = new AtomicInteger();
     private final Handler progressHandler = new Handler(Looper.getMainLooper());
@@ -69,12 +61,17 @@ public final class MainActivity extends Activity {
         @Override
         public void run() {
             updatePlayerProgress();
-            boolean keepUpdating = progressivePlayback != null
-                    && (!progressivePlayback.isRenderingComplete()
-                    || progressivePlayback.isPlaying());
-            if (keepUpdating || prepared && mediaPlayer != null && mediaPlayer.isPlaying()) {
+            MediaController controller = mediaController;
+            if (controller != null && (controller.isPlaying()
+                    || controller.getPlaybackState() == Player.STATE_BUFFERING)) {
                 progressHandler.postDelayed(this, 250);
             }
+        }
+    };
+    private final Player.Listener controllerListener = new Player.Listener() {
+        @Override
+        public void onEvents(Player player, Player.Events events) {
+            updateUiFromController();
         }
     };
     private final List<BrowserEntry> browserEntries = new ArrayList<>();
@@ -97,13 +94,13 @@ public final class MainActivity extends Activity {
     private Switch phoneSoundSwitch;
     private ImageButton playPauseButton;
     private ImageButton stopButton;
-    private MediaPlayer mediaPlayer;
-    private ProgressivePlayback progressivePlayback;
-    private File currentWav;
     private String currentName;
-    // The selected source survives stop/mode changes; a prepared WAV does not.
     private MmfEntry selectedEntry;
-    private boolean prepared;
+    private MmfEntry pendingPlaybackEntry;
+    private boolean pendingPhoneModeUpdate;
+    private ListenableFuture<MediaController> controllerFuture;
+    private MediaController mediaController;
+    private boolean activityStarted;
     private boolean batchConverting;
     private volatile boolean batchPaused;
     private volatile int batchCompletedCount;
@@ -115,7 +112,6 @@ public final class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(buildUi());
-        cleanupStaleWavFiles();
 
         String saved = getSharedPreferences(PREFS, MODE_PRIVATE).getString(PREF_TREE_URI, null);
         if (saved != null) {
@@ -278,7 +274,7 @@ public final class MainActivity extends Activity {
         phoneSoundSwitch.setOnCheckedChangeListener((button, checked) -> {
             getSharedPreferences(PREFS, MODE_PRIVATE).edit()
                     .putBoolean(PREF_PHONE_SOUND, checked).apply();
-            stopPlayback(false);
+            updatePhoneSoundMode(checked);
             statusLabel.setText(checked ? R.string.phone_mode_enabled : R.string.phone_mode_disabled);
         });
         playerTop.addView(phoneSoundSwitch);
@@ -290,20 +286,14 @@ public final class MainActivity extends Activity {
         playbackProgress.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override
             public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
-                if (!fromUser || !prepared) return;
-                if (progressivePlayback != null) {
-                    long totalFrames = progressivePlayback.getTimelineFrames();
-                    long requested = totalFrames * progress / seekBar.getMax();
-                    long available = progressivePlayback.getRenderedFrames();
-                    long preview = Math.min(requested, available);
-                    timeLabel.setText(getString(R.string.playback_time,
-                            formatFrames(preview), formatFrames(totalFrames)));
-                } else if (mediaPlayer != null) {
-                    int duration = mediaPlayer.getDuration();
-                    int position = (int) ((long) duration * progress / seekBar.getMax());
-                    timeLabel.setText(getString(R.string.playback_time,
-                            formatTime(position), formatTime(duration)));
-                }
+                MediaController controller = mediaController;
+                if (!fromUser || controller == null) return;
+                long duration = controller.getDuration();
+                if (duration == C.TIME_UNSET || duration <= 0) return;
+                long requested = duration * progress / seekBar.getMax();
+                long preview = Math.min(requested, controller.getBufferedPosition());
+                timeLabel.setText(getString(R.string.playback_time,
+                        formatTime(preview), formatTime(duration)));
             }
 
             @Override
@@ -313,20 +303,14 @@ public final class MainActivity extends Activity {
 
             @Override
             public void onStopTrackingTouch(SeekBar seekBar) {
-                if (prepared && progressivePlayback != null) {
-                    long totalFrames = progressivePlayback.getTimelineFrames();
-                    long requested = totalFrames * seekBar.getProgress() / seekBar.getMax();
-                    long actual = progressivePlayback.seekTo(requested);
-                    seekBar.setProgress((int) (actual * seekBar.getMax()
-                            / Math.max(1, totalFrames)));
-                    startProgressUpdates();
-                } else if (prepared && mediaPlayer != null) {
-                    int duration = mediaPlayer.getDuration();
-                    mediaPlayer.seekTo((int) ((long) duration
-                            * seekBar.getProgress() / seekBar.getMax()));
-                    if (mediaPlayer.isPlaying()) startProgressUpdates();
-                    else updatePlayerProgress();
-                }
+                MediaController controller = mediaController;
+                if (controller == null) return;
+                long duration = controller.getDuration();
+                if (duration == C.TIME_UNSET || duration <= 0) return;
+                long requested = duration * seekBar.getProgress() / seekBar.getMax();
+                controller.seekTo(Math.min(requested, controller.getBufferedPosition()));
+                if (controller.isPlaying()) startProgressUpdates();
+                else updatePlayerProgress();
             }
         });
         playerPanel.addView(playbackProgress);
@@ -420,10 +404,6 @@ public final class MainActivity extends Activity {
 
     private void loadFolder(Uri treeUri) {
         selectedEntry = null;
-        currentName = null;
-        stopPlayback(false);
-        nowPlayingLabel.setText(R.string.no_track_selected);
-        formatLabel.setText("");
         selectedTreeUri = treeUri;
         folderHistory.clear();
         try {
@@ -529,46 +509,42 @@ public final class MainActivity extends Activity {
 
     private void play(MmfEntry entry) {
         selectedEntry = entry;
-        boolean phoneSpeakerMode = phoneSoundSwitch.isChecked();
-        int generation = playbackGeneration.incrementAndGet();
-        releasePlayer();
         currentName = entry.name;
         nowPlayingLabel.setText(entry.name);
         formatLabel.setText("");
-        prepared = false;
-        playPauseButton.setEnabled(false);
+        playPauseButton.setEnabled(true);
         stopButton.setEnabled(true);
         statusLabel.setText(getString(R.string.converting_file, entry.name));
+        MediaController controller = mediaController;
+        if (controller == null) {
+            pendingPlaybackEntry = entry;
+            connectController();
+            return;
+        }
+        startPlayback(controller, entry);
+    }
 
-        worker.execute(() -> {
-            PlaybackSource source;
-            try {
-                source = preparePlaybackSource(entry, phoneSpeakerMode);
-            } catch (Exception exception) {
-                String message = exception.getMessage() == null
-                        ? exception.getClass().getSimpleName() : exception.getMessage();
-                source = PlaybackSource.error(message);
-            }
-
-            PlaybackSource finalSource = source;
-            runOnUiThread(() -> {
-                if (generation != playbackGeneration.get() || isFinishing() || isDestroyed()) {
-                    return;
-                }
-                if (!finalSource.error.isEmpty()) {
-                    statusLabel.setText(getString(R.string.playback_failed, finalSource.error));
-                    playPauseButton.setEnabled(selectedEntry != null);
-                    stopButton.setEnabled(false);
-                    return;
-                }
-                formatLabel.setText(finalSource.formatLabel);
-                if (finalSource.cached != null) {
-                    startMediaPlayer(finalSource.cached, entry.name);
-                } else {
-                    startProgressivePlayback(finalSource, entry.name, generation);
-                }
-            });
-        });
+    private void startPlayback(MediaController controller, MmfEntry entry) {
+        pendingPlaybackEntry = null;
+        pendingPhoneModeUpdate = false;
+        Bundle extras = new Bundle();
+        extras.putBoolean(MmfPlayer.EXTRA_PHONE_SPEAKER, phoneSoundSwitch.isChecked());
+        MediaMetadata metadata = new MediaMetadata.Builder()
+                .setTitle(entry.name)
+                .setDisplayTitle(entry.name)
+                .setExtras(extras)
+                .build();
+        MediaItem item = new MediaItem.Builder()
+                .setMediaId(entry.uri.toString())
+                .setUri(entry.uri)
+                .setMimeType("audio/x-smaf")
+                .setMediaMetadata(metadata)
+                .build();
+        controller.setMediaItem(item);
+        controller.prepare();
+        controller.play();
+        showPauseIcon();
+        startProgressUpdates();
     }
 
     private void convertAllFiles() {
@@ -605,7 +581,9 @@ public final class MainActivity extends Activity {
                     }
                 });
                 try {
-                    RenderResult result = renderOrGetCached(entry, phoneSpeakerMode);
+                    MmfAudioRepository.RenderResult result =
+                            MmfAudioRepository.renderOrGetCached(
+                                    this, entry.uri, phoneSpeakerMode);
                     if (!result.error.isEmpty()) {
                         failed++;
                     } else if (result.cacheHit) {
@@ -685,270 +663,155 @@ public final class MainActivity extends Activity {
         batchStatusLabel.setVisibility(View.GONE);
     }
 
-    private PlaybackSource preparePlaybackSource(
-            MmfEntry entry, boolean phoneSpeakerMode) throws IOException {
-        byte[] bytes = readMmf(entry.uri);
-        String formatLabel = NativeMmfRenderer.detectFormat(bytes);
-        File cacheDirectory = new File(getCacheDir(), CACHE_DIR_NAME);
-        if (!cacheDirectory.isDirectory() && !cacheDirectory.mkdirs()) {
-            throw new IOException(getString(R.string.cache_create_failed));
-        }
-
-        String key = RENDER_CACHE_VERSION + "-" + sha256(bytes);
-        File cached = new File(cacheDirectory,
-                key + (phoneSpeakerMode ? "-phone.wav" : ".wav"));
-        if (cached.isFile() && cached.length() > 44) {
-            //noinspection ResultOfMethodCallIgnored
-            cached.setLastModified(System.currentTimeMillis());
-            return new PlaybackSource(
-                    bytes, cached, cached, null, phoneSpeakerMode, formatLabel, "");
-        }
-
-        File partial = new File(cacheDirectory, key + "-" + System.nanoTime() + ".part");
-        return new PlaybackSource(
-                bytes, null, cached, partial, phoneSpeakerMode, formatLabel, "");
-    }
-
-    private RenderResult renderOrGetCached(MmfEntry entry, boolean phoneSpeakerMode) throws IOException {
-        PlaybackSource source = preparePlaybackSource(entry, phoneSpeakerMode);
-        if (source.cached != null) return new RenderResult(source.cached, "", true);
-        String error = NativeMmfRenderer.renderToWav(
-                source.bytes, source.partial.getAbsolutePath(), phoneSpeakerMode);
-        if (error == null) error = "";
-        if (!error.isEmpty()) {
-            //noinspection ResultOfMethodCallIgnored
-            source.partial.delete();
-            return new RenderResult(null, error, false);
-        }
-        Files.move(source.partial.toPath(), source.target.toPath(),
-                StandardCopyOption.REPLACE_EXISTING);
-        trimCache(source.target.getParentFile(), source.target);
-        return new RenderResult(source.target, "", false);
-    }
-
-    private String sha256(byte[] bytes) {
-        try {
-            byte[] digest = MessageDigest.getInstance("SHA-256").digest(bytes);
-            StringBuilder result = new StringBuilder(digest.length * 2);
-            for (byte value : digest) result.append(String.format(Locale.ROOT, "%02x", value & 0xff));
-            return result.toString();
-        } catch (NoSuchAlgorithmException impossible) {
-            throw new IllegalStateException(impossible);
-        }
-    }
-
-    private synchronized void trimCache(File cacheDirectory, File protectedFile) {
-        File[] files = cacheDirectory.listFiles((directory, name) -> name.endsWith(".wav"));
-        if (files == null) return;
-        List<File> sorted = new ArrayList<>();
-        long total = 0;
-        for (File file : files) {
-            sorted.add(file);
-            total += file.length();
-        }
-        sorted.sort(Comparator.comparingLong(File::lastModified));
-        for (File file : sorted) {
-            if (total <= MAX_CACHE_BYTES) break;
-            if (file.equals(protectedFile)) continue;
-            long length = file.length();
-            if (file.delete()) total -= length;
-        }
-    }
-
-    private byte[] readMmf(Uri uri) throws IOException {
-        ContentResolver resolver = getContentResolver();
-        try (InputStream input = resolver.openInputStream(uri);
-             ByteArrayOutputStream output = new ByteArrayOutputStream()) {
-            if (input == null) throw new IOException(getString(R.string.file_open_failed));
-            byte[] buffer = new byte[32 * 1024];
-            int total = 0;
-            int count;
-            while ((count = input.read(buffer)) >= 0) {
-                total += count;
-                if (total > MAX_MMF_BYTES) {
-                    throw new IOException(getString(R.string.file_too_large));
+    private void connectController() {
+        if (!activityStarted || mediaController != null || controllerFuture != null) return;
+        SessionToken token = new SessionToken(
+                this, new ComponentName(this, PlaybackService.class));
+        ListenableFuture<MediaController> future =
+                new MediaController.Builder(this, token).buildAsync();
+        controllerFuture = future;
+        future.addListener(() -> {
+            try {
+                MediaController controller = future.get();
+                if (!activityStarted || controllerFuture != future) {
+                    controller.release();
+                    return;
                 }
-                output.write(buffer, 0, count);
+                controllerFuture = null;
+                mediaController = controller;
+                controller.addListener(controllerListener);
+                updateUiFromController();
+                MmfEntry pending = pendingPlaybackEntry;
+                if (pending != null) {
+                    startPlayback(controller, pending);
+                } else if (pendingPhoneModeUpdate) {
+                    updatePhoneSoundMode(phoneSoundSwitch.isChecked());
+                }
+            } catch (Exception error) {
+                if (controllerFuture == future) controllerFuture = null;
+                statusLabel.setText(getString(R.string.player_connection_failed));
             }
-            return output.toByteArray();
+        }, getMainExecutor());
+    }
+
+    private void disconnectController() {
+        progressHandler.removeCallbacks(progressUpdater);
+        MediaController controller = mediaController;
+        mediaController = null;
+        if (controller != null) {
+            controller.removeListener(controllerListener);
+            controller.release();
         }
+        ListenableFuture<MediaController> future = controllerFuture;
+        controllerFuture = null;
+        if (future != null) MediaController.releaseFuture(future);
     }
 
-    private void startProgressivePlayback(
-            PlaybackSource source, String name, int generation) {
-        statusLabel.setText(getString(R.string.buffering_file, name));
-        playbackProgress.setProgress(0);
-        playbackProgress.setSecondaryProgress(0);
-        playbackProgress.setEnabled(false);
-        playPauseButton.setEnabled(false);
-        stopButton.setEnabled(true);
+    private void updateUiFromController() {
+        MediaController controller = mediaController;
+        if (controller == null) return;
+        MediaItem item = controller.getCurrentMediaItem();
+        String name = currentName;
+        if (item != null && item.mediaMetadata.title != null) {
+            name = item.mediaMetadata.title.toString();
+            currentName = name;
+            nowPlayingLabel.setText(name);
+            Bundle extras = item.mediaMetadata.extras;
+            formatLabel.setText(extras == null ? ""
+                    : extras.getString(MmfPlayer.EXTRA_FORMAT_LABEL, ""));
+        }
 
-        ProgressivePlayback playback = new ProgressivePlayback(
-                source.bytes, source.phoneSpeakerMode, source.partial, source.target,
-                new ProgressivePlayback.Listener() {
-                    @Override
-                    public void onReady() {
-                        runOnUiThread(() -> {
-                            if (generation != playbackGeneration.get()
-                                    || isFinishing() || isDestroyed()) return;
-                            prepared = true;
-                            playbackProgress.setEnabled(true);
-                            playPauseButton.setEnabled(true);
-                            stopButton.setEnabled(true);
-                            showPauseIcon();
-                            statusLabel.setText(getString(R.string.playing_file, name));
-                            startProgressUpdates();
-                        });
-                    }
+        int state = controller.getPlaybackState();
+        boolean hasItem = item != null;
+        playPauseButton.setEnabled(hasItem || selectedEntry != null);
+        stopButton.setEnabled(hasItem && state != Player.STATE_IDLE);
+        if (controller.isPlaying()
+                || controller.getPlayWhenReady() && state == Player.STATE_BUFFERING) {
+            showPauseIcon();
+        } else {
+            showPlayIcon();
+        }
 
-                    @Override
-                    public void onCacheReady(File cached) {
-                        trimCache(cached.getParentFile(), cached);
-                        runOnUiThread(() -> {
-                            if (generation == playbackGeneration.get()) currentWav = cached;
-                        });
-                    }
-
-                    @Override
-                    public void onCompleted() {
-                        runOnUiThread(() -> {
-                            if (generation != playbackGeneration.get()
-                                    || isFinishing() || isDestroyed()) return;
-                            updatePlayerProgress();
-                            showPlayIcon();
-                            statusLabel.setText(getString(R.string.playback_finished, name));
-                        });
-                    }
-
-                    @Override
-                    public void onError(String message) {
-                        runOnUiThread(() -> {
-                            if (generation != playbackGeneration.get()
-                                    || isFinishing() || isDestroyed()) return;
-                            releasePlayer();
-                            statusLabel.setText(getString(R.string.playback_failed, message));
-                        });
-                    }
-                });
-        progressivePlayback = playback;
-        playback.start();
-        startProgressUpdates();
-    }
-
-    private void startMediaPlayer(File wav, String name) {
-        releasePlayer();
-        playPauseButton.setEnabled(false);
-        currentWav = wav;
-        mediaPlayer = new MediaPlayer();
-        try {
-            mediaPlayer.setDataSource(wav.getAbsolutePath());
-            mediaPlayer.setOnPreparedListener(player -> {
-                if (player != mediaPlayer) return;
-                prepared = true;
-                player.start();
-                playbackProgress.setEnabled(true);
-                playbackProgress.setSecondaryProgress(playbackProgress.getMax());
-                playPauseButton.setEnabled(true);
-                showPauseIcon();
-                stopButton.setEnabled(true);
+        if (controller.getPlayerError() != null) {
+            statusLabel.setText(getString(R.string.playback_failed,
+                    controller.getPlayerError().getMessage()));
+        } else if (state == Player.STATE_BUFFERING && name != null) {
+            statusLabel.setText(getString(R.string.converting_file, name));
+        } else if (state == Player.STATE_READY && name != null) {
+            if (controller.isPlaying()) {
                 statusLabel.setText(getString(R.string.playing_file, name));
-                startProgressUpdates();
-            });
-            mediaPlayer.setOnCompletionListener(player -> {
-                if (player != mediaPlayer) return;
-                progressHandler.removeCallbacks(progressUpdater);
-                updatePlayerProgress();
-                showPlayIcon();
-                statusLabel.setText(getString(R.string.playback_finished, name));
-            });
-            mediaPlayer.setOnErrorListener((player, what, extra) -> {
-                if (player != mediaPlayer) return true;
-                statusLabel.setText(R.string.audio_playback_failed);
-                releasePlayer();
-                return true;
-            });
-            mediaPlayer.prepareAsync();
-        } catch (IOException error) {
-            statusLabel.setText(getString(R.string.audio_open_failed, error.getMessage()));
-            releasePlayer();
+            } else if (controller.getPlaybackSuppressionReason()
+                    == Player.PLAYBACK_SUPPRESSION_REASON_TRANSIENT_AUDIO_FOCUS_LOSS) {
+                statusLabel.setText(getString(R.string.audio_focus_paused, name));
+            } else {
+                statusLabel.setText(getString(R.string.paused_file, name));
+            }
+        } else if (state == Player.STATE_ENDED && name != null) {
+            statusLabel.setText(getString(R.string.playback_finished, name));
+        } else if (state == Player.STATE_IDLE && hasItem) {
+            statusLabel.setText(R.string.playback_stopped);
         }
+
+        updatePlayerProgress();
+        if (controller.isPlaying() || state == Player.STATE_BUFFERING) startProgressUpdates();
+        else progressHandler.removeCallbacks(progressUpdater);
     }
 
     private void togglePlayback() {
-        if (progressivePlayback != null) {
-            if (!prepared) return;
-            if (progressivePlayback.isPlaybackComplete()) {
-                File replay = currentWav;
-                if (replay != null && replay.isFile()) {
-                    releasePlayer();
-                    startMediaPlayer(replay, currentName);
-                } else if (selectedEntry != null) {
-                    play(selectedEntry);
-                }
-            } else if (progressivePlayback.isPlaying()) {
-                progressivePlayback.pause();
-                updatePlayerProgress();
-                showPlayIcon();
-                statusLabel.setText(getString(R.string.paused_file, currentName));
-            } else {
-                progressivePlayback.resume();
-                startProgressUpdates();
-                showPauseIcon();
-                statusLabel.setText(getString(R.string.playing_file, currentName));
-            }
-            return;
-        }
-        if (!prepared || mediaPlayer == null) {
+        MediaController controller = mediaController;
+        if (controller == null || controller.getCurrentMediaItem() == null) {
             if (selectedEntry != null) play(selectedEntry);
             return;
         }
-        if (mediaPlayer.isPlaying()) {
-            mediaPlayer.pause();
+        if (controller.isPlaying() || controller.getPlayWhenReady()) {
+            controller.pause();
             progressHandler.removeCallbacks(progressUpdater);
-            updatePlayerProgress();
-            showPlayIcon();
-            statusLabel.setText(getString(R.string.paused_file, currentName));
         } else {
-            if (mediaPlayer.getCurrentPosition() >= mediaPlayer.getDuration() - 100) {
-                mediaPlayer.seekTo(0);
-            }
-            mediaPlayer.start();
+            controller.play();
             startProgressUpdates();
-            showPauseIcon();
-            statusLabel.setText(getString(R.string.playing_file, currentName));
         }
     }
 
     private void stopPlayback(boolean updateStatus) {
-        playbackGeneration.incrementAndGet();
-        releasePlayer();
-        if (updateStatus) statusLabel.setText(R.string.playback_stopped);
-    }
-
-    private void releasePlayer() {
+        MediaController controller = mediaController;
+        if (controller != null) controller.stop();
         progressHandler.removeCallbacks(progressUpdater);
-        prepared = false;
-        if (progressivePlayback != null) {
-            progressivePlayback.cancel();
-            progressivePlayback = null;
-        }
-        if (mediaPlayer != null) {
-            mediaPlayer.setOnPreparedListener(null);
-            mediaPlayer.setOnCompletionListener(null);
-            mediaPlayer.setOnErrorListener(null);
-            mediaPlayer.release();
-            mediaPlayer = null;
-        }
-        if (currentWav != null) {
-            currentWav = null;
-        }
         showPlayIcon();
-        playPauseButton.setEnabled(selectedEntry != null);
         stopButton.setEnabled(false);
         playbackProgress.setProgress(0);
         playbackProgress.setSecondaryProgress(0);
         playbackProgress.setEnabled(false);
         timeLabel.setText(R.string.zero_playback_time);
+        if (updateStatus) statusLabel.setText(R.string.playback_stopped);
+    }
+
+    private void updatePhoneSoundMode(boolean enabled) {
+        MediaController controller = mediaController;
+        if (controller == null) {
+            pendingPhoneModeUpdate = true;
+            connectController();
+            stopPlayback(false);
+            return;
+        }
+        pendingPhoneModeUpdate = false;
+        MediaItem item = controller.getCurrentMediaItem();
+        stopPlayback(false);
+        if (item == null) return;
+
+        Bundle extras = item.mediaMetadata.extras == null
+                ? new Bundle() : new Bundle(item.mediaMetadata.extras);
+        extras.putBoolean(MmfPlayer.EXTRA_PHONE_SPEAKER, enabled);
+        MediaMetadata metadata = new MediaMetadata.Builder()
+                .populate(item.mediaMetadata)
+                .setExtras(extras)
+                .build();
+        MediaItem.Builder itemBuilder = item.buildUpon().setMediaMetadata(metadata);
+        // A MediaItem returned through a remote MediaController intentionally
+        // omits localConfiguration, so restore the source URI from our mediaId.
+        if (item.localConfiguration == null && !item.mediaId.isEmpty()) {
+            itemBuilder.setUri(Uri.parse(item.mediaId)).setMimeType("audio/x-smaf");
+        }
+        controller.setMediaItem(itemBuilder.build());
     }
 
     private void startProgressUpdates() {
@@ -978,44 +841,41 @@ public final class MainActivity extends Activity {
     }
 
     private void updatePlayerProgress() {
-        if (progressivePlayback != null) {
-            long total = progressivePlayback.getTimelineFrames();
-            long position = progressivePlayback.getPositionFrames();
-            long rendered = progressivePlayback.getRenderedFrames();
-            int max = playbackProgress.getMax();
-            playbackProgress.setProgress((int) (Math.min(position, total) * max
-                    / Math.max(1, total)));
-            playbackProgress.setSecondaryProgress((int) (Math.min(rendered, total) * max
-                    / Math.max(1, total)));
-            timeLabel.setText(getString(R.string.playback_time,
-                    formatFrames(position), formatFrames(total)));
+        MediaController controller = mediaController;
+        if (controller == null) return;
+        long duration = controller.getDuration();
+        if (duration == C.TIME_UNSET || duration <= 0) {
+            playbackProgress.setEnabled(false);
             return;
         }
-        if (!prepared || mediaPlayer == null) return;
-        int duration = Math.max(0, mediaPlayer.getDuration());
-        int position = Math.max(0, mediaPlayer.getCurrentPosition());
-        int progress = duration == 0 ? 0
-                : (int) ((long) position * playbackProgress.getMax() / duration);
-        playbackProgress.setProgress(progress);
-        playbackProgress.setSecondaryProgress(playbackProgress.getMax());
+        long position = Math.max(0, controller.getCurrentPosition());
+        long buffered = Math.max(position, controller.getBufferedPosition());
+        int max = playbackProgress.getMax();
+        playbackProgress.setEnabled(controller.getPlaybackState() != Player.STATE_IDLE);
+        playbackProgress.setProgress((int) (Math.min(position, duration) * max / duration));
+        playbackProgress.setSecondaryProgress(
+                (int) (Math.min(buffered, duration) * max / duration));
         timeLabel.setText(getString(R.string.playback_time,
                 formatTime(position), formatTime(duration)));
     }
 
-    private String formatFrames(long frames) {
-        return formatTime((int) Math.min(Integer.MAX_VALUE,
-                frames * 1000 / ProgressivePlayback.SAMPLE_RATE));
+    private String formatTime(long milliseconds) {
+        long totalSeconds = Math.max(0, milliseconds) / 1000;
+        return String.format(Locale.ROOT, "%d:%02d", totalSeconds / 60, totalSeconds % 60);
     }
 
-    private String formatTime(int milliseconds) {
-        int totalSeconds = Math.max(0, milliseconds) / 1000;
-        return String.format(Locale.ROOT, "%d:%02d", totalSeconds / 60, totalSeconds % 60);
+    @Override
+    protected void onStart() {
+        super.onStart();
+        activityStarted = true;
+        connectController();
     }
 
     @Override
     protected void onStop() {
         cancelBatchConversion();
-        stopPlayback(true);
+        activityStarted = false;
+        disconnectController();
         super.onStop();
     }
 
@@ -1030,11 +890,9 @@ public final class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
-        playbackGeneration.incrementAndGet();
         scanGeneration.incrementAndGet();
         batchGeneration.incrementAndGet();
         progressHandler.removeCallbacks(progressUpdater);
-        releasePlayer();
         worker.shutdownNow();
         batchWorker.shutdownNow();
         super.onDestroy();
@@ -1042,60 +900,6 @@ public final class MainActivity extends Activity {
 
     private int dp(int value) {
         return Math.round(value * getResources().getDisplayMetrics().density);
-    }
-
-    private void cleanupStaleWavFiles() {
-        File[] files = getCacheDir().listFiles((directory, name) ->
-                name.startsWith("playback-") && name.endsWith(".wav"));
-        if (files == null) return;
-        for (File file : files) {
-            //noinspection ResultOfMethodCallIgnored
-            file.delete();
-        }
-        File cacheDirectory = new File(getCacheDir(), CACHE_DIR_NAME);
-        File[] partials = cacheDirectory.listFiles((directory, name) -> name.endsWith(".part"));
-        if (partials == null) return;
-        for (File partial : partials) {
-            //noinspection ResultOfMethodCallIgnored
-            partial.delete();
-        }
-    }
-
-    private static final class RenderResult {
-        final File file;
-        final String error;
-        final boolean cacheHit;
-
-        RenderResult(File file, String error, boolean cacheHit) {
-            this.file = file;
-            this.error = error;
-            this.cacheHit = cacheHit;
-        }
-    }
-
-    private static final class PlaybackSource {
-        final byte[] bytes;
-        final File cached;
-        final File target;
-        final File partial;
-        final boolean phoneSpeakerMode;
-        final String formatLabel;
-        final String error;
-
-        PlaybackSource(byte[] bytes, File cached, File target, File partial,
-                       boolean phoneSpeakerMode, String formatLabel, String error) {
-            this.bytes = bytes;
-            this.cached = cached;
-            this.target = target;
-            this.partial = partial;
-            this.phoneSpeakerMode = phoneSpeakerMode;
-            this.formatLabel = formatLabel;
-            this.error = error;
-        }
-
-        static PlaybackSource error(String message) {
-            return new PlaybackSource(null, null, null, null, false, "", message);
-        }
     }
 
     private static final class MmfEntry {

@@ -25,8 +25,8 @@ android {
         applicationId "app.mmfpocket.player"
         minSdk 29
         targetSdk 35
-        versionCode 22
-        versionName "1.4.1"
+        versionCode 23
+        versionName "1.5.0"
 
         externalNativeBuild {
             cmake {
@@ -70,4 +70,13 @@ android {
             path file("src/main/cpp/CMakeLists.txt")
         }
     }
+}
+
+dependencies {
+    // 1.10+ requires compileSdk 36; this project intentionally remains on SDK 35.
+    def media3Version = "1.9.3"
+    //noinspection GradleDependency
+    implementation "androidx.media3:media3-common:$media3Version"
+    //noinspection GradleDependency
+    implementation "androidx.media3:media3-session:$media3Version"
 }

@@ -49,6 +49,7 @@ final class ProgressivePlayback {
     private volatile long requestedSeek = -1;
     private volatile File readableFile;
     private volatile AudioTrack audioTrack;
+    private volatile float volume = 1f;
     private Thread renderThread;
     private Thread playbackThread;
 
@@ -88,14 +89,27 @@ final class ProgressivePlayback {
     }
 
     void pause() {
-        if (!ready || playbackComplete) return;
+        if (playbackComplete) return;
         paused = true;
+        if (!ready) return;
         AudioTrack track = audioTrack;
         if (track != null) {
             try {
                 track.pause();
             } catch (IllegalStateException ignored) {
                 // A simultaneous seek may be replacing the track.
+            }
+        }
+    }
+
+    void setVolume(float value) {
+        volume = Math.max(0f, Math.min(1f, value));
+        AudioTrack track = audioTrack;
+        if (track != null) {
+            try {
+                track.setVolume(volume);
+            } catch (IllegalStateException ignored) {
+                // The playback thread may be replacing the track during a seek.
             }
         }
     }
@@ -232,12 +246,12 @@ final class ProgressivePlayback {
             writeWavHeader(output, finalFrames);
             output.getFD().sync();
             output.close();
-            Files.move(partialFile.toPath(), cachedFile.toPath(),
-                    StandardCopyOption.REPLACE_EXISTING);
-            readableFile = cachedFile;
-            cacheReady = true;
-            renderingComplete = true;
             synchronized (lock) {
+                Files.move(partialFile.toPath(), cachedFile.toPath(),
+                        StandardCopyOption.REPLACE_EXISTING);
+                readableFile = cachedFile;
+                cacheReady = true;
+                renderingComplete = true;
                 lock.notifyAll();
             }
             listener.onCacheReady(cachedFile);
@@ -273,11 +287,15 @@ final class ProgressivePlayback {
             }
             if (cancelled || failed) return;
 
-            input = new RandomAccessFile(readableFile, "r");
+            synchronized (lock) {
+                input = new RandomAccessFile(readableFile, "r");
+            }
             track = createAudioTrack();
             audioTrack = track;
             trackBaseFrame = 0;
             submittedFrame = 0;
+            ready = true;
+            listener.onReady();
 
             byte[] bytes = new byte[BLOCK_FRAMES * BYTES_PER_FRAME];
             while (!cancelled && !failed) {
@@ -346,10 +364,6 @@ final class ProgressivePlayback {
                         track.play();
                         trackStarted = true;
                         buffering = false;
-                        if (!ready) {
-                            ready = true;
-                            listener.onReady();
-                        }
                     }
                 }
             }
@@ -415,6 +429,7 @@ final class ProgressivePlayback {
             track.release();
             throw new IOException("AudioTrackを初期化できません");
         }
+        track.setVolume(volume);
         return track;
     }
 

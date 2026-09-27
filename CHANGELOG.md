@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.5.0
+
+- Continue playing the selected song while the app is in the background or the
+  screen is off.
+- Add notification and lock-screen controls for play, pause, stop and seek.
+- Accept media controls from Bluetooth devices and wired headsets.
+- Handle Audio Focus and audio-route changes without unintended playback
+  restarts.
+- Keep the Activity synchronized with the service-owned song, playback state
+  and progress when the screen is reopened.
+- Keep folder batch conversion foreground-only; it stops when the Activity is
+  no longer visible.
+
 ## 1.4.1
 
 - Run folder batch conversion on its own low-priority worker so browsing,

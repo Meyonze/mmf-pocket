@@ -14,14 +14,13 @@
     <string name="folder_list_item">📁  %1$s</string>
     <string name="folder_read_failed">フォルダを読み込めません: %1$s</string>
     <string name="converting_file">%1$s を変換しています…</string>
-    <string name="buffering_file">%1$s を読み込んでいます…</string>
     <string name="playback_failed">再生できません: %1$s</string>
     <string name="file_open_failed">ファイルを開けません</string>
     <string name="file_too_large">ファイルが大きすぎます（上限16MB）</string>
     <string name="playing_file">再生中: %1$s</string>
     <string name="playback_finished">再生終了: %1$s</string>
-    <string name="audio_playback_failed">音声の再生に失敗しました</string>
-    <string name="audio_open_failed">音声を開けません: %1$s</string>
+    <string name="audio_focus_paused">他の音声のため一時停止: %1$s</string>
+    <string name="player_connection_failed">バックグラウンド再生機能へ接続できません</string>
     <string name="paused_file">一時停止: %1$s</string>
     <string name="playback_stopped">停止しました</string>
     <string name="convert_folder_compact">一括変換</string>
