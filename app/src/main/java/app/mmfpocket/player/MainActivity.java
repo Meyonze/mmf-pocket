@@ -3,6 +3,7 @@ package app.mmfpocket.player;
 import android.app.Activity;
 import android.content.ComponentName;
 import android.content.Intent;
+import android.content.res.ColorStateList;
 import android.database.Cursor;
 import android.graphics.Insets;
 import android.graphics.Typeface;
@@ -13,8 +14,10 @@ import android.os.Handler;
 import android.os.Looper;
 import android.provider.DocumentsContract;
 import android.text.TextUtils;
+import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
+import android.view.ViewGroup;
 import android.view.WindowInsets;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
@@ -37,7 +40,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import androidx.media3.common.C;
 import androidx.media3.common.MediaItem;
-import androidx.media3.common.MediaMetadata;
 import androidx.media3.common.Player;
 import androidx.media3.common.util.UnstableApi;
 import androidx.media3.session.MediaController;
@@ -51,6 +53,8 @@ public final class MainActivity extends Activity {
     private static final String PREFS = "mmf_player";
     private static final String PREF_TREE_URI = "tree_uri";
     private static final String PREF_PHONE_SOUND = "phone_sound";
+    private static final String PREF_CONTINUOUS_PLAYBACK = "continuous_playback";
+    private static final String PREF_RANDOM_PLAYBACK = "random_playback";
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private final ExecutorService batchWorker = Executors.newSingleThreadExecutor();
     private final Object batchPauseLock = new Object();
@@ -71,6 +75,9 @@ public final class MainActivity extends Activity {
     private final Player.Listener controllerListener = new Player.Listener() {
         @Override
         public void onEvents(Player player, Player.Events events) {
+            if (events.contains(Player.EVENT_POSITION_DISCONTINUITY)) {
+                allowProgressRegression = true;
+            }
             updateUiFromController();
         }
     };
@@ -81,6 +88,7 @@ public final class MainActivity extends Activity {
 
     private ArrayAdapter<String> adapter;
     private TextView folderLabel;
+    private TextView parentFolderRow;
     private TextView batchStatusLabel;
     private TextView statusLabel;
     private TextView formatLabel;
@@ -91,13 +99,26 @@ public final class MainActivity extends Activity {
     private Button chooseButton;
     private Button batchButton;
     private Button batchPauseButton;
+    private ImageButton randomPlaybackButton;
     private Switch phoneSoundSwitch;
+    private ImageButton continuousPlaybackButton;
+    private TextView continuousPlaybackStateLabel;
+    private TextView randomPlaybackStateLabel;
+    private ImageButton previousTrackButton;
     private ImageButton playPauseButton;
+    private ImageButton nextTrackButton;
     private ImageButton stopButton;
     private String currentName;
     private MmfEntry selectedEntry;
-    private MmfEntry pendingPlaybackEntry;
+    private PlaybackRequest pendingPlaybackRequest;
     private boolean pendingPhoneModeUpdate;
+    private boolean pendingContinuousUpdate;
+    private boolean pendingRandomUpdate;
+    private boolean continuousPlaybackEnabled;
+    private boolean randomPlaybackEnabled;
+    private String progressMediaId;
+    private int lastVisualProgress;
+    private boolean allowProgressRegression;
     private ListenableFuture<MediaController> controllerFuture;
     private MediaController mediaController;
     private boolean activityStarted;
@@ -120,7 +141,7 @@ public final class MainActivity extends Activity {
     }
 
     private View buildUi() {
-        int pad = dp(16);
+        int pad = dp(12);
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(pad, pad, pad, pad);
@@ -152,7 +173,7 @@ public final class MainActivity extends Activity {
 
         TextView title = new TextView(this);
         title.setText(getString(R.string.app_name));
-        title.setTextSize(24);
+        title.setTextSize(22);
         title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         titleRow.addView(title, new LinearLayout.LayoutParams(
                 0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
@@ -170,6 +191,16 @@ public final class MainActivity extends Activity {
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT));
 
+        TextView versionLabel = new TextView(this);
+        versionLabel.setText(getString(R.string.version_label, BuildConfig.VERSION_NAME));
+        versionLabel.setTextSize(11);
+        versionLabel.setTextColor(0xFF757575);
+        versionLabel.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
+        versionLabel.setPadding(dp(8), 0, 0, 0);
+        titleRow.addView(versionLabel, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.MATCH_PARENT));
+
         root.addView(titleRow, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
 
@@ -179,7 +210,7 @@ public final class MainActivity extends Activity {
         LinearLayout.LayoutParams folderControlsParams = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT);
-        folderControlsParams.topMargin = dp(6);
+        folderControlsParams.topMargin = dp(2);
 
         folderLabel = new TextView(this);
         folderLabel.setText(R.string.no_folder_ja);
@@ -187,29 +218,37 @@ public final class MainActivity extends Activity {
         folderLabel.setSingleLine(true);
         folderLabel.setEllipsize(TextUtils.TruncateAt.MIDDLE);
         folderLabel.setPadding(0, 0, dp(6), 0);
-        folderControls.addView(folderLabel, new LinearLayout.LayoutParams(
-                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+        LinearLayout.LayoutParams folderLabelParams = new LinearLayout.LayoutParams(
+                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1);
+        folderLabelParams.gravity = Gravity.CENTER_VERTICAL;
+        folderControls.addView(folderLabel, folderLabelParams);
 
         chooseButton = new Button(this);
         chooseButton.setText(R.string.choose_folder_compact);
         chooseButton.setTextSize(12);
         chooseButton.setMinWidth(0);
         chooseButton.setMinimumWidth(0);
+        chooseButton.setMinHeight(0);
+        chooseButton.setMinimumHeight(0);
         chooseButton.setOnClickListener(v -> chooseFolder());
-        folderControls.addView(chooseButton, new LinearLayout.LayoutParams(
+        LinearLayout.LayoutParams chooseParams = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT));
+                dp(40));
+        folderControls.addView(chooseButton, chooseParams);
 
         batchButton = new Button(this);
         batchButton.setText(R.string.convert_folder_compact);
         batchButton.setTextSize(12);
         batchButton.setMinWidth(0);
         batchButton.setMinimumWidth(0);
+        batchButton.setMinHeight(0);
+        batchButton.setMinimumHeight(0);
         batchButton.setEnabled(false);
         batchButton.setOnClickListener(v -> convertAllFiles());
+
         LinearLayout.LayoutParams batchParams = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT);
+                dp(40));
         batchParams.leftMargin = dp(4);
         folderControls.addView(batchButton, batchParams);
 
@@ -218,24 +257,59 @@ public final class MainActivity extends Activity {
         batchPauseButton.setTextSize(12);
         batchPauseButton.setMinWidth(0);
         batchPauseButton.setMinimumWidth(0);
+        batchPauseButton.setMinHeight(0);
+        batchPauseButton.setMinimumHeight(0);
         batchPauseButton.setVisibility(View.GONE);
         batchPauseButton.setOnClickListener(v -> toggleBatchPause());
         LinearLayout.LayoutParams batchPauseParams = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT);
+                dp(40));
         batchPauseParams.leftMargin = dp(4);
         folderControls.addView(batchPauseButton, batchPauseParams);
         root.addView(folderControls, folderControlsParams);
 
+        parentFolderRow = new TextView(this);
+        parentFolderRow.setText(R.string.parent_folder);
+        parentFolderRow.setTextSize(16);
+        parentFolderRow.setGravity(Gravity.CENTER_VERTICAL);
+        parentFolderRow.setMinHeight(dp(44));
+        parentFolderRow.setPadding(dp(16), 0, dp(16), 0);
+        parentFolderRow.setVisibility(View.GONE);
+        parentFolderRow.setOnClickListener(v -> navigateUp());
+        TypedValue selectableBackground = new TypedValue();
+        if (getTheme().resolveAttribute(
+                android.R.attr.selectableItemBackground, selectableBackground, true)) {
+            parentFolderRow.setBackgroundResource(selectableBackground.resourceId);
+        }
+        root.addView(parentFolderRow, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT));
+
         listView = new ListView(this);
         listView.setChoiceMode(ListView.CHOICE_MODE_SINGLE);
-        adapter = new ArrayAdapter<>(this, android.R.layout.simple_list_item_activated_1, names);
+        adapter = new ArrayAdapter<String>(
+                this, android.R.layout.simple_list_item_activated_1, names) {
+            @Override
+            public View getView(int position, View convertView, ViewGroup parent) {
+                TextView row = (TextView) super.getView(position, convertView, parent);
+                row.setBackgroundResource(R.drawable.list_item_background);
+                row.setTextColor(0xFF212121);
+                if (position < browserEntries.size()
+                        && browserEntries.get(position).kind == BrowserEntry.DIRECTORY) {
+                    row.setCompoundDrawablesRelativeWithIntrinsicBounds(
+                            R.drawable.ic_folder_outline, 0, 0, 0);
+                    row.setCompoundDrawablePadding(dp(12));
+                } else {
+                    row.setCompoundDrawablesRelativeWithIntrinsicBounds(0, 0, 0, 0);
+                    row.setCompoundDrawablePadding(0);
+                }
+                return row;
+            }
+        };
         listView.setAdapter(adapter);
         listView.setOnItemClickListener((parent, view, position, id) -> {
             BrowserEntry entry = browserEntries.get(position);
-            if (entry.kind == BrowserEntry.PARENT) {
-                navigateUp();
-            } else if (entry.kind == BrowserEntry.DIRECTORY) {
+            if (entry.kind == BrowserEntry.DIRECTORY) {
                 navigateInto(entry);
             } else {
                 play(entry.file);
@@ -308,6 +382,7 @@ public final class MainActivity extends Activity {
                 long duration = controller.getDuration();
                 if (duration == C.TIME_UNSET || duration <= 0) return;
                 long requested = duration * seekBar.getProgress() / seekBar.getMax();
+                allowProgressRegression = true;
                 controller.seekTo(Math.min(requested, controller.getBufferedPosition()));
                 if (controller.isPlaying()) startProgressUpdates();
                 else updatePlayerProgress();
@@ -318,33 +393,122 @@ public final class MainActivity extends Activity {
         timeLabel = new TextView(this);
         timeLabel.setText(R.string.zero_playback_time);
         timeLabel.setTextSize(12);
-        timeLabel.setGravity(Gravity.END);
+        timeLabel.setGravity(Gravity.START);
         playerPanel.addView(timeLabel);
 
         LinearLayout controls = new LinearLayout(this);
         controls.setOrientation(LinearLayout.HORIZONTAL);
-        controls.setGravity(Gravity.CENTER);
+        controls.setGravity(Gravity.CENTER_VERTICAL);
+
+        ColorStateList modeIconColors = new ColorStateList(
+                new int[][] {
+                        new int[] {-android.R.attr.state_enabled},
+                        new int[] {}
+                },
+                new int[] {0xFFBDBDBD, 0xFF283593});
+
+        continuousPlaybackEnabled = getSharedPreferences(PREFS, MODE_PRIVATE)
+                .getBoolean(PREF_CONTINUOUS_PLAYBACK, false);
+
+        LinearLayout transportControls = new LinearLayout(this);
+        transportControls.setOrientation(LinearLayout.HORIZONTAL);
+        transportControls.setGravity(Gravity.CENTER);
+
+        LinearLayout modeControls = new LinearLayout(this);
+        modeControls.setOrientation(LinearLayout.HORIZONTAL);
+        modeControls.setGravity(Gravity.CENTER_VERTICAL | Gravity.END);
+
+        LinearLayout continuousControl = new LinearLayout(this);
+        continuousControl.setOrientation(LinearLayout.VERTICAL);
+        continuousControl.setGravity(Gravity.CENTER_HORIZONTAL);
+        continuousPlaybackButton = new ImageButton(this);
+        continuousPlaybackButton.setImageResource(R.drawable.ic_repeat_all);
+        continuousPlaybackButton.setImageTintList(modeIconColors);
+        continuousPlaybackButton.setBackgroundResource(R.drawable.mode_button_background);
+        continuousPlaybackButton.setPadding(dp(7), dp(7), dp(7), dp(7));
+        continuousPlaybackButton.setOnClickListener(v -> setContinuousPlaybackEnabled(
+                !continuousPlaybackEnabled, true));
+        continuousControl.addView(continuousPlaybackButton,
+                new LinearLayout.LayoutParams(dp(38), dp(38)));
+        continuousPlaybackStateLabel = createModeStateLabel();
+        continuousControl.addView(continuousPlaybackStateLabel);
+        updateContinuousPlaybackButton();
+        modeControls.addView(continuousControl, new LinearLayout.LayoutParams(dp(42), dp(52)));
+
+        previousTrackButton = new ImageButton(this);
+        previousTrackButton.setImageResource(R.drawable.ic_skip_previous);
+        previousTrackButton.setContentDescription(
+                getString(R.string.previous_track_description));
+        previousTrackButton.setBackgroundResource(R.drawable.control_button_background);
+        previousTrackButton.setPadding(dp(9), dp(9), dp(9), dp(9));
+        previousTrackButton.setEnabled(false);
+        previousTrackButton.setOnClickListener(v -> skipToPreviousTrack());
+        transportControls.addView(previousTrackButton,
+                new LinearLayout.LayoutParams(dp(40), dp(40)));
 
         playPauseButton = new ImageButton(this);
         playPauseButton.setImageResource(R.drawable.ic_play);
         playPauseButton.setContentDescription(getString(R.string.play_description));
         playPauseButton.setBackgroundResource(R.drawable.control_button_background);
-        playPauseButton.setPadding(dp(13), dp(13), dp(13), dp(13));
+        playPauseButton.setPadding(dp(12), dp(12), dp(12), dp(12));
         playPauseButton.setEnabled(false);
         playPauseButton.setOnClickListener(v -> togglePlayback());
-        controls.addView(playPauseButton, new LinearLayout.LayoutParams(dp(52), dp(52)));
+        LinearLayout.LayoutParams playParams = new LinearLayout.LayoutParams(dp(48), dp(48));
+        playParams.leftMargin = dp(6);
+        transportControls.addView(playPauseButton, playParams);
+
+        nextTrackButton = new ImageButton(this);
+        nextTrackButton.setImageResource(R.drawable.ic_skip_next);
+        nextTrackButton.setContentDescription(getString(R.string.next_track_description));
+        nextTrackButton.setBackgroundResource(R.drawable.control_button_background);
+        nextTrackButton.setPadding(dp(9), dp(9), dp(9), dp(9));
+        nextTrackButton.setEnabled(false);
+        nextTrackButton.setOnClickListener(v -> skipToNextTrack());
+        LinearLayout.LayoutParams nextParams = new LinearLayout.LayoutParams(dp(40), dp(40));
+        nextParams.leftMargin = dp(6);
+        transportControls.addView(nextTrackButton, nextParams);
 
         stopButton = new ImageButton(this);
         stopButton.setImageResource(R.drawable.ic_stop);
         stopButton.setContentDescription(getString(R.string.stop_description));
         stopButton.setBackgroundResource(R.drawable.control_button_background);
-        stopButton.setPadding(dp(14), dp(14), dp(14), dp(14));
+        stopButton.setPadding(dp(10), dp(10), dp(10), dp(10));
         stopButton.setEnabled(false);
         stopButton.setOnClickListener(v -> stopPlayback(true));
-        LinearLayout.LayoutParams stopParams = new LinearLayout.LayoutParams(dp(52), dp(52));
-        stopParams.leftMargin = dp(16);
-        controls.addView(stopButton, stopParams);
-        playerPanel.addView(controls);
+        LinearLayout.LayoutParams stopParams = new LinearLayout.LayoutParams(dp(40), dp(40));
+        stopParams.leftMargin = dp(6);
+        transportControls.addView(stopButton, stopParams);
+
+        LinearLayout randomControl = new LinearLayout(this);
+        randomControl.setOrientation(LinearLayout.VERTICAL);
+        randomControl.setGravity(Gravity.CENTER_HORIZONTAL);
+        randomPlaybackButton = new ImageButton(this);
+        randomPlaybackButton.setImageResource(R.drawable.ic_shuffle);
+        randomPlaybackButton.setImageTintList(modeIconColors);
+        randomPlaybackButton.setBackgroundResource(R.drawable.mode_button_background);
+        randomPlaybackButton.setPadding(dp(7), dp(7), dp(7), dp(7));
+        randomPlaybackEnabled = getSharedPreferences(PREFS, MODE_PRIVATE)
+                .getBoolean(PREF_RANDOM_PLAYBACK, false);
+        randomPlaybackButton.setOnClickListener(v -> setRandomPlaybackEnabled(
+                !randomPlaybackEnabled, true));
+        randomControl.addView(randomPlaybackButton,
+                new LinearLayout.LayoutParams(dp(38), dp(38)));
+        randomPlaybackStateLabel = createModeStateLabel();
+        randomControl.addView(randomPlaybackStateLabel);
+        updateRandomPlaybackButton();
+        LinearLayout.LayoutParams randomControlParams =
+                new LinearLayout.LayoutParams(dp(42), dp(52));
+        randomControlParams.leftMargin = dp(6);
+        modeControls.addView(randomControl, randomControlParams);
+
+        LinearLayout.LayoutParams transportParams = new LinearLayout.LayoutParams(
+                0, dp(52), 1);
+        controls.addView(transportControls, transportParams);
+        LinearLayout.LayoutParams modeParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, dp(52));
+        controls.addView(modeControls, modeParams);
+        playerPanel.addView(controls, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(52)));
 
         LinearLayout playerFooter = new LinearLayout(this);
         playerFooter.setOrientation(LinearLayout.HORIZONTAL);
@@ -361,6 +525,7 @@ public final class MainActivity extends Activity {
 
         formatLabel = new TextView(this);
         formatLabel.setTextSize(12);
+        formatLabel.setTextColor(0xFF9E9E9E);
         formatLabel.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         formatLabel.setGravity(Gravity.END);
         formatLabel.setSingleLine(true);
@@ -421,6 +586,7 @@ public final class MainActivity extends Activity {
         Uri treeUri = selectedTreeUri;
         int generation = scanGeneration.incrementAndGet();
         folderLabel.setText(getString(R.string.selected_folder, folder.displayPath));
+        parentFolderRow.setVisibility(folderHistory.isEmpty() ? View.GONE : View.VISIBLE);
         statusLabel.setText(R.string.scanning_folder);
         batchButton.setEnabled(false);
         listView.setEnabled(false);
@@ -434,16 +600,12 @@ public final class MainActivity extends Activity {
                 browserEntries.clear();
                 names.clear();
                 entries.clear();
-                if (!folderHistory.isEmpty()) {
-                    browserEntries.add(BrowserEntry.parent());
-                    names.add(getString(R.string.parent_folder));
-                }
                 int folderCount = 0;
                 for (BrowserEntry entry : found) {
                     browserEntries.add(entry);
                     if (entry.kind == BrowserEntry.DIRECTORY) {
                         folderCount++;
-                        names.add(getString(R.string.folder_list_item, entry.name));
+                        names.add(entry.name);
                     } else {
                         entries.add(entry.file);
                         names.add(entry.name);
@@ -508,6 +670,18 @@ public final class MainActivity extends Activity {
     }
 
     private void play(MmfEntry entry) {
+        List<MmfEntry> queue = new ArrayList<>(entries);
+        int startIndex = indexOfEntry(queue, entry.uri.toString());
+        if (startIndex == C.INDEX_UNSET) {
+            queue.clear();
+            queue.add(entry);
+            startIndex = 0;
+        }
+        beginPlayback(new PlaybackRequest(queue, startIndex));
+    }
+
+    private void beginPlayback(PlaybackRequest request) {
+        MmfEntry entry = request.queue.get(request.startIndex);
         selectedEntry = entry;
         currentName = entry.name;
         nowPlayingLabel.setText(entry.name);
@@ -517,32 +691,32 @@ public final class MainActivity extends Activity {
         statusLabel.setText(getString(R.string.converting_file, entry.name));
         MediaController controller = mediaController;
         if (controller == null) {
-            pendingPlaybackEntry = entry;
+            pendingPlaybackRequest = request;
             connectController();
             return;
         }
-        startPlayback(controller, entry);
+        startPlayback(controller, request);
     }
 
-    private void startPlayback(MediaController controller, MmfEntry entry) {
-        pendingPlaybackEntry = null;
+    private void startPlayback(MediaController controller, PlaybackRequest request) {
+        pendingPlaybackRequest = null;
         pendingPhoneModeUpdate = false;
-        Bundle extras = new Bundle();
-        extras.putBoolean(MmfPlayer.EXTRA_PHONE_SPEAKER, phoneSoundSwitch.isChecked());
-        MediaMetadata metadata = new MediaMetadata.Builder()
-                .setTitle(entry.name)
-                .setDisplayTitle(entry.name)
-                .setExtras(extras)
-                .build();
-        MediaItem item = new MediaItem.Builder()
-                .setMediaId(entry.uri.toString())
-                .setUri(entry.uri)
-                .setMimeType("audio/x-smaf")
-                .setMediaMetadata(metadata)
-                .build();
-        controller.setMediaItem(item);
-        controller.prepare();
-        controller.play();
+        pendingContinuousUpdate = false;
+        pendingRandomUpdate = false;
+        ArrayList<String> uris = new ArrayList<>(request.queue.size());
+        ArrayList<String> names = new ArrayList<>(request.queue.size());
+        for (MmfEntry entry : request.queue) {
+            uris.add(entry.uri.toString());
+            names.add(entry.name);
+        }
+        Bundle args = new Bundle();
+        args.putStringArrayList(PlaybackService.ARG_URIS, uris);
+        args.putStringArrayList(PlaybackService.ARG_NAMES, names);
+        args.putInt(PlaybackService.ARG_START_INDEX, request.startIndex);
+        args.putBoolean(PlaybackService.ARG_ENABLED, continuousPlaybackEnabled);
+        args.putBoolean(PlaybackService.ARG_RANDOM, randomPlaybackEnabled);
+        args.putBoolean(PlaybackService.ARG_PHONE_SOUND, phoneSoundSwitch.isChecked());
+        controller.sendCustomCommand(PlaybackService.COMMAND_START_FOLDER_QUEUE, args);
         showPauseIcon();
         startProgressUpdates();
     }
@@ -681,11 +855,19 @@ public final class MainActivity extends Activity {
                 mediaController = controller;
                 controller.addListener(controllerListener);
                 updateUiFromController();
-                MmfEntry pending = pendingPlaybackEntry;
+                PlaybackRequest pending = pendingPlaybackRequest;
                 if (pending != null) {
                     startPlayback(controller, pending);
-                } else if (pendingPhoneModeUpdate) {
-                    updatePhoneSoundMode(phoneSoundSwitch.isChecked());
+                } else {
+                    if (pendingContinuousUpdate) {
+                        updateContinuousPlayback(continuousPlaybackEnabled);
+                    }
+                    if (pendingRandomUpdate) {
+                        updateRandomPlayback(randomPlaybackEnabled);
+                    }
+                    if (pendingPhoneModeUpdate) {
+                        updatePhoneSoundMode(phoneSoundSwitch.isChecked());
+                    }
                 }
             } catch (Exception error) {
                 if (controllerFuture == future) controllerFuture = null;
@@ -713,17 +895,31 @@ public final class MainActivity extends Activity {
         MediaItem item = controller.getCurrentMediaItem();
         String name = currentName;
         if (item != null && item.mediaMetadata.title != null) {
+            if (!item.mediaId.equals(progressMediaId)) {
+                progressMediaId = item.mediaId;
+                lastVisualProgress = 0;
+                allowProgressRegression = true;
+            }
             name = item.mediaMetadata.title.toString();
             currentName = name;
             nowPlayingLabel.setText(name);
             Bundle extras = item.mediaMetadata.extras;
             formatLabel.setText(extras == null ? ""
                     : extras.getString(MmfPlayer.EXTRA_FORMAT_LABEL, ""));
+            int visibleIndex = indexOfBrowserEntry(item.mediaId);
+            if (visibleIndex == C.INDEX_UNSET) {
+                listView.clearChoices();
+            } else {
+                selectedEntry = browserEntries.get(visibleIndex).file;
+                listView.setItemChecked(visibleIndex, true);
+            }
         }
 
         int state = controller.getPlaybackState();
         boolean hasItem = item != null;
         playPauseButton.setEnabled(hasItem || selectedEntry != null);
+        previousTrackButton.setEnabled(hasItem && controller.getMediaItemCount() > 1);
+        nextTrackButton.setEnabled(hasItem && controller.getMediaItemCount() > 1);
         stopButton.setEnabled(hasItem && state != Player.STATE_IDLE);
         if (controller.isPlaying()
                 || controller.getPlayWhenReady() && state == Player.STATE_BUFFERING) {
@@ -772,6 +968,20 @@ public final class MainActivity extends Activity {
         }
     }
 
+    private void skipToPreviousTrack() {
+        MediaController controller = mediaController;
+        if (controller == null || controller.getCurrentMediaItem() == null) return;
+        controller.sendCustomCommand(PlaybackService.COMMAND_SKIP_PREVIOUS, Bundle.EMPTY);
+        startProgressUpdates();
+    }
+
+    private void skipToNextTrack() {
+        MediaController controller = mediaController;
+        if (controller == null || controller.getCurrentMediaItem() == null) return;
+        controller.sendCustomCommand(PlaybackService.COMMAND_SKIP_NEXT, Bundle.EMPTY);
+        startProgressUpdates();
+    }
+
     private void stopPlayback(boolean updateStatus) {
         MediaController controller = mediaController;
         if (controller != null) controller.stop();
@@ -781,6 +991,8 @@ public final class MainActivity extends Activity {
         playbackProgress.setProgress(0);
         playbackProgress.setSecondaryProgress(0);
         playbackProgress.setEnabled(false);
+        lastVisualProgress = 0;
+        allowProgressRegression = true;
         timeLabel.setText(R.string.zero_playback_time);
         if (updateStatus) statusLabel.setText(R.string.playback_stopped);
     }
@@ -794,24 +1006,115 @@ public final class MainActivity extends Activity {
             return;
         }
         pendingPhoneModeUpdate = false;
-        MediaItem item = controller.getCurrentMediaItem();
-        stopPlayback(false);
-        if (item == null) return;
+        Bundle args = new Bundle();
+        args.putBoolean(PlaybackService.ARG_ENABLED, enabled);
+        controller.sendCustomCommand(PlaybackService.COMMAND_SET_PHONE_SOUND, args);
+    }
 
-        Bundle extras = item.mediaMetadata.extras == null
-                ? new Bundle() : new Bundle(item.mediaMetadata.extras);
-        extras.putBoolean(MmfPlayer.EXTRA_PHONE_SPEAKER, enabled);
-        MediaMetadata metadata = new MediaMetadata.Builder()
-                .populate(item.mediaMetadata)
-                .setExtras(extras)
-                .build();
-        MediaItem.Builder itemBuilder = item.buildUpon().setMediaMetadata(metadata);
-        // A MediaItem returned through a remote MediaController intentionally
-        // omits localConfiguration, so restore the source URI from our mediaId.
-        if (item.localConfiguration == null && !item.mediaId.isEmpty()) {
-            itemBuilder.setUri(Uri.parse(item.mediaId)).setMimeType("audio/x-smaf");
+    private void updateContinuousPlayback(boolean enabled) {
+        MediaController controller = mediaController;
+        if (controller == null) {
+            pendingContinuousUpdate = true;
+            connectController();
+            return;
         }
-        controller.setMediaItem(itemBuilder.build());
+        pendingContinuousUpdate = false;
+        Bundle args = new Bundle();
+        args.putBoolean(PlaybackService.ARG_ENABLED, enabled);
+        controller.sendCustomCommand(PlaybackService.COMMAND_SET_CONTINUOUS, args);
+    }
+
+    private void setContinuousPlaybackEnabled(boolean enabled, boolean notifyService) {
+        boolean turningOn = enabled && !continuousPlaybackEnabled;
+        continuousPlaybackEnabled = enabled;
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                .putBoolean(PREF_CONTINUOUS_PLAYBACK, enabled).apply();
+        if (turningOn && randomPlaybackEnabled) {
+            setRandomPlaybackEnabled(false, notifyService);
+        }
+        if (continuousPlaybackButton != null) {
+            updateContinuousPlaybackButton();
+            updateRandomPlaybackButton();
+        }
+        if (notifyService) updateContinuousPlayback(enabled);
+    }
+
+    private void updateContinuousPlaybackButton() {
+        if (continuousPlaybackButton == null) return;
+        continuousPlaybackButton.setSelected(continuousPlaybackEnabled);
+        if (continuousPlaybackStateLabel != null) {
+            continuousPlaybackStateLabel.setText(continuousPlaybackEnabled
+                    ? R.string.mode_on : R.string.mode_off);
+            continuousPlaybackStateLabel.setTextColor(
+                    continuousPlaybackEnabled ? 0xFF283593 : 0xFF616161);
+        }
+        continuousPlaybackButton.setContentDescription(getString(continuousPlaybackEnabled
+                ? R.string.continuous_playback_on_description
+                : R.string.continuous_playback_off_description));
+    }
+
+    private void updateRandomPlayback(boolean enabled) {
+        MediaController controller = mediaController;
+        if (controller == null) {
+            pendingRandomUpdate = true;
+            connectController();
+            return;
+        }
+        pendingRandomUpdate = false;
+        Bundle args = new Bundle();
+        args.putBoolean(PlaybackService.ARG_ENABLED, enabled);
+        controller.sendCustomCommand(PlaybackService.COMMAND_SET_RANDOM, args);
+    }
+
+    private void setRandomPlaybackEnabled(boolean enabled, boolean notifyService) {
+        randomPlaybackEnabled = enabled;
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                .putBoolean(PREF_RANDOM_PLAYBACK, enabled).apply();
+        updateRandomPlaybackButton();
+        if (notifyService) updateRandomPlayback(enabled);
+    }
+
+    private void updateRandomPlaybackButton() {
+        if (randomPlaybackButton == null) return;
+        randomPlaybackButton.setEnabled(continuousPlaybackEnabled);
+        randomPlaybackButton.setSelected(randomPlaybackEnabled);
+        if (randomPlaybackStateLabel != null) {
+            randomPlaybackStateLabel.setText(randomPlaybackEnabled
+                    ? R.string.mode_on : R.string.mode_off);
+            randomPlaybackStateLabel.setTextColor(!continuousPlaybackEnabled
+                    ? 0xFFBDBDBD : randomPlaybackEnabled ? 0xFF283593 : 0xFF616161);
+        }
+        randomPlaybackButton.setContentDescription(getString(!continuousPlaybackEnabled
+                ? R.string.random_playback_unavailable_description
+                : randomPlaybackEnabled
+                        ? R.string.random_playback_on_description
+                        : R.string.random_playback_off_description));
+    }
+
+    private TextView createModeStateLabel() {
+        TextView label = new TextView(this);
+        label.setTextSize(8);
+        label.setTextColor(0xFF616161);
+        label.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        label.setGravity(Gravity.CENTER);
+        label.setSingleLine(true);
+        return label;
+    }
+
+    private int indexOfEntry(List<MmfEntry> queue, String mediaId) {
+        for (int index = 0; index < queue.size(); index++) {
+            if (queue.get(index).uri.toString().equals(mediaId)) return index;
+        }
+        return C.INDEX_UNSET;
+    }
+
+    private int indexOfBrowserEntry(String mediaId) {
+        for (int index = 0; index < browserEntries.size(); index++) {
+            BrowserEntry entry = browserEntries.get(index);
+            if (entry.kind == BrowserEntry.FILE
+                    && entry.file.uri.toString().equals(mediaId)) return index;
+        }
+        return C.INDEX_UNSET;
     }
 
     private void startProgressUpdates() {
@@ -852,7 +1155,13 @@ public final class MainActivity extends Activity {
         long buffered = Math.max(position, controller.getBufferedPosition());
         int max = playbackProgress.getMax();
         playbackProgress.setEnabled(controller.getPlaybackState() != Player.STATE_IDLE);
-        playbackProgress.setProgress((int) (Math.min(position, duration) * max / duration));
+        int visualProgress = (int) (Math.min(position, duration) * max / duration);
+        if (!allowProgressRegression) {
+            visualProgress = Math.max(lastVisualProgress, visualProgress);
+        }
+        lastVisualProgress = visualProgress;
+        allowProgressRegression = false;
+        playbackProgress.setProgress(visualProgress);
         playbackProgress.setSecondaryProgress(
                 (int) (Math.min(buffered, duration) * max / duration));
         timeLabel.setText(getString(R.string.playback_time,
@@ -912,6 +1221,16 @@ public final class MainActivity extends Activity {
         }
     }
 
+    private static final class PlaybackRequest {
+        final List<MmfEntry> queue;
+        final int startIndex;
+
+        PlaybackRequest(List<MmfEntry> queue, int startIndex) {
+            this.queue = new ArrayList<>(queue);
+            this.startIndex = startIndex;
+        }
+    }
+
     private static final class FolderLocation {
         final String documentId;
         final String displayPath;
@@ -923,7 +1242,6 @@ public final class MainActivity extends Activity {
     }
 
     private static final class BrowserEntry {
-        static final int PARENT = 0;
         static final int DIRECTORY = 1;
         static final int FILE = 2;
 
@@ -937,10 +1255,6 @@ public final class MainActivity extends Activity {
             this.name = name;
             this.documentId = documentId;
             this.file = file;
-        }
-
-        static BrowserEntry parent() {
-            return new BrowserEntry(PARENT, "", null, null);
         }
 
         static BrowserEntry directory(String name, String documentId) {

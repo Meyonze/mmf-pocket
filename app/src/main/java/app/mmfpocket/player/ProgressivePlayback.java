@@ -132,6 +132,7 @@ final class ProgressivePlayback {
 
     long seekTo(long requestedFrame) {
         long clamped = Math.max(0, Math.min(requestedFrame, renderedFrames));
+        lastKnownPosition = clamped;
         requestedSeek = clamped;
         playbackComplete = false;
         AudioTrack track = audioTrack;
@@ -179,12 +180,15 @@ final class ProgressivePlayback {
     }
 
     long getPositionFrames() {
+        if (requestedSeek >= 0) {
+            return Math.min(lastKnownPosition, getTimelineFrames());
+        }
         AudioTrack track = audioTrack;
         if (track != null && ready) {
             try {
                 long played = Integer.toUnsignedLong(track.getPlaybackHeadPosition());
                 long position = Math.min(submittedFrame, trackBaseFrame + played);
-                lastKnownPosition = Math.max(0, position);
+                lastKnownPosition = Math.max(lastKnownPosition, Math.max(0, position));
             } catch (IllegalStateException ignored) {
                 // Use the last sample position while replacing/releasing a track.
             }
@@ -301,14 +305,15 @@ final class ProgressivePlayback {
             while (!cancelled && !failed) {
                 long seek = requestedSeek;
                 if (seek >= 0) {
-                    requestedSeek = -1;
+                    audioTrack = null;
                     releaseTrack(track);
                     track = createAudioTrack();
-                    audioTrack = track;
                     cursor = Math.min(seek, renderedFrames);
                     trackBaseFrame = cursor;
                     submittedFrame = cursor;
                     lastKnownPosition = cursor;
+                    audioTrack = track;
+                    requestedSeek = -1;
                     trackStarted = false;
                 }
 

@@ -29,7 +29,12 @@ import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
 
 import java.io.File;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.function.BooleanSupplier;
@@ -51,7 +56,11 @@ final class MmfPlayer extends SimpleBasePlayer {
     private final Player.Commands availableCommands;
     private final AudioAttributes media3AudioAttributes;
 
+    private final List<MediaItem> playlist = new ArrayList<>();
+    private final Set<String> playedMediaIds = new HashSet<>();
+    private final ArrayDeque<Integer> playbackHistory = new ArrayDeque<>();
     private MediaItem currentItem;
+    private int currentIndex = C.INDEX_UNSET;
     private MediaPlayer mediaPlayer;
     private ProgressivePlayback progressivePlayback;
     private File currentWav;
@@ -70,6 +79,9 @@ final class MmfPlayer extends SimpleBasePlayer {
     private long durationMs = C.TIME_UNSET;
     private long startPositionMs;
     private long pendingDiscontinuityMs = C.TIME_UNSET;
+    private int pendingDiscontinuityReason = Player.DISCONTINUITY_REASON_SEEK;
+    private boolean continuousPlayback;
+    private boolean randomPlayback;
     private float volume = 1f;
 
     MmfPlayer(Context context, Looper looper, BooleanSupplier foregroundServiceReady) {
@@ -107,6 +119,11 @@ final class MmfPlayer extends SimpleBasePlayer {
                         Player.COMMAND_STOP,
                         Player.COMMAND_SEEK_TO_DEFAULT_POSITION,
                         Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM,
+                        Player.COMMAND_SEEK_TO_MEDIA_ITEM,
+                        Player.COMMAND_SEEK_TO_NEXT,
+                        Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM,
+                        Player.COMMAND_SEEK_TO_PREVIOUS,
+                        Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM,
                         Player.COMMAND_GET_CURRENT_MEDIA_ITEM,
                         Player.COMMAND_GET_TIMELINE,
                         Player.COMMAND_GET_METADATA,
@@ -145,18 +162,23 @@ final class MmfPlayer extends SimpleBasePlayer {
                 .setAudioAttributes(media3AudioAttributes)
                 .setVolume(volume);
 
-        if (currentItem != null) {
-            long itemDurationUs = durationMs == C.TIME_UNSET
-                    ? C.TIME_UNSET : durationMs * 1000L;
-            MediaItemData itemData = new MediaItemData.Builder(currentItem.mediaId)
-                    .setMediaItem(currentItem)
-                    .setMediaMetadata(currentItem.mediaMetadata)
-                    .setDurationUs(itemDurationUs)
-                    .setIsSeekable(prepared)
-                    .setIsPlaceholder(false)
-                    .build();
-            builder.setPlaylist(ImmutableList.of(itemData))
-                    .setCurrentMediaItemIndex(0)
+        if (currentItem != null && currentIndex != C.INDEX_UNSET) {
+            ImmutableList.Builder<MediaItemData> playlistBuilder = ImmutableList.builder();
+            for (int index = 0; index < playlist.size(); index++) {
+                MediaItem item = playlist.get(index);
+                boolean isCurrent = index == currentIndex;
+                long itemDurationUs = isCurrent && durationMs != C.TIME_UNSET
+                        ? durationMs * 1000L : C.TIME_UNSET;
+                playlistBuilder.add(new MediaItemData.Builder(item.mediaId + "#" + index)
+                        .setMediaItem(item)
+                        .setMediaMetadata(item.mediaMetadata)
+                        .setDurationUs(itemDurationUs)
+                        .setIsSeekable(isCurrent && prepared)
+                        .setIsPlaceholder(false)
+                        .build());
+            }
+            builder.setPlaylist(playlistBuilder.build())
+                    .setCurrentMediaItemIndex(currentIndex)
                     .setContentPositionMs((PositionSupplier) this::getBackendPositionMs)
                     .setContentBufferedPositionMs((PositionSupplier) this::getBackendBufferedMs)
                     .setTotalBufferedDurationMs((PositionSupplier) () -> Math.max(
@@ -164,7 +186,7 @@ final class MmfPlayer extends SimpleBasePlayer {
         }
         if (pendingDiscontinuityMs != C.TIME_UNSET) {
             builder.setPositionDiscontinuity(
-                    Player.DISCONTINUITY_REASON_SEEK, pendingDiscontinuityMs);
+                    pendingDiscontinuityReason, pendingDiscontinuityMs);
             pendingDiscontinuityMs = C.TIME_UNSET;
         }
         return builder.build();
@@ -181,8 +203,13 @@ final class MmfPlayer extends SimpleBasePlayer {
         playbackSuppressionReason = Player.PLAYBACK_SUPPRESSION_REASON_NONE;
         durationMs = C.TIME_UNSET;
         currentWav = null;
-        currentItem = mediaItems.isEmpty() ? null
-                : mediaItems.get(Math.max(0, Math.min(startIndex, mediaItems.size() - 1)));
+        playlist.clear();
+        playlist.addAll(mediaItems);
+        playedMediaIds.clear();
+        playbackHistory.clear();
+        currentIndex = mediaItems.isEmpty() ? C.INDEX_UNSET
+                : Math.max(0, Math.min(startIndex, mediaItems.size() - 1));
+        currentItem = currentIndex == C.INDEX_UNSET ? null : playlist.get(currentIndex);
         if (currentItem == null) {
             playWhenReady = false;
             abandonAudioFocus();
@@ -264,7 +291,29 @@ final class MmfPlayer extends SimpleBasePlayer {
     @Override
     protected ListenableFuture<?> handleSeek(int mediaItemIndex, long positionMs, int seekCommand) {
         if (currentItem == null) return Futures.immediateVoidFuture();
-        long requested = Math.max(0, positionMs);
+        boolean seekToNext = seekCommand == Player.COMMAND_SEEK_TO_NEXT
+                || seekCommand == Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM;
+        if (seekToNext) {
+            skipToNext();
+            return Futures.immediateVoidFuture();
+        }
+        boolean seekToPrevious = seekCommand == Player.COMMAND_SEEK_TO_PREVIOUS
+                || seekCommand == Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM;
+        if (seekToPrevious) {
+            skipToPrevious();
+            return Futures.immediateVoidFuture();
+        }
+        int requestedIndex = mediaItemIndex == C.INDEX_UNSET ? currentIndex : mediaItemIndex;
+        if (requestedIndex < 0 || requestedIndex >= playlist.size()) {
+            return Futures.immediateVoidFuture();
+        }
+        long requested = positionMs == C.TIME_UNSET ? 0 : Math.max(0, positionMs);
+        if (requestedIndex != currentIndex) {
+            playedMediaIds.add(currentItem.mediaId);
+            transitionToItem(requestedIndex, requested, Player.DISCONTINUITY_REASON_SEEK,
+                    playWhenReady);
+            return Futures.immediateVoidFuture();
+        }
         if (durationMs != C.TIME_UNSET) requested = Math.min(requested, durationMs);
         if (playbackState == Player.STATE_ENDED) {
             restartCompletedPlayback(requested);
@@ -315,6 +364,8 @@ final class MmfPlayer extends SimpleBasePlayer {
             }
         }
         currentItem = null;
+        playlist.clear();
+        currentIndex = C.INDEX_UNSET;
         playbackState = Player.STATE_IDLE;
         return Futures.immediateVoidFuture();
     }
@@ -382,13 +433,7 @@ final class MmfPlayer extends SimpleBasePlayer {
                     public void onCompleted() {
                         mainHandler.post(() -> {
                             if (requestGeneration != generation || released) return;
-                            playbackState = Player.STATE_ENDED;
-                            playWhenReady = false;
-                            playWhenReadyReason =
-                                    Player.PLAY_WHEN_READY_CHANGE_REASON_END_OF_MEDIA_ITEM;
-                            abandonAudioFocus();
-                            setWakeLockHeld(false);
-                            invalidateState();
+                            onCurrentItemCompleted();
                         });
                     }
 
@@ -432,12 +477,7 @@ final class MmfPlayer extends SimpleBasePlayer {
             });
             player.setOnCompletionListener(completedPlayer -> {
                 if (requestGeneration != generation || completedPlayer != mediaPlayer) return;
-                playbackState = Player.STATE_ENDED;
-                playWhenReady = false;
-                playWhenReadyReason = Player.PLAY_WHEN_READY_CHANGE_REASON_END_OF_MEDIA_ITEM;
-                abandonAudioFocus();
-                setWakeLockHeld(false);
-                invalidateState();
+                onCurrentItemCompleted();
             });
             player.setOnErrorListener((failedPlayer, what, extra) -> {
                 if (requestGeneration == generation && failedPlayer == mediaPlayer) {
@@ -466,6 +506,135 @@ final class MmfPlayer extends SimpleBasePlayer {
         playbackState = Player.STATE_IDLE;
         prepared = false;
         handlePrepare();
+    }
+
+    void startFolderQueue(
+            List<MediaItem> items, int startIndex, boolean continuous, boolean random) {
+        continuousPlayback = continuous;
+        randomPlayback = random;
+        handleSetMediaItems(items, startIndex, 0);
+        if (currentItem == null) return;
+        handlePrepare();
+        handleSetPlayWhenReady(true);
+    }
+
+    void setContinuousPlayback(boolean enabled) {
+        continuousPlayback = enabled;
+    }
+
+    void setRandomPlayback(boolean enabled) {
+        randomPlayback = enabled;
+    }
+
+    void skipToNext() {
+        if (currentItem == null) return;
+        playedMediaIds.add(currentItem.mediaId);
+        int nextIndex = randomPlayback
+                ? chooseRandomUnplayedIndex() : chooseNextSequentialIndex();
+        if (nextIndex == C.INDEX_UNSET) return;
+        playbackHistory.addLast(currentIndex);
+        transitionToItem(nextIndex, 0, Player.DISCONTINUITY_REASON_SEEK, playWhenReady);
+    }
+
+    void skipToPrevious() {
+        if (currentItem == null) return;
+        int previousIndex = playbackHistory.isEmpty()
+                ? currentIndex - 1 : playbackHistory.removeLast();
+        if (previousIndex < 0 || previousIndex >= playlist.size()) return;
+        transitionToItem(previousIndex, 0, Player.DISCONTINUITY_REASON_SEEK, playWhenReady);
+    }
+
+    void setPhoneSoundMode(boolean enabled) {
+        if (playlist.isEmpty()) return;
+        generation++;
+        releaseBackend();
+        playWhenReady = false;
+        playWhenReadyReason = Player.PLAY_WHEN_READY_CHANGE_REASON_USER_REQUEST;
+        playbackSuppressionReason = Player.PLAYBACK_SUPPRESSION_REASON_NONE;
+        playbackState = Player.STATE_IDLE;
+        playerError = null;
+        prepared = false;
+        durationMs = C.TIME_UNSET;
+        currentWav = null;
+        startPositionMs = 0;
+        pendingDiscontinuityMs = 0;
+        pendingDiscontinuityReason = Player.DISCONTINUITY_REASON_SEEK;
+        for (int index = 0; index < playlist.size(); index++) {
+            MediaItem item = playlist.get(index);
+            Bundle extras = item.mediaMetadata.extras == null
+                    ? new Bundle() : new Bundle(item.mediaMetadata.extras);
+            extras.putBoolean(EXTRA_PHONE_SPEAKER, enabled);
+            MediaMetadata metadata = new MediaMetadata.Builder()
+                    .populate(item.mediaMetadata)
+                    .setExtras(extras)
+                    .build();
+            playlist.set(index, item.buildUpon().setMediaMetadata(metadata).build());
+        }
+        currentItem = playlist.get(currentIndex);
+        abandonAudioFocus();
+        setWakeLockHeld(false);
+        invalidateState();
+    }
+
+    private void onCurrentItemCompleted() {
+        playedMediaIds.add(currentItem.mediaId);
+        int nextIndex = randomPlayback
+                ? chooseRandomUnplayedIndex() : chooseNextSequentialIndex();
+        if (continuousPlayback && playWhenReady && nextIndex != C.INDEX_UNSET) {
+            playbackHistory.addLast(currentIndex);
+            transitionToItem(nextIndex, 0,
+                    Player.DISCONTINUITY_REASON_AUTO_TRANSITION, true);
+            return;
+        }
+        playbackState = Player.STATE_ENDED;
+        playWhenReady = false;
+        playWhenReadyReason = Player.PLAY_WHEN_READY_CHANGE_REASON_END_OF_MEDIA_ITEM;
+        abandonAudioFocus();
+        setWakeLockHeld(false);
+        invalidateState();
+    }
+
+    private int chooseRandomUnplayedIndex() {
+        int candidateCount = 0;
+        for (int index = 0; index < playlist.size(); index++) {
+            if (!playedMediaIds.contains(playlist.get(index).mediaId)
+                    && index != currentIndex) candidateCount++;
+        }
+        if (candidateCount == 0) return C.INDEX_UNSET;
+        int selected = ThreadLocalRandom.current().nextInt(candidateCount);
+        for (int index = 0; index < playlist.size(); index++) {
+            if (playedMediaIds.contains(playlist.get(index).mediaId)
+                    || index == currentIndex) continue;
+            if (selected-- == 0) return index;
+        }
+        return C.INDEX_UNSET;
+    }
+
+    private int chooseNextSequentialIndex() {
+        for (int index = currentIndex + 1; index < playlist.size(); index++) {
+            if (!playedMediaIds.contains(playlist.get(index).mediaId)) return index;
+        }
+        return C.INDEX_UNSET;
+    }
+
+    private void transitionToItem(int index, long positionMs, int reason, boolean prepareNext) {
+        generation++;
+        releaseBackend();
+        currentIndex = index;
+        currentItem = playlist.get(index);
+        playerError = null;
+        prepared = false;
+        playbackState = prepareNext ? Player.STATE_BUFFERING : Player.STATE_IDLE;
+        durationMs = C.TIME_UNSET;
+        currentWav = null;
+        startPositionMs = Math.max(0, positionMs);
+        pendingDiscontinuityMs = startPositionMs;
+        pendingDiscontinuityReason = reason;
+        invalidateState();
+        if (prepareNext) {
+            playbackState = Player.STATE_IDLE;
+            handlePrepare();
+        }
     }
 
     private void requestFocusWhenEligible(int requestGeneration, int checkCount) {
@@ -632,6 +801,7 @@ final class MmfPlayer extends SimpleBasePlayer {
                 .setExtras(extras)
                 .build();
         currentItem = currentItem.buildUpon().setMediaMetadata(metadata).build();
+        playlist.set(currentIndex, currentItem);
         invalidateState();
     }
 

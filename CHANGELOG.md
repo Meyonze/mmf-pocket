@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.5.1
+
+- Add optional continuous playback for the current folder, stopping at its end.
+- Add an optional random-next mode for continuous folder playback without duplicate tracks.
+- Add previous and next track controls to the in-app player.
+- Keep the playback thumb visually stable when the final rendered duration becomes known.
+- Use a light-blue selection background with dark text in the file list.
+- Show the app version beside the folder conversion controls.
+- Keep the parent-folder action fixed above the scrolling file list.
+- Replace the platform-dependent color folder emoji with a monochrome outline icon.
+
 ## 1.5.0
 
 - Continue playing the selected song while the app is in the background or the

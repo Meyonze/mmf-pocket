@@ -9,6 +9,18 @@ These checks require an Android device; they are not marked passed by a build.
 - Toggle during conversion: the old conversion must not auto-start playback.
 - Toggle repeatedly then Play: only the latest setting is used.
 - Stop then Play: the selected song starts from the beginning.
+- Previous and Next in the app move through the same queue as notification controls.
+- Previous after a random transition returns to the track that actually played immediately before it.
+- Continuous playback off: the selected song ends without advancing.
+- Continuous playback on: ordered playback advances through the current folder and stops at its final song.
+- Toggle continuous playback near a song boundary: the setting in force at completion decides whether playback advances.
+- Toggle random playback during a song: the current song continues without restarting or jumping.
+- Random playback with continuous playback off: the current song ends and playback stops.
+- Random playback with continuous playback on: the next song is chosen from unplayed MMFs directly in the visible folder, with no duplicates or nested-folder files.
+- Cached and uncached songs can be mixed in a queue, including while the screen is off.
+- While an uncached song finishes rendering, the playback thumb never moves backward unless the user seeks backward.
+- Changing folders after playback starts does not change the active queue snapshot.
+- Switching speaker mode preserves the active queue and resets its current song to 0:00.
 - Batch conversion: browsing, playback controls and the speaker switch remain usable; a progress badge stays visible in the top-right corner.
 - Batch pause: after the current file completes, progress stops; Resume continues with the next unprocessed file.
 - Change folder while playing: the current song continues; the new folder can be browsed independently.
