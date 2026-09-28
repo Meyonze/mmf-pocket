@@ -63,6 +63,16 @@ struct RenderSession {
     bool phoneSpeakerMode = false;
 };
 
+bool needsSo2SlapbackCorrection(const uint8_t* bytes, size_t size) {
+    if (bytes == nullptr || size != 10949) return false;
+    uint64_t hash = 14695981039346656037ull;
+    for (size_t i = 0; i < size; ++i) {
+        hash ^= bytes[i];
+        hash *= 1099511628211ull;
+    }
+    return hash == 0x7F81A585A70644D4ull;
+}
+
 std::string initializePlayer(const uint8_t* bytes, size_t size,
                              fxchain::smaf::MaPlayer& player) {
     if (size < 12) return "MMFファイルが空か、短すぎます";
@@ -70,7 +80,8 @@ std::string initializePlayer(const uint8_t* bytes, size_t size,
     fxchain::smaf::SmafFile file;
     if (!file.parse(bytes, size)) return "有効なSMAF/MMFファイルではありません";
 
-    if (!player.init(file, kSampleRate)) return "再生可能なトラックがありません";
+    if (!player.init(file, kSampleRate, needsSo2SlapbackCorrection(bytes, size)))
+        return "再生可能なトラックがありません";
     return {};
 }
 

@@ -115,7 +115,8 @@ std::vector<uint8_t> smafHuffmanInflate(const uint8_t* p, size_t n) {
 }
 
 // ── build ────────────────────────────────────────────────────────────────────
-bool MaPlayer::init(const SmafFile& file, uint32_t sampleRate) {
+bool MaPlayer::init(const SmafFile& file, uint32_t sampleRate,
+                    bool suppressHpsSlapbackDuplicates) {
     rate_ = sampleRate ? sampleRate : 48000;
     events_.clear(); voiceTable_.clear();
     nextEvent_ = 0; cursor_ = 0; endSample_ = 0;
@@ -205,6 +206,8 @@ bool MaPlayer::init(const SmafFile& file, uint32_t sampleRate) {
                          return !isNote(a) && isNote(b);
                      });
 
+    if (suppressHpsSlapbackDuplicates) suppressHpsSlapbackDuplicates_();
+
     // Let real envelopes finish, rather than cutting every song at +1 s.
     // Ten seconds is only a safety ceiling for held/very slow envelopes;
     // render() normally ends earlier and fades the safety boundary if reached.
@@ -213,6 +216,53 @@ bool MaPlayer::init(const SmafFile& file, uint32_t sampleRate) {
     uint64_t cap = uint64_t(kSafetySeconds * rate_);
     if (endSample_ > cap) endSample_ = cap;
     return true;
+}
+
+void MaPlayer::suppressHpsSlapbackDuplicates_() {
+    // Compatibility correction for one verified HandyPhone score whose string
+    // accompaniment is duplicated on separate parts 40/44 ms apart. On a
+    // modern full-range output that authored handset trick is heard as a strong
+    // slapback echo. The caller enables this only for the exact source-file
+    // fingerprint; ordinary SMAF scores retain their authored layering.
+    struct RecentNote {
+        uint64_t sample = 0;
+        uint16_t channel = 0;
+        bool valid = false;
+    };
+    std::array<int, 128> program{};
+    std::array<RecentNote, 128> recent{};
+    std::vector<uint64_t> suppressedIds;
+    std::vector<Ev> filtered;
+    filtered.reserve(events_.size());
+
+    const uint64_t minDelay = uint64_t(rate_) * 35 / 1000;
+    const uint64_t maxDelay = uint64_t(rate_) * 50 / 1000;
+    for (const Ev& event : events_) {
+        const unsigned channel = event.ch & 127;
+        if (event.type == Ev::Program) program[channel] = event.a & 0x7f;
+
+        if (event.type == Ev::NoteOff &&
+            std::find(suppressedIds.begin(), suppressedIds.end(), event.noteId) !=
+                suppressedIds.end()) {
+            continue;
+        }
+
+        if (event.type == Ev::NoteOn && program[channel] == 81 &&
+            event.a >= 0 && event.a < int(recent.size())) {
+            RecentNote& previous = recent[size_t(event.a)];
+            const uint64_t delay = previous.valid && event.sample >= previous.sample
+                ? event.sample - previous.sample : 0;
+            if (previous.valid && previous.channel != event.ch &&
+                delay >= minDelay && delay <= maxDelay) {
+                suppressedIds.push_back(event.noteId);
+                ++diagnostics_.suppressedHpsDuplicates;
+                continue;
+            }
+            previous = {event.sample, event.ch, true};
+        }
+        filtered.push_back(event);
+    }
+    events_.swap(filtered);
 }
 
 // decode every Mwa/Awa wave once into the bank, keyed by wave number. the
@@ -301,6 +351,7 @@ void MaPlayer::decodeTrack_(const TrackChunk& t, int base) {
     // gm voice (the "drums play piano" class).
     if (t.formatType == 0x00) {
         for (size_t i = 0; i < 4 && i / 2 < t.channelStatus.size(); ++i) {
+            chans_[(base + i) & 127].monophonic = true;
             uint8_t nib = (i % 2 == 0) ? (t.channelStatus[i / 2] >> 4)
                                        : (t.channelStatus[i / 2] & 0x0f);
             chans_[(base + i) & 127].rhythm = ((nib & 0x03) == 3);
@@ -851,7 +902,21 @@ void MaPlayer::fireEvent_(const Ev& e) {
                 : (c.rhythm || c.drum) ? FmVoicePatch::drumApprox(e.a)
                                        : FmVoicePatch::gmApprox(c.program);
             int slot = -1;
-            for (int i = 0; i < kPoolSize; ++i) if (!pool_[i].active()) { slot = i; break; }
+            // HandyPhone score parts are fixed monophonic hardware parts. A
+            // new note retriggers that part's slot; keeping its released voice
+            // alongside the replacement turns SUS tails into an audible echo.
+            if (c.monophonic) {
+                for (int i = 0; i < kPoolSize; ++i) {
+                    if (pool_[i].active() && pool_[i].channel == int(e.ch)) {
+                        slot = i;
+                        break;
+                    }
+                }
+            }
+            if (slot < 0) {
+                for (int i = 0; i < kPoolSize; ++i)
+                    if (!pool_[i].active()) { slot = i; break; }
+            }
             if (slot < 0) {
                 // Preserve held melody notes when release tails fill the pool.
                 // Prefer the quietest released voice; fully held pools use

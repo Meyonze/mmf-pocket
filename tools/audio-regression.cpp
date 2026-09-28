@@ -330,6 +330,64 @@ int main() {
     check(v.valid && v.patch.ops[0].egType && v.patch.ops[0].sr==0,
           "VM35 zero sustain rate preserved");
 
+    // MA-1/2 SUS keeps the authored RR for the damped pre-key-off stage, then
+    // changes release to rate 6 when the note's sound length ends.
+    std::vector<uint8_t> vmaSus={0x43,0x03,0,0,0, 0,1,
+        0x02,0x0f,0xf0,0,0, 0x02,0x0f,0xf0,0,0};
+    auto vs=parseVoiceExclusive(vmaSus.data(),vmaSus.size());
+    check(vs.valid && vs.patch.ops[0].sr==0 && vs.patch.ops[0].rr==6 &&
+          vs.patch.ops[1].sr==0 && vs.patch.ops[1].rr==6,
+          "VMA SUS applies bounded key-off release");
+    vmaSus[7]=0; vmaSus[12]=0;
+    auto vn=parseVoiceExclusive(vmaSus.data(),vmaSus.size());
+    check(vn.valid && vn.patch.ops[0].rr==0 && vn.patch.ops[1].rr==0,
+          "VMA without SUS preserves zero release rate");
+
+    SmafFile hps;
+    TrackChunk hpsTrack;
+    hpsTrack.trackNumber=0; hpsTrack.formatType=0;
+    hpsTrack.durationTimeBase=hpsTrack.gateTimeBase=0;
+    hpsTrack.channelStatus={0,0};
+    for (int i=0;i<40;++i) {
+        hpsTrack.sequenceData.push_back(i==0 ? 0 : 2);
+        hpsTrack.sequenceData.push_back(0x0c); // channel 0, C
+        hpsTrack.sequenceData.push_back(1);
+    }
+    hpsTrack.sequenceData.insert(hpsTrack.sequenceData.end(),{0,0,0,0});
+    hps.tracks.push_back(hpsTrack);
+    appendExclusive(hps,vmaSus);
+    MaPlayer hpsPlayer;
+    check(hpsPlayer.init(hps,8000), "HandyPhone retrigger fixture initializes");
+    float hpsBuffer[512*2];
+    while(hpsPlayer.render(hpsBuffer,512)>0) {}
+    check(hpsPlayer.diagnostics().fmNotes==40 && hpsPlayer.diagnostics().stolenFm==0,
+          "HandyPhone part retriggers one voice without echo layering");
+
+    // The optional compatibility filter is caller-gated. It removes only a
+    // same-pitch program-81 note on another HandyPhone part 35..50 ms later.
+    SmafFile slapback;
+    for (int trackNumber=0;trackNumber<2;++trackNumber) {
+        TrackChunk track;
+        track.trackNumber=trackNumber; track.formatType=0;
+        track.durationTimeBase=track.gateTimeBase=2; // 4 ms/tick
+        track.channelStatus={0,0};
+        track.sequenceData={0,0,0x30,81,
+            uint8_t(trackNumber ? 10 : 0),0x0c,10, 0,0,0,0};
+        slapback.tracks.push_back(track);
+    }
+    MaPlayer unfilteredSlapback;
+    check(unfilteredSlapback.init(slapback,8000), "unfiltered slapback initializes");
+    while(unfilteredSlapback.render(hpsBuffer,512)>0) {}
+    check(unfilteredSlapback.diagnostics().fmNotes==2 &&
+          unfilteredSlapback.diagnostics().suppressedHpsDuplicates==0,
+          "slapback compatibility filter is off by default");
+    MaPlayer filteredSlapback;
+    check(filteredSlapback.init(slapback,8000,true), "filtered slapback initializes");
+    while(filteredSlapback.render(hpsBuffer,512)>0) {}
+    check(filteredSlapback.diagnostics().fmNotes==1 &&
+          filteredSlapback.diagnostics().suppressedHpsDuplicates==1,
+          "targeted HandyPhone slapback duplicate is suppressed");
+
     FmOperator op;
     p=FmOpPatch{}; p.dt=0; p.dr=0;
     op.configure(p,44100); op.noteOn(441);

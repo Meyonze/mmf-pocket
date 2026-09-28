@@ -33,7 +33,8 @@ class MaPlayer {
 public:
     // build the engine from a parsed file. returns false only if there is
     // nothing playable at all. sampleRate is the output/device rate.
-    bool init(const SmafFile& file, uint32_t sampleRate);
+    bool init(const SmafFile& file, uint32_t sampleRate,
+              bool suppressHpsSlapbackDuplicates = false);
 
     // render interleaved stereo float. returns frames produced (< frames at
     // end of song). safe to call after the song ends (returns 0).
@@ -50,6 +51,7 @@ public:
         uint64_t fmNotes = 0, pcmNotes = 0, fallbackNotes = 0;
         uint64_t stolenFm = 0, stolenPcm = 0;
         uint64_t stolenHeldFm = 0, stolenHeldPcm = 0;
+        uint64_t suppressedHpsDuplicates = 0;
         bool tailLimitReached = false;
     };
     const Diagnostics& diagnostics() const { return diagnostics_; }
@@ -81,6 +83,7 @@ private:
         int   octShift = 0;           // handyphone octave-shift state (semitones)
         bool  drum = false;           // bank bit7 (hps) or rhythm channel
         bool  rhythm = false;         // MTR channel-status type 3 (rhythm channel)
+        bool  monophonic = false;      // HandyPhone parts own one retriggered voice slot
         int   lastVel = 64;
     };
     std::array<Chan, 128> chans_{};
@@ -148,6 +151,7 @@ private:
     // Format 3 / MA-7 SEQU: mobile-style events extended from 16 to 32
     // channels by using status bit 7 as the channel-bank selector.
     void decodeMa7_(const uint8_t* p, size_t n, int base, double tbDms, double tbGms);
+    void suppressHpsSlapbackDuplicates_();
 
     // resolve a channel's current patch (voice table hit or gm fallback).
     const FmVoicePatch& patchFor_(int ch, int note, bool& isPcmOut) const;

@@ -73,6 +73,13 @@ MA-7 device effects require separate validation. Future work must distinguish sp
 corrections, tested transport decoding and listening/hardware calibration;
 do not substitute global EQ or shorter tails for those tasks.
 
+For MA-1/2 VMA voices, `SUS=ON` preserves the authored RR for the damped
+pre-key-off stage and changes only the key-off release to rate 6. This follows
+the YMU757B behaviour and prevents zero-RR accompaniment voices from remaining
+held until the renderer's safety boundary. HandyPhone score parts also
+retrigger their fixed voice slot instead of accumulating release tails from
+earlier notes on the same hardware part.
+
 ## MA-7 investigation
 
 Format 3 is not Mobile Standard format 2. Its SEQU stream keeps the Mobile event

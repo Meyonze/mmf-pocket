@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.5.2
+
+- Correct MA-1/2 VMA `SUS` handling so affected accompaniment voices switch
+  to the specified bounded release instead of remaining held after key-off.
+- Retrigger each fixed HandyPhone part in one voice slot so released `SUS`
+  tails do not layer underneath subsequent notes as an echo.
+- Invalidate older converted WAV caches so the corrected MA-1/2 rendering
+  is used immediately after the app update.
+- Correct the verified 40/44 ms duplicate accompaniment in the affected
+  `Stab the Sword of justice` HandyPhone source without changing other files.
+
 ## 1.5.1
 
 - Add optional continuous playback for the current folder, stopping at its end.

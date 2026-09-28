@@ -291,7 +291,10 @@ ParsedVoice parseVoiceExclusive(const uint8_t* p, size_t n) {
                 o.vib   = (op[0] & 0x08) != 0;   // VIB  (bit3)
                 bool egt = (op[0] & 0x04) != 0;  // EGT  (bit2)
                 o.ksr   = (op[0] & 0x01);
-                o.rr = (op[1] >> 4) & 0x0f; o.dr = op[1] & 0x0f;
+                const uint8_t rawRr = (op[1] >> 4) & 0x0f;
+                const bool sus = (op[0] & 0x02) != 0;
+                o.rr = sus ? 6 : rawRr;
+                o.dr = op[1] & 0x0f;
                 o.ar = (op[2] >> 4) & 0x0f; o.sl = op[2] & 0x0f;
                 o.tl = (op[3] >> 2) & 0x3f; o.ksl = op[3] & 0x03;
                 // +4: DVB(b7-6) | DAM(b5-4) | AM(b3) | WS(b2-0)
@@ -299,8 +302,10 @@ ParsedVoice parseVoiceExclusive(const uint8_t* p, size_t n) {
                 o.dvb  = uint8_t((op[4] >> 6) & 3);
                 o.dam  = uint8_t((op[4] >> 4) & 3);
                 o.wave = op[4] & 0x07;
-                // VMAFMOperator.ToVM35: SR = EGT ? 0 : RR.
-                o.sr = egt ? 0 : (op[1] >> 4) & 0x0f;
+                // MA-1/2 SUS changes release to rate 6 at the authored sound
+                // length. Keep the raw RR for the damped pre-key-off stage;
+                // only the release phase receives the SUS override.
+                o.sr = egt ? 0 : rawRr;
                 o.egType = true; // EGT already converted into SR above.
                 if (i == 0) o.fb = uint8_t(fb);   // VMA feedback lands on op0
                 op += 5;
