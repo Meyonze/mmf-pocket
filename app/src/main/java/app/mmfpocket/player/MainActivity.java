@@ -91,6 +91,9 @@ public final class MainActivity extends Activity {
     private TextView parentFolderRow;
     private TextView batchStatusLabel;
     private TextView statusLabel;
+    private IllustratedMafuMascotView mafuMascotView;
+    private int mafuMotionPace = IllustratedMafuMascotView.PACE_NORMAL;
+    private int mafuRoutineSeed;
     private TextView formatLabel;
     private TextView nowPlayingLabel;
     private TextView timeLabel;
@@ -102,8 +105,6 @@ public final class MainActivity extends Activity {
     private ImageButton randomPlaybackButton;
     private Switch phoneSoundSwitch;
     private ImageButton continuousPlaybackButton;
-    private TextView continuousPlaybackStateLabel;
-    private TextView randomPlaybackStateLabel;
     private ImageButton previousTrackButton;
     private ImageButton playPauseButton;
     private ImageButton nextTrackButton;
@@ -320,29 +321,70 @@ public final class MainActivity extends Activity {
 
         LinearLayout playerPanel = new LinearLayout(this);
         playerPanel.setOrientation(LinearLayout.VERTICAL);
-        playerPanel.setPadding(dp(12), dp(10), dp(12), dp(10));
+        playerPanel.setPadding(dp(12), dp(6), dp(12), dp(6));
         playerPanel.setBackgroundResource(R.drawable.player_panel);
         LinearLayout.LayoutParams playerParams = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT);
         playerParams.topMargin = dp(8);
 
+        LinearLayout playerUpper = new LinearLayout(this);
+        playerUpper.setOrientation(LinearLayout.HORIZONTAL);
+        playerUpper.setGravity(Gravity.CENTER_VERTICAL);
+
+        LinearLayout playerUpperContent = new LinearLayout(this);
+        playerUpperContent.setOrientation(LinearLayout.VERTICAL);
+        playerUpperContent.setGravity(Gravity.CENTER_VERTICAL);
+
         LinearLayout playerTop = new LinearLayout(this);
         playerTop.setOrientation(LinearLayout.HORIZONTAL);
         playerTop.setGravity(Gravity.CENTER_VERTICAL);
 
+        mafuMascotView = new IllustratedMafuMascotView(this);
+        mafuMascotView.setAlpha(0.72f);
+        LinearLayout.LayoutParams mascotParams = new LinearLayout.LayoutParams(dp(84), dp(92));
+        mascotParams.rightMargin = dp(6);
+        playerUpper.addView(mafuMascotView, mascotParams);
+
+        LinearLayout trackInfo = new LinearLayout(this);
+        trackInfo.setOrientation(LinearLayout.VERTICAL);
+        trackInfo.setGravity(Gravity.CENTER_VERTICAL);
+
         nowPlayingLabel = new TextView(this);
         nowPlayingLabel.setText(R.string.no_track_selected);
-        nowPlayingLabel.setTextSize(16);
+        nowPlayingLabel.setTextSize(15);
         nowPlayingLabel.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         nowPlayingLabel.setSingleLine(true);
         nowPlayingLabel.setEllipsize(TextUtils.TruncateAt.MIDDLE);
-        playerTop.addView(nowPlayingLabel, new LinearLayout.LayoutParams(
+        trackInfo.addView(nowPlayingLabel);
+
+        statusLabel = new TextView(this);
+        statusLabel.setText(R.string.select_mmf_prompt);
+        statusLabel.setTextSize(12);
+        statusLabel.setTextColor(0xFF1E88E5);
+        statusLabel.setSingleLine(true);
+        statusLabel.setEllipsize(TextUtils.TruncateAt.END);
+        trackInfo.addView(statusLabel);
+
+        playerTop.addView(trackInfo, new LinearLayout.LayoutParams(
                 0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
 
+        LinearLayout playerMetadata = new LinearLayout(this);
+        playerMetadata.setOrientation(LinearLayout.VERTICAL);
+        playerMetadata.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
+
+        formatLabel = new TextView(this);
+        formatLabel.setTextSize(12);
+        formatLabel.setTextColor(0xFF9E9E9E);
+        formatLabel.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        formatLabel.setGravity(Gravity.END);
+        formatLabel.setSingleLine(true);
+        playerMetadata.addView(formatLabel);
+
         phoneSoundSwitch = new Switch(this);
-        phoneSoundSwitch.setText(R.string.phone_sound_mode_compact);
-        phoneSoundSwitch.setTextSize(12);
+        phoneSoundSwitch.setText(R.string.phone_sound_mode_short);
+        phoneSoundSwitch.setTextSize(9);
+        phoneSoundSwitch.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
         phoneSoundSwitch.setChecked(getSharedPreferences(PREFS, MODE_PRIVATE)
                 .getBoolean(PREF_PHONE_SOUND, false));
         phoneSoundSwitch.setOnCheckedChangeListener((button, checked) -> {
@@ -351,8 +393,10 @@ public final class MainActivity extends Activity {
             updatePhoneSoundMode(checked);
             statusLabel.setText(checked ? R.string.phone_mode_enabled : R.string.phone_mode_disabled);
         });
-        playerTop.addView(phoneSoundSwitch);
-        playerPanel.addView(playerTop);
+        playerMetadata.addView(phoneSoundSwitch);
+        playerTop.addView(playerMetadata);
+        playerUpperContent.addView(playerTop, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(52)));
 
         playbackProgress = new SeekBar(this);
         playbackProgress.setMax(1000);
@@ -388,13 +432,24 @@ public final class MainActivity extends Activity {
                 else updatePlayerProgress();
             }
         });
-        playerPanel.addView(playbackProgress);
+        playbackProgress.setPadding(dp(10), 0, dp(10), 0);
+        LinearLayout progressRow = new LinearLayout(this);
+        progressRow.setOrientation(LinearLayout.HORIZONTAL);
+        progressRow.setGravity(Gravity.CENTER_VERTICAL);
+        progressRow.addView(playbackProgress, new LinearLayout.LayoutParams(
+                0, dp(32), 1));
+        playerUpperContent.addView(progressRow, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(32)));
+        playerUpper.addView(playerUpperContent, new LinearLayout.LayoutParams(
+                0, LinearLayout.LayoutParams.MATCH_PARENT, 1));
+        playerPanel.addView(playerUpper, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(92)));
 
         timeLabel = new TextView(this);
         timeLabel.setText(R.string.zero_playback_time);
-        timeLabel.setTextSize(12);
-        timeLabel.setGravity(Gravity.START);
-        playerPanel.addView(timeLabel);
+        timeLabel.setTextSize(11);
+        timeLabel.setTextColor(0xFF68707B);
+        timeLabel.setGravity(Gravity.START | Gravity.TOP);
 
         LinearLayout controls = new LinearLayout(this);
         controls.setOrientation(LinearLayout.HORIZONTAL);
@@ -418,22 +473,16 @@ public final class MainActivity extends Activity {
         modeControls.setOrientation(LinearLayout.HORIZONTAL);
         modeControls.setGravity(Gravity.CENTER_VERTICAL | Gravity.END);
 
-        LinearLayout continuousControl = new LinearLayout(this);
-        continuousControl.setOrientation(LinearLayout.VERTICAL);
-        continuousControl.setGravity(Gravity.CENTER_HORIZONTAL);
         continuousPlaybackButton = new ImageButton(this);
         continuousPlaybackButton.setImageResource(R.drawable.ic_repeat_all);
         continuousPlaybackButton.setImageTintList(modeIconColors);
         continuousPlaybackButton.setBackgroundResource(R.drawable.mode_button_background);
-        continuousPlaybackButton.setPadding(dp(7), dp(7), dp(7), dp(7));
+        continuousPlaybackButton.setPadding(dp(8), dp(8), dp(8), dp(8));
         continuousPlaybackButton.setOnClickListener(v -> setContinuousPlaybackEnabled(
                 !continuousPlaybackEnabled, true));
-        continuousControl.addView(continuousPlaybackButton,
-                new LinearLayout.LayoutParams(dp(38), dp(38)));
-        continuousPlaybackStateLabel = createModeStateLabel();
-        continuousControl.addView(continuousPlaybackStateLabel);
         updateContinuousPlaybackButton();
-        modeControls.addView(continuousControl, new LinearLayout.LayoutParams(dp(42), dp(52)));
+        modeControls.addView(continuousPlaybackButton,
+                new LinearLayout.LayoutParams(dp(38), dp(38)));
 
         previousTrackButton = new ImageButton(this);
         previousTrackButton.setImageResource(R.drawable.ic_skip_previous);
@@ -444,17 +493,23 @@ public final class MainActivity extends Activity {
         previousTrackButton.setEnabled(false);
         previousTrackButton.setOnClickListener(v -> skipToPreviousTrack());
         transportControls.addView(previousTrackButton,
-                new LinearLayout.LayoutParams(dp(40), dp(40)));
+                new LinearLayout.LayoutParams(dp(38), dp(38)));
 
         playPauseButton = new ImageButton(this);
         playPauseButton.setImageResource(R.drawable.ic_play);
         playPauseButton.setContentDescription(getString(R.string.play_description));
-        playPauseButton.setBackgroundResource(R.drawable.control_button_background);
-        playPauseButton.setPadding(dp(12), dp(12), dp(12), dp(12));
+        playPauseButton.setBackgroundResource(R.drawable.primary_control_button_background);
+        playPauseButton.setImageTintList(new ColorStateList(
+                new int[][] {
+                        new int[] {-android.R.attr.state_enabled},
+                        new int[] {}
+                },
+                new int[] {0xFFEEEEEE, 0xFFFFFFFF}));
+        playPauseButton.setPadding(dp(11), dp(11), dp(11), dp(11));
         playPauseButton.setEnabled(false);
         playPauseButton.setOnClickListener(v -> togglePlayback());
-        LinearLayout.LayoutParams playParams = new LinearLayout.LayoutParams(dp(48), dp(48));
-        playParams.leftMargin = dp(6);
+        LinearLayout.LayoutParams playParams = new LinearLayout.LayoutParams(dp(52), dp(52));
+        playParams.leftMargin = dp(3);
         transportControls.addView(playPauseButton, playParams);
 
         nextTrackButton = new ImageButton(this);
@@ -464,77 +519,52 @@ public final class MainActivity extends Activity {
         nextTrackButton.setPadding(dp(9), dp(9), dp(9), dp(9));
         nextTrackButton.setEnabled(false);
         nextTrackButton.setOnClickListener(v -> skipToNextTrack());
-        LinearLayout.LayoutParams nextParams = new LinearLayout.LayoutParams(dp(40), dp(40));
-        nextParams.leftMargin = dp(6);
-        transportControls.addView(nextTrackButton, nextParams);
+        LinearLayout.LayoutParams nextParams = new LinearLayout.LayoutParams(dp(38), dp(38));
+        nextParams.leftMargin = dp(3);
 
         stopButton = new ImageButton(this);
         stopButton.setImageResource(R.drawable.ic_stop);
         stopButton.setContentDescription(getString(R.string.stop_description));
         stopButton.setBackgroundResource(R.drawable.control_button_background);
-        stopButton.setPadding(dp(10), dp(10), dp(10), dp(10));
+        stopButton.setPadding(dp(9), dp(9), dp(9), dp(9));
         stopButton.setEnabled(false);
         stopButton.setOnClickListener(v -> stopPlayback(true));
-        LinearLayout.LayoutParams stopParams = new LinearLayout.LayoutParams(dp(40), dp(40));
-        stopParams.leftMargin = dp(6);
+        LinearLayout.LayoutParams stopParams = new LinearLayout.LayoutParams(dp(38), dp(38));
+        stopParams.leftMargin = dp(3);
         transportControls.addView(stopButton, stopParams);
+        transportControls.addView(nextTrackButton, nextParams);
 
-        LinearLayout randomControl = new LinearLayout(this);
-        randomControl.setOrientation(LinearLayout.VERTICAL);
-        randomControl.setGravity(Gravity.CENTER_HORIZONTAL);
         randomPlaybackButton = new ImageButton(this);
         randomPlaybackButton.setImageResource(R.drawable.ic_shuffle);
         randomPlaybackButton.setImageTintList(modeIconColors);
         randomPlaybackButton.setBackgroundResource(R.drawable.mode_button_background);
-        randomPlaybackButton.setPadding(dp(7), dp(7), dp(7), dp(7));
+        randomPlaybackButton.setPadding(dp(8), dp(8), dp(8), dp(8));
         randomPlaybackEnabled = getSharedPreferences(PREFS, MODE_PRIVATE)
                 .getBoolean(PREF_RANDOM_PLAYBACK, false);
         randomPlaybackButton.setOnClickListener(v -> setRandomPlaybackEnabled(
                 !randomPlaybackEnabled, true));
-        randomControl.addView(randomPlaybackButton,
-                new LinearLayout.LayoutParams(dp(38), dp(38)));
-        randomPlaybackStateLabel = createModeStateLabel();
-        randomControl.addView(randomPlaybackStateLabel);
         updateRandomPlaybackButton();
         LinearLayout.LayoutParams randomControlParams =
-                new LinearLayout.LayoutParams(dp(42), dp(52));
-        randomControlParams.leftMargin = dp(6);
-        modeControls.addView(randomControl, randomControlParams);
+                new LinearLayout.LayoutParams(dp(38), dp(38));
+        randomControlParams.leftMargin = dp(4);
+        modeControls.addView(randomPlaybackButton, randomControlParams);
 
+        controls.addView(timeLabel, new LinearLayout.LayoutParams(dp(72), dp(52)));
         LinearLayout.LayoutParams transportParams = new LinearLayout.LayoutParams(
                 0, dp(52), 1);
         controls.addView(transportControls, transportParams);
+        View modeDivider = new View(this);
+        modeDivider.setBackgroundColor(0xFFE0E0E0);
+        LinearLayout.LayoutParams dividerParams = new LinearLayout.LayoutParams(dp(1), dp(34));
+        dividerParams.leftMargin = dp(4);
+        dividerParams.rightMargin = dp(6);
+        controls.addView(modeDivider, dividerParams);
         LinearLayout.LayoutParams modeParams = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, dp(52));
         controls.addView(modeControls, modeParams);
         playerPanel.addView(controls, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, dp(52)));
 
-        LinearLayout playerFooter = new LinearLayout(this);
-        playerFooter.setOrientation(LinearLayout.HORIZONTAL);
-        playerFooter.setGravity(Gravity.CENTER_VERTICAL);
-        playerFooter.setPadding(0, dp(6), 0, 0);
-
-        statusLabel = new TextView(this);
-        statusLabel.setText(R.string.select_mmf_prompt);
-        statusLabel.setTextSize(12);
-        statusLabel.setSingleLine(true);
-        statusLabel.setEllipsize(TextUtils.TruncateAt.END);
-        playerFooter.addView(statusLabel, new LinearLayout.LayoutParams(
-                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
-
-        formatLabel = new TextView(this);
-        formatLabel.setTextSize(12);
-        formatLabel.setTextColor(0xFF9E9E9E);
-        formatLabel.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        formatLabel.setGravity(Gravity.END);
-        formatLabel.setSingleLine(true);
-        formatLabel.setPadding(dp(10), 0, 0, 0);
-        playerFooter.addView(formatLabel, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT));
-
-        playerPanel.addView(playerFooter);
         root.addView(playerPanel, playerParams);
         return root;
     }
@@ -688,7 +718,7 @@ public final class MainActivity extends Activity {
         formatLabel.setText("");
         playPauseButton.setEnabled(true);
         stopButton.setEnabled(true);
-        statusLabel.setText(getString(R.string.converting_file, entry.name));
+        statusLabel.setText(R.string.player_status_converting);
         MediaController controller = mediaController;
         if (controller == null) {
             pendingPlaybackRequest = request;
@@ -871,6 +901,7 @@ public final class MainActivity extends Activity {
                 }
             } catch (Exception error) {
                 if (controllerFuture == future) controllerFuture = null;
+                updateMafuMascot(false);
                 statusLabel.setText(getString(R.string.player_connection_failed));
             }
         }, getMainExecutor());
@@ -902,10 +933,14 @@ public final class MainActivity extends Activity {
             }
             name = item.mediaMetadata.title.toString();
             currentName = name;
+            mafuRoutineSeed = item.mediaId.hashCode();
             nowPlayingLabel.setText(name);
             Bundle extras = item.mediaMetadata.extras;
             formatLabel.setText(extras == null ? ""
                     : extras.getString(MmfPlayer.EXTRA_FORMAT_LABEL, ""));
+            mafuMotionPace = extras == null ? IllustratedMafuMascotView.PACE_NORMAL
+                    : extras.getInt(MmfPlayer.EXTRA_MOTION_PACE,
+                            IllustratedMafuMascotView.PACE_NORMAL);
             int visibleIndex = indexOfBrowserEntry(item.mediaId);
             if (visibleIndex == C.INDEX_UNSET) {
                 listView.clearChoices();
@@ -932,22 +967,23 @@ public final class MainActivity extends Activity {
             statusLabel.setText(getString(R.string.playback_failed,
                     controller.getPlayerError().getMessage()));
         } else if (state == Player.STATE_BUFFERING && name != null) {
-            statusLabel.setText(getString(R.string.converting_file, name));
+            statusLabel.setText(R.string.player_status_converting);
         } else if (state == Player.STATE_READY && name != null) {
             if (controller.isPlaying()) {
-                statusLabel.setText(getString(R.string.playing_file, name));
+                statusLabel.setText(R.string.player_status_playing);
             } else if (controller.getPlaybackSuppressionReason()
                     == Player.PLAYBACK_SUPPRESSION_REASON_TRANSIENT_AUDIO_FOCUS_LOSS) {
-                statusLabel.setText(getString(R.string.audio_focus_paused, name));
+                statusLabel.setText(R.string.player_status_audio_focus_paused);
             } else {
-                statusLabel.setText(getString(R.string.paused_file, name));
+                statusLabel.setText(R.string.player_status_paused);
             }
         } else if (state == Player.STATE_ENDED && name != null) {
-            statusLabel.setText(getString(R.string.playback_finished, name));
+            statusLabel.setText(R.string.player_status_finished);
         } else if (state == Player.STATE_IDLE && hasItem) {
             statusLabel.setText(R.string.playback_stopped);
         }
 
+        updateMafuMascot(controller.isPlaying());
         updatePlayerProgress();
         if (controller.isPlaying() || state == Player.STATE_BUFFERING) startProgressUpdates();
         else progressHandler.removeCallbacks(progressUpdater);
@@ -994,7 +1030,14 @@ public final class MainActivity extends Activity {
         lastVisualProgress = 0;
         allowProgressRegression = true;
         timeLabel.setText(R.string.zero_playback_time);
+        updateMafuMascot(false);
         if (updateStatus) statusLabel.setText(R.string.playback_stopped);
+    }
+
+    private void updateMafuMascot(boolean playing) {
+        if (mafuMascotView == null) return;
+        mafuMascotView.setAlpha(playing ? 1f : 0.72f);
+        mafuMascotView.setPlaybackState(playing, mafuMotionPace, mafuRoutineSeed);
     }
 
     private void updatePhoneSoundMode(boolean enabled) {
@@ -1042,12 +1085,6 @@ public final class MainActivity extends Activity {
     private void updateContinuousPlaybackButton() {
         if (continuousPlaybackButton == null) return;
         continuousPlaybackButton.setSelected(continuousPlaybackEnabled);
-        if (continuousPlaybackStateLabel != null) {
-            continuousPlaybackStateLabel.setText(continuousPlaybackEnabled
-                    ? R.string.mode_on : R.string.mode_off);
-            continuousPlaybackStateLabel.setTextColor(
-                    continuousPlaybackEnabled ? 0xFF283593 : 0xFF616161);
-        }
         continuousPlaybackButton.setContentDescription(getString(continuousPlaybackEnabled
                 ? R.string.continuous_playback_on_description
                 : R.string.continuous_playback_off_description));
@@ -1078,27 +1115,11 @@ public final class MainActivity extends Activity {
         if (randomPlaybackButton == null) return;
         randomPlaybackButton.setEnabled(continuousPlaybackEnabled);
         randomPlaybackButton.setSelected(randomPlaybackEnabled);
-        if (randomPlaybackStateLabel != null) {
-            randomPlaybackStateLabel.setText(randomPlaybackEnabled
-                    ? R.string.mode_on : R.string.mode_off);
-            randomPlaybackStateLabel.setTextColor(!continuousPlaybackEnabled
-                    ? 0xFFBDBDBD : randomPlaybackEnabled ? 0xFF283593 : 0xFF616161);
-        }
         randomPlaybackButton.setContentDescription(getString(!continuousPlaybackEnabled
                 ? R.string.random_playback_unavailable_description
                 : randomPlaybackEnabled
                         ? R.string.random_playback_on_description
                         : R.string.random_playback_off_description));
-    }
-
-    private TextView createModeStateLabel() {
-        TextView label = new TextView(this);
-        label.setTextSize(8);
-        label.setTextColor(0xFF616161);
-        label.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        label.setGravity(Gravity.CENTER);
-        label.setSingleLine(true);
-        return label;
     }
 
     private int indexOfEntry(List<MmfEntry> queue, String mediaId) {
@@ -1184,6 +1205,7 @@ public final class MainActivity extends Activity {
     protected void onStop() {
         cancelBatchConversion();
         activityStarted = false;
+        updateMafuMascot(false);
         disconnectController();
         super.onStop();
     }

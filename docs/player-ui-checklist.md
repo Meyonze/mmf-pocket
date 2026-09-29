@@ -3,6 +3,45 @@
 These checks require an Android device; they are not marked passed by a build.
 
 - No song selected: toggle speaker mode; Play remains disabled.
+- The solid 3D mascot Mafu (「まふ」) keeps a rounded pale-blue body, note ears,
+  mitten hands and oval feet; it must not regress to a simplified insect shape.
+- Mafu fills the enlarged left character area without clipping during jumps.
+  Its body reads as white and softly padded, with pale-blue shadowing rather
+  than a gray or metallic surface; playback displays it at full opacity.
+- A clearly visible dark outer line follows the complete 3D silhouette at all
+  angles without trails, doubled edges or gaps around the note ears and feet.
+- The large mascot spans the metadata and seek rows on the left. The seek bar
+  begins beside the mascot, and the player card does not gain a separate tall
+  mascot row or excessive vertical whitespace.
+- The mascot column is narrower than its height, leaving more horizontal space
+  for metadata. Previous, Play/Pause, Stop and Next are visibly larger than
+  before, while the complete player card retains the same compact height.
+- The player card keeps Mafu, title/status and format on its first row, the seek
+  bar on its second row, and time/transport/mode controls on its third row.
+- The seek thumb remains a full circle at 0:00 and at the track end; neither
+  horizontal edge clips it into a semicircle.
+- The status line says only the state (for example, "再生中") and never repeats
+  the filename already shown directly above it.
+- The blue primary Play/Pause button remains centered in the transport group;
+  Stop sits before Next, and Repeat/Shuffle stay grouped after the divider.
+- Paused/stopped Mafu breathes subtly. Slow songs float, ordinary songs dance
+  with changing accents, and genuinely fast songs use larger whole-character
+  run and hop motions without distorting the illustrated design. Ordinary
+  playback adds occasional acrobatic choreography; switching tracks must select
+  the new motion pace.
+- Playback choreography visibly includes a cartwheel, a backward flip, a
+  single figure-style pirouette and a two-step happy hop. Every move
+  begins and ends at the same pose without a visual jump or rapid trembling.
+- Different tracks can begin with different tricks. A backflip must show a
+  crouch, a higher backward rotation and a landing squash, not resemble another
+  low cartwheel.
+- Halfway through a backflip the back emblem is visible upside down. The face,
+  feet and ears are depth-tested parts of one solid model and disappear behind
+  the body, never showing through or leaving translucent duplicate images.
+- At 90 and 270 degrees in either rotation axis, the body retains its rounded
+  thickness. Every intermediate angle is rendered from the same geometry.
+- Check frame pacing on a device while an uncached song is converting, as well
+  as during cached playback. Desktop render timing is not a device FPS result.
 - Select and play a song, then toggle speaker mode: audio stops, title/selection
   remain, progress resets, Play becomes enabled. Play uses the new mode from 0:00.
 - Pause then toggle: same stopped/ready-to-restart behaviour.

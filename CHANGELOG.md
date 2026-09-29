@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.6.0 - 2026-09-29
+
+- Add the 3D mascot Mafu (「まふ」), whose floating, dancing and running pace is
+  selected from per-channel note activity in the current MMF.
+- Give Mafu a solid rounded body with white plush shading, pale-blue shadows,
+  a bold dark outline and depth-correct cartwheels, backflips, pirouettes and
+  hops without sprite dissolves or overlapping afterimages.
+- Rebuild the player card with track metadata and the seek bar beside Mafu,
+  larger transport buttons and compact vertical spacing.
+- Keep status text from repeating the filename, keep the seek thumb round at
+  both ends, and vary the choreography between tracks.
+
 ## 1.5.2
 
 - Correct MA-1/2 VMA `SUS` handling so affected accompaniment voices switch

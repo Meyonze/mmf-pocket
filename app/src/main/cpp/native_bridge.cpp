@@ -204,6 +204,12 @@ std::string detectFormat(const uint8_t* bytes, size_t size) {
     }
 }
 
+int detectMotionPace(const uint8_t* bytes, size_t size) {
+    fxchain::smaf::MaPlayer player;
+    std::string error = initializePlayer(bytes, size, player);
+    return error.empty() ? player.motionPace() : 1;
+}
+
 } // namespace
 
 extern "C" JNIEXPORT jstring JNICALL
@@ -217,6 +223,20 @@ Java_app_mmfpocket_player_NativeMmfRenderer_detectFormat(
         return toJavaString(env, detectFormat(bytes.data(), bytes.size()));
     } catch (...) {
         return toJavaString(env, {});
+    }
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_app_mmfpocket_player_NativeMmfRenderer_detectMotionPace(
+        JNIEnv* env, jclass, jbyteArray mmfData) {
+    if (mmfData == nullptr) return 1;
+
+    std::vector<uint8_t> bytes;
+    if (!copyJavaBytes(env, mmfData, bytes)) return 1;
+    try {
+        return detectMotionPace(bytes.data(), bytes.size());
+    } catch (...) {
+        return 1;
     }
 }
 

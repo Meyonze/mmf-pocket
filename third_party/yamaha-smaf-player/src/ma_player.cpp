@@ -122,7 +122,7 @@ bool MaPlayer::init(const SmafFile& file, uint32_t sampleRate,
     nextEvent_ = 0; cursor_ = 0; endSample_ = 0;
     nextNoteId_ = 1;
     fmSteal_ = pcmSteal_ = 0;
-    scoreEndSample_ = 0; ended_ = false; diagnostics_ = {};
+    scoreEndSample_ = 0; motionPace_ = 1; ended_ = false; diagnostics_ = {};
     for (auto& wave : voiceWaveBank_) wave = PcmSample{};
     for (auto& c : chans_) c = Chan{};
     for (auto& v : pool_) { v = FmVoice{}; v.setSampleRate(double(rate_)); }
@@ -207,6 +207,7 @@ bool MaPlayer::init(const SmafFile& file, uint32_t sampleRate,
                      });
 
     if (suppressHpsSlapbackDuplicates) suppressHpsSlapbackDuplicates_();
+    calculateMotionPace_();
 
     // Let real envelopes finish, rather than cutting every song at +1 s.
     // Ten seconds is only a safety ceiling for held/very slow envelopes;
@@ -216,6 +217,39 @@ bool MaPlayer::init(const SmafFile& file, uint32_t sampleRate,
     uint64_t cap = uint64_t(kSafetySeconds * rate_);
     if (endSample_ > cap) endSample_ = cap;
     return true;
+}
+
+void MaPlayer::calculateMotionPace_() {
+    // SMAF timing is metric and carries no BPM event. Use the lower-middle
+    // note-on spacing per channel as a stable activity estimate. Combining all
+    // channels makes ordinary polyphony look artificially frantic. This value
+    // never affects playback; it only selects the mascot's motion vocabulary.
+    std::array<uint64_t, 128> lastOnset{};
+    std::array<bool, 128> hasOnset{};
+    std::vector<uint32_t> gapsMs;
+    for (const Ev& event : events_) {
+        if (event.type != Ev::NoteOn && event.type != Ev::WaveOn) continue;
+        const size_t channel = size_t(event.ch & 127);
+        if (!hasOnset[channel]) {
+            hasOnset[channel] = true;
+            lastOnset[channel] = event.sample;
+            continue;
+        }
+        uint64_t frames = event.sample - lastOnset[channel];
+        lastOnset[channel] = event.sample;
+        uint64_t milliseconds = frames * 1000 / std::max<uint32_t>(1, rate_);
+        if (milliseconds >= 90 && milliseconds <= 2000)
+            gapsMs.push_back(static_cast<uint32_t>(milliseconds));
+    }
+    if (gapsMs.size() < 4) {
+        motionPace_ = 1;
+        return;
+    }
+
+    std::sort(gapsMs.begin(), gapsMs.end());
+    const size_t representativeIndex = (gapsMs.size() - 1) * 45 / 100;
+    const uint32_t representativeGap = gapsMs[representativeIndex];
+    motionPace_ = representativeGap <= 185 ? 2 : representativeGap >= 620 ? 0 : 1;
 }
 
 void MaPlayer::suppressHpsSlapbackDuplicates_() {

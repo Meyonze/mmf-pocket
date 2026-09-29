@@ -44,6 +44,8 @@ public:
     // Upper bound including release safety allowance, not exact WAV duration.
     uint64_t totalSamples() const { return endSample_; }
     uint64_t scoreEndSamples() const { return scoreEndSample_; }
+    // Coarse note-on activity used only for the UI mascot: 0 slow, 1 normal, 2 fast.
+    int motionPace() const { return motionPace_; }
     bool  finished() const { return ended_; }
     int   channelHint() const { return 2; }
 
@@ -130,6 +132,7 @@ private:
     uint64_t cursor_ = 0;
     uint64_t endSample_ = 0;
     uint64_t scoreEndSample_ = 0;
+    int motionPace_ = 1;
     bool ended_ = false;
     Diagnostics diagnostics_{};
 
@@ -152,6 +155,7 @@ private:
     // channels by using status bit 7 as the channel-bank selector.
     void decodeMa7_(const uint8_t* p, size_t n, int base, double tbDms, double tbGms);
     void suppressHpsSlapbackDuplicates_();
+    void calculateMotionPace_();
 
     // resolve a channel's current patch (voice table hit or gm fallback).
     const FmVoicePatch& patchFor_(int ch, int note, bool& isPcmOut) const;

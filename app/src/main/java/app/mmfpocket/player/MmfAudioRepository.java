@@ -33,6 +33,7 @@ final class MmfAudioRepository {
             Context context, Uri uri, boolean phoneSpeakerMode) throws IOException {
         byte[] bytes = readMmf(context, uri);
         String formatLabel = NativeMmfRenderer.detectFormat(bytes);
+        int motionPace = NativeMmfRenderer.detectMotionPace(bytes);
         File cacheDirectory = new File(context.getCacheDir(), CACHE_DIR_NAME);
         if (!cacheDirectory.isDirectory() && !cacheDirectory.mkdirs()) {
             throw new IOException(context.getString(R.string.cache_create_failed));
@@ -45,12 +46,14 @@ final class MmfAudioRepository {
             //noinspection ResultOfMethodCallIgnored
             cached.setLastModified(System.currentTimeMillis());
             return new PlaybackSource(
-                    bytes, cached, cached, null, phoneSpeakerMode, formatLabel, "");
+                    bytes, cached, cached, null, phoneSpeakerMode, formatLabel,
+                    motionPace, "");
         }
 
         File partial = new File(cacheDirectory, key + "-" + System.nanoTime() + ".part");
         return new PlaybackSource(
-                bytes, null, cached, partial, phoneSpeakerMode, formatLabel, "");
+                bytes, null, cached, partial, phoneSpeakerMode, formatLabel,
+                motionPace, "");
     }
 
     static RenderResult renderOrGetCached(
@@ -152,21 +155,24 @@ final class MmfAudioRepository {
         final File partial;
         final boolean phoneSpeakerMode;
         final String formatLabel;
+        final int motionPace;
         final String error;
 
         PlaybackSource(byte[] bytes, File cached, File target, File partial,
-                       boolean phoneSpeakerMode, String formatLabel, String error) {
+                       boolean phoneSpeakerMode, String formatLabel, int motionPace,
+                       String error) {
             this.bytes = bytes;
             this.cached = cached;
             this.target = target;
             this.partial = partial;
             this.phoneSpeakerMode = phoneSpeakerMode;
             this.formatLabel = formatLabel;
+            this.motionPace = motionPace;
             this.error = error;
         }
 
         static PlaybackSource error(String message) {
-            return new PlaybackSource(null, null, null, null, false, "", message);
+            return new PlaybackSource(null, null, null, null, false, "", 1, message);
         }
     }
 }

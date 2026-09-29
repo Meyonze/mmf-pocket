@@ -10,6 +10,9 @@ final class NativeMmfRenderer {
     /** Returns the SMAF generation and score format used by the file. */
     static native String detectFormat(byte[] mmfData);
 
+    /** Returns a UI-only note activity class: 0 slow, 1 normal, 2 fast. */
+    static native int detectMotionPace(byte[] mmfData);
+
     /** Returns an empty string on success, otherwise a user-readable error. */
     static native String renderToWav(byte[] mmfData, String outputPath, boolean phoneSpeakerMode);
 

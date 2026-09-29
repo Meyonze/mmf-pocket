@@ -44,6 +44,7 @@ import java.util.function.BooleanSupplier;
 final class MmfPlayer extends SimpleBasePlayer {
     static final String EXTRA_PHONE_SPEAKER = "app.mmfpocket.extra.PHONE_SPEAKER";
     static final String EXTRA_FORMAT_LABEL = "app.mmfpocket.extra.FORMAT_LABEL";
+    static final String EXTRA_MOTION_PACE = "app.mmfpocket.extra.MOTION_PACE";
 
     private final Context context;
     private final Handler mainHandler;
@@ -392,7 +393,7 @@ final class MmfPlayer extends SimpleBasePlayer {
             fail(source.error, PlaybackException.ERROR_CODE_IO_UNSPECIFIED);
             return;
         }
-        updateFormatMetadata(source.formatLabel);
+        updateFormatMetadata(source.formatLabel, source.motionPace);
         if (source.cached != null) startMediaPlayer(source.cached, requestGeneration);
         else startProgressivePlayback(source, requestGeneration);
     }
@@ -790,11 +791,12 @@ final class MmfPlayer extends SimpleBasePlayer {
         return Math.max(0, frames * 1000L / ProgressivePlayback.SAMPLE_RATE);
     }
 
-    private void updateFormatMetadata(String formatLabel) {
+    private void updateFormatMetadata(String formatLabel, int motionPace) {
         if (currentItem == null) return;
         Bundle extras = currentItem.mediaMetadata.extras == null
                 ? new Bundle() : new Bundle(currentItem.mediaMetadata.extras);
         extras.putString(EXTRA_FORMAT_LABEL, formatLabel);
+        extras.putInt(EXTRA_MOTION_PACE, motionPace);
         MediaMetadata metadata = new MediaMetadata.Builder()
                 .populate(currentItem.mediaMetadata)
                 .setSubtitle(formatLabel)
