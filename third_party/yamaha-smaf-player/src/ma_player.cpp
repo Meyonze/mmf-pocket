@@ -122,11 +122,14 @@ bool MaPlayer::init(const SmafFile& file, uint32_t sampleRate,
     nextEvent_ = 0; cursor_ = 0; endSample_ = 0;
     nextNoteId_ = 1;
     fmSteal_ = pcmSteal_ = 0;
+    pcmLimit_ = std::any_of(file.tracks.begin(), file.tracks.end(),
+        [](const TrackChunk& t) { return !t.isAudioTrack && t.formatType == 3; }) ? 32 : 16;
     scoreEndSample_ = 0; motionPace_ = 1; ended_ = false; diagnostics_ = {};
     for (auto& wave : voiceWaveBank_) wave = PcmSample{};
     for (auto& c : chans_) c = Chan{};
     for (auto& v : pool_) { v = FmVoice{}; v.setSampleRate(double(rate_)); }
     for (auto& pv : pcmPool_) pv.active = false;
+    for (auto& pv : audioPool_) pv.active = false;
     // Reject at engine level too. Unknown grammars must never silently produce
     // plausible-looking wrong events; Format 3 is the validated MA-7 SEQU path.
     for (const auto& t : file.tracks)
@@ -304,6 +307,7 @@ void MaPlayer::suppressHpsSlapbackDuplicates_() {
 // little-endian bit order), which is the difference between clean audio and hash.
 void MaPlayer::buildWaveBank_(const SmafFile& file) {
     waveBank_.clear();
+    scoreWaveBanks_.clear();
     for (const TrackChunk& t : file.tracks) {
         for (const WaveData& w : t.waves) {
             if (w.number < 0 || w.data.empty()) continue;
@@ -321,7 +325,14 @@ void MaPlayer::buildWaveBank_(const SmafFile& file) {
             } else {  // 8-bit
                 ps.pcm.resize(w.data.size());
                 for (size_t i = 0; i < w.data.size(); ++i)
-                    ps.pcm[i] = int16_t((int(w.data[i]) - 128) << 8);
+                    ps.pcm[i] = int16_t((w.signedPcm8
+                        ? (int(w.data[i]) < 128 ? int(w.data[i]) : int(w.data[i]) - 256)
+                        : int(w.data[i]) - 128) * 256);
+            }
+            if (!t.isAudioTrack) {
+                auto& bank = scoreWaveBanks_[t.trackNumber];
+                if (size_t(w.number) >= bank.size()) bank.resize(w.number + 1);
+                bank[w.number] = ps;
             }
         }
     }
@@ -335,15 +346,51 @@ void MaPlayer::collectVoices_(const SmafFile& file) {
 }
 
 void MaPlayer::addVoiceWave_(const uint8_t* p, size_t n) {
-    // Observed MA-3 voice-wave command: 43 79 06 7f 03 ID 00 packed ADPCM.
-    // Only this transport/codec combination is enabled. Unknown variants are
+    if (!p || n < 8 || p[0] != 0x43 || p[1] != 0x79 ||
+        p[3] != 0x7f || p[5] >= 128) return;
+    // MA-7 Format 3 carries native 8-bit bytes, NOT MA-3's seven-bit
+    // transport. ADPCM (0), unsigned PCM8 (2), and signed PCM8 (3) are
+    // separate formats. PCM8 signedness does not change sample addressing.
+    // Codec3's wire-to-internal-format mapping is still provisional in this
+    // private DEV build; the manufacturer editor confirms internal3=signed8.
+    // Bound allocations to the 16-bit voice address space; unsupported
+    // codecs and malformed/oversize payloads leave the bank untouched.
+    if (p[2] == 0x08 && p[4] == 0x23) {
+        const size_t bytes = n - 7;
+        if (p[6] == 0 && bytes <= 32768) {
+            YamahaAdpcm decoder;
+            voiceWaveBank_[p[5]].pcm = decoder.decodeAll(p + 7, bytes, false);
+            voiceWaveBank_[p[5]].retireSilentLoop = false;
+        } else if ((p[6] == 2 || p[6] == 3) && bytes <= 65536) {
+            std::vector<int16_t> pcm(bytes);
+            for (size_t i = 0; i < bytes; ++i) {
+                int sample = int(p[7 + i]);
+                if (p[6] == 2) sample -= 128;
+                else if (sample >= 128) sample -= 256;
+                pcm[i] = int16_t(sample * 256);
+            }
+            voiceWaveBank_[p[5]].pcm = std::move(pcm);
+            voiceWaveBank_[p[5]].retireSilentLoop = p[6] == 3;
+        }
+        return;
+    }
+    // MA-3 voice waves use seven-bit transport for ADPCM or unsigned PCM8.
+    // Only these validated codecs are enabled. Unknown variants are
     // not guessed. 16-bit LP/EP addressing bounds a wave to 65536 samples.
     if (!p || n < 9 || p[0] != 0x43 || p[1] != 0x79 || p[2] != 0x06 ||
-        p[3] != 0x7f || p[4] != 3 || p[5] >= 128 || p[6] != 0) return;
-    auto bytes = unpackMa3Bytes(p + 7, n - 7, 32768);
+        p[3] != 0x7f || p[4] != 3 || p[5] >= 128 || (p[6] != 0 && p[6] != 2)) return;
+    auto bytes = unpackMa3Bytes(p + 7, n - 7, p[6] == 0 ? 32768 : 65536);
     if (bytes.empty()) return;
-    YamahaAdpcm decoder;
-    voiceWaveBank_[p[5]].pcm = decoder.decodeAll(bytes.data(), bytes.size(), false);
+    if (p[6] == 0) {
+        YamahaAdpcm decoder;
+        voiceWaveBank_[p[5]].pcm = decoder.decodeAll(bytes.data(), bytes.size(), false);
+    } else {
+        std::vector<int16_t> pcm(bytes.size());
+        for (size_t i = 0; i < bytes.size(); ++i)
+            pcm[i] = int16_t((int(bytes[i]) - 128) * 256);
+        voiceWaveBank_[p[5]].pcm = std::move(pcm);
+    }
+    voiceWaveBank_[p[5]].retireSilentLoop = false;
     // Playback rate belongs to the selecting PCM patch's Fs, not this block.
 }
 
@@ -391,6 +438,14 @@ void MaPlayer::decodeTrack_(const TrackChunk& t, int base) {
             chans_[(base + i) & 127].rhythm = ((nib & 0x03) == 3);
         }
     } else {
+        for (int i = 0; i < (t.formatType == 3 ? 32 : 16); ++i) {
+            auto& c = chans_[(base + i) & 127];
+            c.streamTrack = t.trackNumber;
+            c.squaredControllers = t.formatType == 3;
+            c.modernTimbre = true;
+            c.volume = 100.0f / 127.0f;
+            if (c.squaredControllers) c.volume *= c.volume;
+        }
         for (size_t i = 0; i < t.channelStatus.size() && i < 32; ++i)
             chans_[(base + i) & 127].rhythm = ((t.channelStatus[i] & 0x03) == 3);
     }
@@ -563,6 +618,11 @@ void MaPlayer::decodeMobile_(const uint8_t* p, size_t n, int base, double tbDms,
                     case 0x20: events_.push_back({at, Ev::BankLsb, uint16_t(ch), int16_t(val), 0}); break;
                     case 0x07: events_.push_back({at, Ev::Volume,  uint16_t(ch), int16_t(val), 0}); break;
                     case 0x0A: events_.push_back({at, Ev::Pan,     uint16_t(ch), int16_t(val), 0}); break;
+                    case 101: events_.push_back({at, Ev::RpnMsb,uint16_t(ch),int16_t(val),0}); break;
+                    case 100: events_.push_back({at, Ev::RpnLsb,uint16_t(ch),int16_t(val),0}); break;
+                    case 6: events_.push_back({at, Ev::RpnData,uint16_t(ch),int16_t(val),0}); break;
+                    case 38: events_.push_back({at, Ev::RpnData,uint16_t(ch),int16_t(val),1}); break;
+                    case 98: case 99: events_.push_back({at,Ev::NrpnSelect,uint16_t(ch),0,0}); break;
                     case 0x0B: events_.push_back({at, Ev::Expression, uint16_t(ch), int16_t(val), 0}); break;
                     case 0x01: events_.push_back({at, Ev::Modulation, uint16_t(ch), int16_t(val), 0}); break;
                     default: break;
@@ -639,12 +699,12 @@ const ParsedVoice* MaPlayer::resolveVoice_(int ch, int note) const {
 // start a sampled (pcm) note on a free pcm slot. drums play at native rate,
 // melodic pcm is pitched from a fixed root note.
 int MaPlayer::allocatePcmSlot_() {
-    for (int i=0;i<kPcmPool;++i) if (!pcmPool_[i].active) return i;
+    for (int i=0;i<pcmLimit_;++i) if (!pcmPool_[i].active) return i;
     int slot=-1;
-    for (int i=0;i<kPcmPool;++i)
+    for (int i=0;i<pcmLimit_;++i)
         if (pcmPool_[i].released && (slot<0 || pcmPool_[i].recentLevel<pcmPool_[slot].recentLevel)) slot=i;
     ++diagnostics_.stolenPcm;
-    if (slot<0) { slot=pcmSteal_++%kPcmPool; ++diagnostics_.stolenHeldPcm; }
+    if (slot<0) { slot=pcmSteal_++%pcmLimit_; ++diagnostics_.stolenHeldPcm; }
     return slot;
 }
 
@@ -730,6 +790,11 @@ void MaPlayer::decodeMa7_(const uint8_t* p, size_t n, int base,
                     case 0x0A: events_.push_back({at, Ev::Pan, uint16_t(ch), int16_t(val), 0}); break;
                     case 0x0B: events_.push_back({at, Ev::Expression, uint16_t(ch), int16_t(val), 0}); break;
                     case 0x01: events_.push_back({at, Ev::Modulation, uint16_t(ch), int16_t(val), 0}); break;
+                    // MA7 Format3 compacts SMF RPN0/0 + DataEntry into CC15.
+                    // Mobile sequences use their separate RPN interpretation.
+                    case 0x0F:
+                        if (val <= 24) events_.push_back({at, Ev::PitchBendRange, uint16_t(ch), int16_t(val), 0});
+                        break;
                     default: break;
                 }
             } break;
@@ -762,13 +827,14 @@ bool MaPlayer::startPcm_(int ch, int rawNote, int soundingNote, const ParsedVoic
     if (v.pcm.rom) return false; // ROM IDs must never alias a local RAM sample
     if (wid >= 0 && wid < 128 && !voiceWaveBank_[wid].pcm.empty())
         ws = &voiceWaveBank_[wid];
-    else if (wid >= 0 && size_t(wid) < waveBank_.size() && !waveBank_[wid].pcm.empty())
+    else if (!v.pcm.voiceWaveOnly && wid >= 0 && size_t(wid) < waveBank_.size() && !waveBank_[wid].pcm.empty())
         ws = &waveBank_[wid];
     if (!ws) return false;
     if (v.pcm.endPt == 0) return true; // EP=0 intentionally does not pronounce
 
     int slot = allocatePcmSlot_();
     PcmVoice& pv = pcmPool_[slot];
+    pv.streamAudio = false;
     pv.pcm = ws->pcm.data(); pv.len = ws->pcm.size();
     bool isDrum = v.key.drumNote != 0;
     double base = double(v.pcm.fs) / double(rate_);
@@ -776,10 +842,26 @@ bool MaPlayer::startPcm_(int ch, int rawNote, int soundingNote, const ParsedVoic
     pv.baseRate = base * std::pow(2.0, semis / 12.0);
     pv.rate = pv.baseRate * std::pow(2.0, c.bend / 12.0);
     pv.pos = 0.0;
+    // Share the existing FM approximation rather than invent a different
+    // WT vibrato curve. The hardware LFO rate/shape remains uncalibrated.
+    static constexpr double lfoHz[4] = {1.8, 4.0, 5.9, 7.0};
+    static constexpr double vibrato[4] = {0.00196, 0.00387, 0.00774, 0.01548};
+    static constexpr float legacyTremolo[4] = {0.129f, 0.242f, 0.424f, 0.669f};
+    static constexpr double damDb[4] = {1.3, 2.8, 5.8, 11.8};
+    pv.lfoPhase = 0.0;
+    pv.vibDepth = v.pcm.env.vib ? vibrato[v.pcm.env.dvb & 3] : 0.0;
+    pv.amDepth = v.pcm.env.am ? (c.modernTimbre
+        ? float(1.0 - std::pow(10.0, -damDb[v.pcm.env.dam & 3] / 20.0))
+        : legacyTremolo[v.pcm.env.dam & 3]) : 0.0f;
+    pv.lfoInc = (pv.vibDepth != 0.0 || pv.amDepth != 0.0f)
+        ? lfoHz[v.pcm.lfo & 3] / double(rate_) : 0.0;
     // LP/EP are sample indices into the decoded stream; clamp to the wave.
     pv.loopEnd   = (v.pcm.endPt > 0 && size_t(v.pcm.endPt) <= pv.len) ? size_t(v.pcm.endPt) : pv.len;
     pv.loopStart = (size_t(v.pcm.loopPt) < pv.loopEnd) ? size_t(v.pcm.loopPt) : 0;
     pv.loop = v.pcm.loop && v.pcm.loopPt >= 0 && size_t(v.pcm.loopPt) < pv.loopEnd;
+    pv.silentLoop = ws->retireSilentLoop && pv.loop &&
+        std::all_of(ws->pcm.begin() + pv.loopStart, ws->pcm.begin() + pv.loopEnd,
+                    [](int16_t sample) { return sample == 0; });
     pv.env.configure(v.pcm.env, double(rate_)); pv.env.keyOn();
     pv.gain = float(std::pow(10.0, -0.75 * double(v.pcm.env.tl) / 20.0));
     // Match FM voices: authored note velocity is part of the musical balance,
@@ -796,8 +878,35 @@ bool MaPlayer::startPcm_(int ch, int rawNote, int soundingNote, const ParsedVoic
     return true;
 }
 
+void MaPlayer::startAudio_(int ch, int note, float velocity, uint64_t noteId) {
+    if (velocity <= (1.0f / (127.0f * 127.0f))) return; // velocity 1 means mute
+    const auto found = scoreWaveBanks_.find(chans_[ch & 127].streamTrack);
+    const int id = note <= 12 ? note + 1 : note - 92 + 14;
+    if (found == scoreWaveBanks_.end() || size_t(id) >= found->second.size() ||
+        found->second[id].pcm.empty()) { ++diagnostics_.missingAudio; return; }
+    const auto& ws = found->second[id];
+    PcmVoice* slot = nullptr;
+    for (auto& v : audioPool_) if (!v.active) { slot = &v; break; }
+    if (!slot) {
+        slot = &*std::min_element(audioPool_.begin(), audioPool_.end(),
+            [](const PcmVoice& a, const PcmVoice& b) { return a.startedAt < b.startedAt; });
+        ++diagnostics_.stolenAudio;
+    }
+    *slot = PcmVoice{};
+    slot->pcm = ws.pcm.data(); slot->len = ws.pcm.size();
+    slot->rate = double(ws.fs) / double(rate_);
+    slot->vel = velocity; slot->pan = chans_[ch & 127].pan;
+    slot->channel = ch; slot->keyNote = note; slot->noteId = noteId;
+    slot->startedAt = cursor_;
+    slot->streamAudio = true; slot->active = true;
+    ++diagnostics_.audioNotes; ++diagnostics_.pcmNotes;
+}
+
 float MaPlayer::PcmVoice::tick() {
     if (!active || !pcm || len == 0) { active = false; return 0.0f; }
+    // A zero-only loop cannot become audible again after reaching its start.
+    // Retire it without cutting any nonzero sample or guessing an EG duration.
+    if (silentLoop && pos >= double(loopStart)) { active = false; return 0.0f; }
     size_t end = (loopEnd > 0 && loopEnd <= len) ? loopEnd : len;
     if (pos >= double(end)) {
         if (loop && loopEnd > loopStart)
@@ -811,10 +920,25 @@ float MaPlayer::PcmVoice::tick() {
     size_t next = i + 1 < end ? i + 1 : (loop ? loopStart : i);
     float s1 = pcm[next] * (1.0f / 32768.0f);
     float s = s0 + (s1 - s0) * frac;
-    pos += rate;
-    float e = env.advance();
-    if (env.isFinished()) active = false;
+    double lfo = 0.0;
+    if (lfoInc != 0.0) {
+        lfoPhase += lfoInc;
+        if (lfoPhase >= 1.0) lfoPhase -= std::floor(lfoPhase);
+        lfo = pcmModulationSine(lfoPhase);
+    }
+    // Keep controller bend in rate; apply vibrato transiently, not by
+    // accumulating it into rate/baseRate on each sample or controller event.
+    pos += rate * (1.0 + vibDepth * lfo);
+    float e;
+    if (streamAudio) {
+        if (stopFade == 0) { active = false; return 0.0f; }
+        e = stopFade < 0 ? 1.0f : float(stopFade--) / float(stopFadeTotal);
+    } else {
+        e = env.advance();
+        if (env.isFinished()) active = false;
+    }
     float result = s * e * gain * vel;
+    if (amDepth != 0.0f) result *= 1.0f - amDepth * float(0.5 + 0.5 * lfo);
     recentLevel += (std::fabs(result) - recentLevel) * 0.01f;
     return result;
 }
@@ -827,6 +951,7 @@ int MaPlayer::activeVoices_() const {
     int n = 0;
     for (const auto& v : pool_) if (v.active()) ++n;
     for (const auto& v : pcmPool_) if (v.active) ++n;
+    for (const auto& v : audioPool_) if (v.active) ++n;
     return n;
 }
 
@@ -841,6 +966,7 @@ void MaPlayer::fireEvent_(const Ev& e) {
             break;
         case Ev::Volume: {
             c.volume = (e.a & 0x7f) / 127.0f;
+            if (c.squaredControllers) c.volume *= c.volume;
             for (auto& voice : pcmPool_)
                 if (voice.active && voice.channel == int(e.ch) && voice.keyNote >= 0)
                     voice.vel = voice.noteVelocity * c.volume * c.expression;
@@ -850,6 +976,7 @@ void MaPlayer::fireEvent_(const Ev& e) {
         } break;
         case Ev::Expression: {
             c.expression = (e.a & 0x7f) / 127.0f;
+            if (c.squaredControllers) c.expression *= c.expression;
             for (auto& voice : pcmPool_)
                 if (voice.active && voice.channel == int(e.ch) && voice.keyNote >= 0)
                     voice.vel = voice.noteVelocity * c.volume * c.expression;
@@ -859,6 +986,8 @@ void MaPlayer::fireEvent_(const Ev& e) {
         } break;
         case Ev::Pan:
             c.pan = ((e.a & 0x7f) - 64) / 64.0f;
+            for (auto& voice : audioPool_)
+                if (voice.active && voice.channel == int(e.ch)) voice.pan = c.pan;
             for (auto& voice : pcmPool_)
                 if (voice.active && voice.channel == int(e.ch) && voice.keyNote >= 0 && !voice.panLocked)
                     voice.pan = c.pan;
@@ -866,16 +995,39 @@ void MaPlayer::fireEvent_(const Ev& e) {
         case Ev::Modulation:
             if (e.b == 1) c.octShift = e.a - 1000;    // octave-shift marker
             break;
+        case Ev::RpnMsb: if(e.a>=0 && e.a<=127) c.rpnMsb=e.a; break;
+        case Ev::RpnLsb: if(e.a>=0 && e.a<=127) c.rpnLsb=e.a; break;
+        case Ev::NrpnSelect: c.rpnMsb=c.rpnLsb=127; break;
+        case Ev::RpnData:
+        case Ev::PitchBendRange:
         case Ev::PitchBend: {
-            c.bend = double(e.a) / 8192.0 * 2.0;       // +-2 semitones default range
+            if(e.type==Ev::RpnData) {
+                // Standard Mobile RPN0/0 only. Null/other RPNs and NRPNs must
+                // not change bend sensitivity. Data Entry LSB means cents.
+                if(c.rpnMsb!=0 || c.rpnLsb!=0) break;
+                if(e.b==0) { if(e.a<0 || e.a>24) break; c.bendRange=e.a; }
+                else { if(e.a<0 || e.a>99) break; c.bendCents=e.a; }
+            } else if (e.type == Ev::PitchBendRange) {
+                if (e.a < 0 || e.a > 24) break;
+                c.bendRange = e.a; c.bendCents=0;
+            } else {
+                c.rawBend = e.a;
+            }
+            c.bend = double(c.rawBend) / 8192.0 * (c.bendRange+c.bendCents/100.0);
             for (auto& voice : pcmPool_)
                 if (voice.active && voice.channel == int(e.ch) && voice.keyNote >= 0)
                     voice.rate = voice.baseRate * std::pow(2.0, c.bend / 12.0);
             for (int i = 0; i < kPoolSize; ++i)
                 if (pool_[i].active() && pool_[i].channel == int(e.ch))
-                    pool_[i].setPitch(noteToFreq_(pool_[i].note_) * std::pow(2.0, c.bend / 12.0));
+                    pool_[i].setPitch(poolBaseFreq_[i] * std::pow(2.0, c.bend / 12.0));
         } break;
         case Ev::NoteOff: {
+            for (auto& voice : audioPool_)
+                if (voice.active && voice.noteId == e.noteId) {
+                    voice.stopFadeTotal = std::max(1, int(rate_ / 500));
+                    voice.stopFade = voice.stopFadeTotal;
+                    voice.released = true;
+                }
             // Every scheduled gate belongs to one note instance. Same-pitch
             // notes may overlap, finish out of order, or reuse a stolen slot.
             for (int i = 0; i < kPoolSize; ++i)
@@ -897,9 +1049,13 @@ void MaPlayer::fireEvent_(const Ev& e) {
             const PcmSample& ws = waveBank_[wid];
             int slot = allocatePcmSlot_();
             PcmVoice& pv = pcmPool_[slot];
+            pv.streamAudio = false;
             pv.pcm = ws.pcm.data(); pv.len = ws.pcm.size();
             pv.rate = double(ws.fs) / double(rate_);
+            pv.lfoPhase = pv.lfoInc = pv.vibDepth = 0.0;
+            pv.amDepth = 0.0f; // ATR must not inherit a stolen WT slot's LFO
             pv.pos = 0.0; pv.loopStart = 0; pv.loopEnd = pv.len; pv.loop = false;
+            pv.silentLoop = false;
             FmOpPatch flat{};                      // full-open sustaining envelope
             flat.ar = 15; flat.sl = 0; flat.sr = 0; flat.egType = true;
             pv.env.configure(flat, double(rate_)); pv.env.keyOn();
@@ -914,7 +1070,13 @@ void MaPlayer::fireEvent_(const Ev& e) {
             if (e.b <= 0) break; // explicit/running zero velocity is silent
             float vel01 = e.b / 127.0f;
             float noteVelocity = vel01 * vel01;
+            if (c.streamTrack >= 0 && c.bankMsb == 125 && c.bankLsb <= 9 &&
+                c.program <= 9 && (e.a <= 12 || (e.a >= 92 && e.a <= 110))) {
+                startAudio_(e.ch, e.a, noteVelocity, e.noteId);
+                break;
+            }
             const ParsedVoice* rv = resolveVoice_(e.ch, e.a);
+            const ParsedVoice* missingRom = nullptr;
             if (rv && rv->isPcm) {                      // sampled (drum / pcm) voice
                 if (rv->valid && startPcm_(e.ch, e.a, soundingNote, *rv, c, noteVelocity, e.noteId)) {
                     break;
@@ -926,15 +1088,23 @@ void MaPlayer::fireEvent_(const Ev& e) {
                 // an independently voiced FM patch: its gain/envelope and the
                 // ROM's native waveform level have not been calibrated. The
                 // beta.6 compensation made some fallback layers ~21 dB quieter.
+                if(rv->valid && rv->pcm.rom && c.modernTimbre) missingRom=rv;
                 rv = nullptr;
             }
             ++diagnostics_.fmNotes;
             if (!rv) ++diagnostics_.fallbackNotes;
+            // A rhythm channel OR the explicit custom drum bank gets percussion,
+            // even when its MTR channel type is "no care". Missing ROM drums
+            // must not become a pitched piano after the PCM binding is dropped.
             // a rhythm-channel note with no bound voice gets a percussion hit,
             // never a melodic gm patch (the "drums play piano" class).
-            const FmVoicePatch& patch = rv ? rv->patch
-                : (c.rhythm || c.drum) ? FmVoicePatch::drumApprox(e.a)
-                                       : FmVoicePatch::gmApprox(c.program);
+            const FmVoicePatch* romPatch=missingRom?FmVoicePatch::romApprox(missingRom->pcm.waveId):nullptr;
+            FmVoicePatch patch = rv ? rv->patch
+                : romPatch ? *romPatch
+                : (c.rhythm || c.drum || c.bankMsb == 125) ? FmVoicePatch::drumApprox(e.a)
+                : c.modernTimbre ? FmVoicePatch::gmModernApprox(c.program)
+                                : FmVoicePatch::gmApprox(c.program);
+            patch.modernTimbre=c.modernTimbre;
             int slot = -1;
             // HandyPhone score parts are fixed monophonic hardware parts. A
             // new note retriggers that part's slot; keeping its released voice
@@ -961,8 +1131,19 @@ void MaPlayer::fireEvent_(const Ev& e) {
                 if (slot < 0) { slot = fmSteal_++ % kPoolSize; ++diagnostics_.stolenHeldFm; }
                 ++diagnostics_.stolenFm;
             }
-            int midi = soundingNote + patch.noteShift;
-            double freq = noteToFreq_(midi) * std::pow(2.0, c.bend / 12.0);
+            // Retain the trigger key and noteId for voice lookup / scheduled
+            // key-off, but custom FM drums sound at their authored DrumKey.
+            int midi = (rv && rv->fixedFmNote >= 0 ? rv->fixedFmNote : soundingNote) + patch.noteShift;
+            double baseFreq=noteToFreq_(midi);
+            if(romPatch && missingRom->pcm.waveId<22) {
+                // Mapped drum keys are addresses, not pitches (e.g. crash on 90).
+                // Designer reference tuning, NOT measured ROM native Fs/pitch.
+                const int id=missingRom->pcm.waveId;
+                midi=id==0?36:id==2?48:id==14||id==15||id==16?57:60;
+                baseFreq=noteToFreq_(midi)*(double(missingRom->pcm.fs)/16000.0);
+            }
+            poolBaseFreq_[slot]=baseFreq;
+            double freq = baseFreq * std::pow(2.0, c.bend / 12.0);
             pool_[slot].channel = e.ch;
             pool_[slot].note_   = midi;                 // sounding pitch (for bend)
             poolNoteId_[slot] = e.noteId;
@@ -1016,6 +1197,12 @@ int MaPlayer::render(float* out, int frames) {
             float pan = pcmPool_[i].pan;
             l += s * kMixGain * (1.0f - pan); r += s * kMixGain * (1.0f + pan);
         }
+        for (auto& voice : audioPool_) {
+            if (!voice.active) continue;
+            const float s = voice.tick();
+            l += s * kMixGain * (1.0f - voice.pan);
+            r += s * kMixGain * (1.0f + voice.pan);
+        }
         // 2-pole one-pole-cascade low-pass (the analog output filter's warmth),
         // then a transparent peak limiter. the old tanh soft-knee WAS the
         // "overdriven" sound: on a hot bus it reshaped the waveform on every
@@ -1051,11 +1238,18 @@ int MaPlayer::render(float* out, int frames) {
 void MaPlayer::seekToStart() {
     nextEvent_ = 0; cursor_ = 0;
     ended_ = false; diagnostics_ = {};
-    // the rhythm flag is init-time state (MTR channel status), not runtime
-    // state; it must survive the channel reset or drums degrade after a seek.
-    for (auto& c : chans_) { bool rh = c.rhythm; c = Chan{}; c.rhythm = rh; }
+    // MTR mode/source association is init-time state, not controller state.
+    // Preserve it so drum retriggering and Audio binding survive a seek.
+    for (auto& c : chans_) {
+        bool rh = c.rhythm, mono = c.monophonic, squared = c.squaredControllers, modern=c.modernTimbre; int track = c.streamTrack;
+        c = Chan{}; c.rhythm = rh; c.monophonic = mono; c.streamTrack = track;
+        c.squaredControllers = squared;
+        c.modernTimbre=modern;
+        if (squared) c.volume *= c.volume;
+    }
     for (auto& v : pool_) { v = FmVoice{}; v.setSampleRate(double(rate_)); }
     for (auto& pv : pcmPool_) pv.active = false;
+    for (auto& pv : audioPool_) pv.active = false;
     poolNoteId_.fill(0);
     fmSteal_ = pcmSteal_ = 0;
     lp1L_ = lp1R_ = lp2L_ = lp2R_ = 0.0f;

@@ -49,6 +49,7 @@ struct WaveData {
     int      bitsPerSample = 4;     // 4 = yamaha adpcm, 8/16 = pcm
     int      channels     = 1;
     bool     adpcm        = true;
+    bool     signedPcm8   = false;  // Mwa format 0; legacy PCM8 is offset binary
     std::vector<uint8_t> data;      // raw codec bytes, NOT decoded here
 };
 

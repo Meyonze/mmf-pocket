@@ -26,6 +26,7 @@
 #include <cstdint>
 #include <vector>
 #include <array>
+#include <map>
 
 namespace fxchain::smaf {
 
@@ -54,6 +55,7 @@ public:
         uint64_t stolenFm = 0, stolenPcm = 0;
         uint64_t stolenHeldFm = 0, stolenHeldPcm = 0;
         uint64_t suppressedHpsDuplicates = 0;
+        uint64_t audioNotes = 0, missingAudio = 0, stolenAudio = 0;
         bool tailLimitReached = false;
     };
     const Diagnostics& diagnostics() const { return diagnostics_; }
@@ -63,8 +65,8 @@ private:
     struct Ev {
         uint64_t sample;
         enum T : uint8_t { NoteOn, NoteOff, Program, BankMsb, BankLsb,
-                           Volume, Pan, Expression, PitchBend, Modulation,
-                           WaveOn } type;   // WaveOn: ATR trigger, a = wave number
+                           Volume, Pan, Expression, PitchBend, Modulation, PitchBendRange,
+                           WaveOn, RpnMsb, RpnLsb, RpnData, NrpnSelect } type;
         uint16_t ch;
         int16_t  a;   // note / pc / cc-value / bend / wave number
         int16_t  b;   // velocity
@@ -80,12 +82,17 @@ private:
         int bankMsb = 0, bankLsb = 0, program = 0;
         float volume = 100.0f / 127.0f;
         float expression = 1.0f;
+        bool squaredControllers = false; // MA7 SMAF 40-log volume / expression curve
+        bool modernTimbre = false; // Mobile/MA7 trial synthesis, not HandyPhone
         float pan = 0.0f;             // -1..+1
         double bend = 0.0;            // in semitones
+        int bendRange = 2, rawBend = 0; // MA7 CC15 range, default +/-2 semitones
+        int rpnMsb = 127, rpnLsb = 127, bendCents = 0; // Mobile RPN0/0, null by default
         int   octShift = 0;           // handyphone octave-shift state (semitones)
         bool  drum = false;           // bank bit7 (hps) or rhythm channel
         bool  rhythm = false;         // MTR channel-status type 3 (rhythm channel)
         bool  monophonic = false;      // HandyPhone parts own one retriggered voice slot
+        int   streamTrack = -1;        // source MTR, preserved across seek
         int   lastVel = 64;
     };
     std::array<Chan, 128> chans_{};
@@ -95,17 +102,27 @@ private:
     std::array<FmVoice, kPoolSize> pool_{};
     std::array<float, kPoolSize> poolPan_{};      // captured at note-on
     std::array<uint64_t, kPoolSize> poolNoteId_{};
+    std::array<double,kPoolSize> poolBaseFreq_{}; // unbent pitch incl. original ROM substitute tuning
     unsigned fmSteal_ = 0, pcmSteal_ = 0;
     int activeVoices_() const;
 
     // ── pcm (sampled) voice pool + the decoded wave bank ──────────────────────
     // drum kits and sampled instruments play these instead of fm. the bank holds
     // each Mwa/Awa wave decoded once (yamaha adpcm) keyed by its wave number.
-    struct PcmSample { std::vector<int16_t> pcm; int fs = 8000; };
+    struct PcmSample {
+        std::vector<int16_t> pcm;
+        int fs = 8000;
+        // Only the newly supported MA-7 signed8 path opts in. Preserve older
+        // codecs' pool scheduling and exact output, including silent tails.
+        bool retireSilentLoop = false;
+    };
     struct PcmVoice {
         const int16_t* pcm = nullptr; size_t len = 0;
         double pos = 0.0, rate = 1.0, baseRate = 1.0;
+        double lfoPhase = 0.0, lfoInc = 0.0, vibDepth = 0.0;
+        float amDepth = 0.0f;
         size_t loopStart = 0, loopEnd = 0; bool loop = false;
+        bool silentLoop = false; // after loopStart all future source samples are exactly zero
         FmEnvelope env;
         float pan = 0.0f, vel = 1.0f, gain = 1.0f, noteVelocity = 1.0f;
         bool panLocked = false, released = false;
@@ -113,16 +130,23 @@ private:
         int channel = -1, keyNote = -1;
         uint64_t noteId = 0;
         bool active = false;
+        bool streamAudio = false;
+        uint64_t startedAt = 0;
+        int stopFade = -1, stopFadeTotal = 1; // Audio gate: bounded 2ms anti-click fade
         float tick();
     };
     std::vector<PcmSample> waveBank_;
+    std::map<int, std::vector<PcmSample>> scoreWaveBanks_; // Mwa IDs local to each MTR
+    std::array<PcmVoice, 2> audioPool_{}; // Audio hardware has two slots, separate from WT
     // Voice-wave RAM is a different namespace from Mwa/Awa stream samples.
     std::array<PcmSample, 128> voiceWaveBank_{};
-    static constexpr int kPcmPool = 16;
+    static constexpr int kPcmPool = 32;
+    int pcmLimit_ = 16; // MA-7 has 32 PCM voices; retain the legacy 16-slot policy
     std::array<PcmVoice, kPcmPool> pcmPool_{};
     void buildWaveBank_(const SmafFile& file);
     void addVoiceWave_(const uint8_t* p, size_t n);
     int allocatePcmSlot_();
+    void startAudio_(int ch, int note, float velocity, uint64_t noteId);
     const ParsedVoice* resolveVoice_(int ch, int note) const;
     bool startPcm_(int ch, int rawNote, int soundingNote, const ParsedVoice& v,
                    const Chan& c, float noteVelocity, uint64_t noteId);

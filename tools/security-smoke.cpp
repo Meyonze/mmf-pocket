@@ -49,6 +49,7 @@ int main() {
     // alone rarely reach a valid setup exclusive. No real media is included.
     for (int iteration=0;iteration<512;++iteration) {
         std::vector<uint8_t> payload{0x43,0x79,6,0x7f,3,1,0};
+        payload[6] = uint8_t(iteration % 4); // include packed PCM8 and unknown codecs
         size_t length=random()%96;
         for(size_t i=0;i<length;++i) payload.push_back(uint8_t(random() & 127));
         if (iteration%3==0 && payload.size()>7) payload.back()=0xff;
@@ -64,6 +65,23 @@ int main() {
         payload[4]=1;
         if(payload.size()>9) payload[9]=1;
         (void)fxchain::smaf::parseVoiceExclusive(payload.data(),payload.size());
+    }
+    // MA-7 native eight-bit wave messages and exact voice-shape guards.
+    for (int iteration=0;iteration<512;++iteration) {
+        std::vector<uint8_t> payload{0x43,0x79,8,0x7f,0x23,uint8_t(random()%256),uint8_t(random()%4)};
+        for (size_t i=0,length=random()%96;i<length;++i) payload.push_back(uint8_t(random()));
+        fxchain::smaf::TrackChunk track;
+        track.trackNumber=0; track.formatType=3;
+        track.setupData={0xf0,uint8_t(payload.size()+1)};
+        track.setupData.insert(track.setupData.end(),payload.begin(),payload.end());
+        track.setupData.push_back(0xf7);
+        track.sequenceData={0,0x10,60,100,10,10,0xff,0x2f,0};
+        SmafFile file; file.tracks.push_back(track);
+        MaPlayer player;
+        if (player.init(file,8000)) { float audio[128*2]; player.render(audio,128); }
+        payload[4]=0x21;
+        for (size_t length=0;length<=payload.size();++length)
+            (void)fxchain::smaf::parseVoiceExclusive(payload.data(),length);
     }
     constexpr std::array<std::array<uint8_t, 4>, 4> ids{{
         {{'C', 'N', 'T', 'I'}},

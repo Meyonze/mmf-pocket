@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.6.1 - 2026-10-02
+
+- Improve MA-3/5 and MA-7 embedded instrument-wave decoding, with separate
+  instrument RAM and recorded score-Audio playback to avoid wrong substitutes.
+- Correct custom FM drum pitches, MA-7 volume/expression curves and pitch-bend
+  sensitivity, plus Mobile RPN pitch-bend range changes during held notes.
+- Retain the extra MA-7 FM/WT envelope-rate bits and apply authored PCM
+  vibrato/tremolo; use a lightweight sine lookup for the new PCM modulation.
+- Refine original ROM-free fallback voices and modern FM feedback/tremolo.
+  These remain approximations, not recovered handset ROM or exact emulation.
+- Expand synthetic audio/security regressions and invalidate older render
+  caches automatically. Keep the existing player, Mafu and background controls.
+- MA-7 signed PCM8 decoding is experimental. Analog Lite filters, nonneutral
+  pitch envelopes, fixed-frequency synthesis and device-specific effects remain
+  incomplete; full reference-recording fidelity is not claimed.
+
 ## 1.6.0 - 2026-09-29
 
 - Add the 3D mascot Mafu (「まふ」), whose floating, dancing and running pace is
@@ -20,8 +36,6 @@
   tails do not layer underneath subsequent notes as an echo.
 - Invalidate older converted WAV caches so the corrected MA-1/2 rendering
   is used immediately after the app update.
-- Correct the verified 40/44 ms duplicate accompaniment in the affected
-  `Stab the Sword of justice` HandyPhone source without changing other files.
 
 ## 1.5.1
 

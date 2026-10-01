@@ -37,9 +37,21 @@ struct PcmParams {
     int      endPt   = 0;      // end point  (sample index; 0 = whole wave)
     bool     loop    = false;  // loopPt < endPt; equal points mean one-shot
     bool     rom     = false;  // RM selects ROM, NOT looping
+    bool     voiceWaveOnly = false; // MA-7 instrument RAM is distinct from audio streams
     bool     panEnabled = false;
     float    pan = 0.0f;
     FmOpPatch env;             // AR/DR/SR/RR/SL/TL reused for the amplitude EG
+    uint8_t lfo = 0;           // same four rate selections as the FM voice
+};
+
+// Decoded MA7 AL register fields, retained for diagnostics. Physical cutoff,
+// resonance and EG-rate calibration is not established; no guessed DSP applies.
+struct AnalogLiteParams {
+    bool present = false;
+    uint8_t resonance = 0, depth = 0, mode = 0, frequency = 0;
+    bool reset = false, xof = false, sus = false, keyFollow = false, vsl = false;
+    std::array<uint16_t, 5> cutoff{};
+    std::array<uint8_t, 4> rates{};
 };
 
 struct ParsedVoice {
@@ -47,8 +59,10 @@ struct ParsedVoice {
     FmVoicePatch patch;
     PcmParams    pcm;             // valid when isPcm
     int          keyHigh = 127;   // upper split key; 127 when unsplit
+    int          fixedFmNote = -1; // custom drum sounding key, distinct from trigger; 0 is valid
     bool         isPcm = false;   // pcm voices play a sampled wave, not fm
     bool         valid = false;
+    AnalogLiteParams al;
 };
 
 // parse ONE exclusive payload (the bytes between the F0 length and the trailing

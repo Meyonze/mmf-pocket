@@ -133,12 +133,35 @@ bool applyPcmBody(const uint8_t* b, size_t n, ParsedVoice& out) {
     pc.env.sl =  b[6] & 0x0f;
     pc.env.egType = true;
     pc.env.xof = (b[4] & 8) != 0;
+    // VM35 PCM has its own authored EAM/EVB and depth fields. These were
+    // discarded even when the referenced wave decoded correctly.
+    pc.lfo = (b[3] >> 6) & 3;
+    pc.env.am = (b[8] & 0x10) != 0;
+    pc.env.dam = (b[8] >> 5) & 3;
+    pc.env.vib = (b[8] & 1) != 0;
+    pc.env.dvb = (b[8] >> 1) & 3;
     pc.loopPt = (int(b[11]) << 8) | b[12];
     pc.endPt  = (int(b[13]) << 8) | b[14];
     pc.rom    = (b[15] & 0x80) != 0;
     pc.loop   = pc.loopPt < pc.endPt;
     pc.waveId =  b[15] & 0x7f;
     return pc.fs >= 1500 && pc.fs <= 48000;
+}
+
+void readAnalogLite(const uint8_t* tail, AnalogLiteParams& al) {
+    al.present = true;
+    al.resonance = tail[0] & 31;
+    al.depth = tail[1] >> 5;
+    al.mode = (tail[1] >> 4) & 1;
+    al.reset = (tail[1] & 8) != 0; // NOT an enable bit
+    al.frequency = tail[1] & 7;
+    for (int i = 0; i < 5; ++i)
+        al.cutoff[i] = uint16_t(((tail[2 + i * 2] & 31) << 8) | tail[3 + i * 2]);
+    for (int i = 0; i < 4; ++i) al.rates[i] = tail[12 + i] & 31;
+    al.xof = (tail[12] & 128) != 0;
+    al.sus = (tail[13] & 128) != 0;
+    al.keyFollow = (tail[14] & 128) != 0;
+    al.vsl = (tail[15] & 128) != 0;
 }
 
 } // namespace
@@ -169,8 +192,8 @@ ParsedVoice parseVoiceExclusive(const uint8_t* p, size_t n) {
     // bankMSB, bankLSB, program, note/split, key-high, then the expanded
     // MA-7 register image. The six exact image shapes below were validated
     // over the local corpus and match Yamaha's 2-op/4-op/WT + AL layouts.
-    // AL's filter tail is intentionally dropped; the oscillator/envelope body
-    // still folds losslessly into the VM35 engine representation.
+    // AL's filter tail remains unsupported. The oscillator and rate nibbles
+    // fold into the VM35 representation; WT's extra rate bits stay separate.
     if (n >= 11 && p[1] == 0x79 && p[2] == 0x08 && p[3] == 0x7f && p[4] == 0x21) {
         out.key.bankMSB = p[5];
         out.key.bankLSB = p[6];
@@ -179,7 +202,7 @@ ParsedVoice parseVoiceExclusive(const uint8_t* p, size_t n) {
         out.keyHigh = (p[5] == 0x7d || p[9] == 0) ? 127 : p[9];
         const uint8_t* voice = p + 10;
         const size_t vn = n - 10;
-        const int flags = voice[0] & 0x03;
+        const int flags = voice[0];
 
         int operators = 0;
         if (flags == 0 && vn == 24) operators = 2;
@@ -203,18 +226,39 @@ ParsedVoice parseVoiceExclusive(const uint8_t* p, size_t n) {
                 vm35[dst + 6] = voice[src + 6];
             }
             applyVm35Body(vm35, 3 + size_t(operators) * 7, operators, out.patch);
+            for (int op = 0; op < operators; ++op) {
+                const size_t src = 4 + size_t(op) * 10;
+                auto& target = out.patch.ops[op];
+                target.rateLowBits = voice[src + 5] & 15;
+                target.fixedFrequency = (voice[src] & 4) != 0;
+                target.fixedBlock = (voice[src + 7] >> 2) & 7;
+                target.fixedFnum = uint16_t(((voice[src + 7] & 3) << 8) | voice[src + 8]);
+            }
+            if (flags == 2) readAnalogLite(voice + 4 + operators * 10, out.al);
+            if (out.key.bankMSB == 125 && vm35[0] <= 127) out.fixedFmNote = vm35[0];
             out.valid = true;
             return out;
         }
 
-        const bool wt = (flags == 1 && vn == 18) || (flags == 3 && vn == 34);
+        // An observed MA-7 WT+AL+Pitch-EG image adds nine bytes after the
+        // 34-byte WT+AL body. Only its all-zero extension is supported here;
+        // nonzero pitch envelopes must not silently become a static patch.
+        const bool neutralPitchEg = flags == 7 && vn == 43 &&
+            std::all_of(voice + 34, voice + 43, [](uint8_t b) { return b == 0; });
+        const bool wt = (flags == 1 && vn == 18) || (flags == 3 && vn == 34) || neutralPitchEg;
         if (wt) {
             uint8_t vm35[16]{};
             std::copy(voice + 1, voice + 10, vm35);
             std::copy(voice + 11, voice + 17, vm35 + 9);
-            vm35[15] = voice[(flags == 3) ? 33 : 17];
+            vm35[15] = voice[(flags == 1) ? 17 : 33];
             out.isPcm = true;
+            out.pcm.voiceWaveOnly = true;
             out.valid = applyPcmBody(vm35, sizeof(vm35), out);
+            // Expanded MA-7 WT AEG: RR/SR/DR/AR are 5-bit values, with
+            // their low bits in voice[10], not extra high bits. Retaining
+            // these avoids rounding every odd rate down to a legacy rate.
+            out.pcm.env.rateLowBits = voice[10] & 0x0f;
+            if (flags != 1) readAnalogLite(voice + 17, out.al);
             return out;
         }
         return out;
@@ -230,6 +274,9 @@ ParsedVoice parseVoiceExclusive(const uint8_t* p, size_t n) {
         if (voiceType > 1) return out;
         if (voiceType == 1) {                        // PCM (sampled) voice
             out.isPcm = true;
+            // User instrument RAM and Mwa audio samples have separate IDs.
+            // Retain the pre-existing legacy bank-0 fixture/compatibility path.
+            out.pcm.voiceWaveOnly = p[5] == 124 || p[5] == 125;
             const uint8_t* b = p + 10; size_t bn = n - 10;
             // MA-3 PCM uses the same 7-bit transport packing as FM. Reading
             // its masks as parameters corrupted Fs, TL, envelopes and WaveID.
@@ -252,6 +299,11 @@ ParsedVoice parseVoiceExclusive(const uint8_t* p, size_t n) {
         int ops = opCountFromAlg(alg);
         if (p[2] == 0x06) applyMa3Packed(body, bn, ops, out.patch);   // MA-3 packed
         else              applyVm35Body(body, bn, ops, out.patch);    // MA-5 direct
+        // Global DrumKey is the oscillator pitch, not the header's mapped key.
+        // MA-3's carrier precedes it; the sounding key itself is seven-bit.
+        const size_t drumKeyByte = p[2] == 0x06 ? 1 : 0;
+        if (out.key.bankMSB == 125 && bn > drumKeyByte && body[drumKeyByte] <= 127)
+            out.fixedFmNote = body[drumKeyByte];
         out.valid = true;
         return out;
     }

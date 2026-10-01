@@ -29,6 +29,10 @@
 
 namespace fxchain::smaf {
 
+// Low-frequency sine lookup, bounded linear-interpolation error <3e-7.
+// Input is a finite normalized phase [0,1); used by the new PCM LFO path.
+double pcmModulationSine(double phase);
+
 // ── one operator's patch ────────────────────────────────────────────────────
 // values are in the chip's own units (0..15 rates, 0..63 tl, ...) so the
 // sequencer can drop register bytes straight in. the core converts to internal
@@ -53,6 +57,15 @@ struct FmOpPatch {
     uint8_t dvb     = 0;     // vibrato depth (0..3)
     uint8_t dam     = 0;     // tremolo depth (0..3)
     bool    xof     = false; // ignore key-off (drums ring out fully)
+    // MA-7's additional least-significant rate bits. The existing nibbles
+    // keep the MA-1/2/3/5 scale: MA-7 rate = 2*nibble + selected low bit.
+    // Bit0 RR, bit1 SR, bit2 DR, bit3 AR. Legacy/default patches leave zero.
+    uint8_t rateLowBits = 0;
+    // MA7 fixed-frequency raw transport, retained but not synthesized until
+    // the hardware BLOCK/FNUM-to-Hz relationship is established.
+    bool fixedFrequency = false;
+    uint8_t fixedBlock = 0;
+    uint16_t fixedFnum = 0;
 };
 
 // ── a voice patch: 2-op or 4-op, one connection algorithm ───────────────────
@@ -72,12 +85,17 @@ struct FmVoicePatch {
     // fm hit picked by register (low = kick-ish, mid = snare-ish, high = hat-ish)
     // so drums never fall back to a melodic piano.
     static const FmVoicePatch& drumApprox(int note);
+    // Original, ROM-free trial voices classified by documented ROM wave ID.
+    // Neither the patch parameters nor their spectral balance emulate ROM.
+    static const FmVoicePatch* romApprox(int waveId);
+    static const FmVoicePatch& gmModernApprox(int program);
+    bool modernTimbre = false; // related-chip feedback/tremolo; legacy defaults unchanged
 };
 
 // ── envelope generator (adsr, exponential, chip-style discrete rates) ───────
 class FmEnvelope {
 public:
-    // Discrete key-scaling offset added to four times each nonzero rate.
+    // Discrete key-scaling offset added to 4*nibble + 2*MA7-low-bit.
     void configure(const FmOpPatch& p, double sampleRate, int rateOffset = 0);
     void keyOn();
     void keyOff();
@@ -96,7 +114,8 @@ private:
 // ── operator: phase generator + waveform + envelope ─────────────────────────
 class FmOperator {
 public:
-    void configure(const FmOpPatch& p, double sampleRate, int rateOffset = 0);
+    void configure(const FmOpPatch& p, double sampleRate, int rateOffset = 0,
+                   bool modernTimbre = false);
     void noteOn(double freqHz);
     void noteOff();
     // modIn is the phase-modulation input in cycles (0 for a pure carrier).

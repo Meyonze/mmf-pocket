@@ -167,7 +167,28 @@ void SmafFile::parseWaves_(const uint8_t* p, size_t n, TrackChunk& t) {
         if (sz > n - body) sz = uint32_t(n - body);
         WaveData w;
         w.number = c[3];                 // 4th id byte = wave number
-        if (sz >= 2) {
+        if (isMwa) {
+            // Mwa has a THREE-byte WaveType, not ATR's rate-class header:
+            // mono/stereo + codec + bit depth, then unsigned BE16 Fs.
+            // Never pass a frequency byte to the ADPCM decoder.
+            if (sz < 3) { pos = body + sz; continue; }
+            w.formatByte = p[body];
+            w.channels = (w.formatByte & 0x80) ? 2 : 1;
+            const int codec = (w.formatByte >> 4) & 7;
+            w.bitsPerSample = 4 * ((w.formatByte & 15) + 1);
+            w.samplingRate = (uint32_t(p[body + 1]) << 8) | p[body + 2];
+            w.adpcm = codec == 2;
+            w.signedPcm8 = codec == 0;
+            const bool supported = w.channels == 1 &&
+                ((codec == 2 && w.bitsPerSample == 4) ||
+                 (codec <= 1 && w.bitsPerSample == 8) ||
+                 (codec == 0 && w.bitsPerSample == 16));
+            if (!supported || w.samplingRate < 1500 || w.samplingRate > 48000 ||
+                (w.bitsPerSample == 16 && (sz - 3) % 2)) {
+                pos = body + sz; continue;
+            }
+            w.data.assign(p + body + 3, p + body + sz);
+        } else if (sz >= 2) {
             // wave-type: [formatByte][more]. the format byte packs base-fmt +
             // channels; the sampling rate follows in the next byte(s) in the
             // full spec. we keep the raw bytes and a best-effort decode.

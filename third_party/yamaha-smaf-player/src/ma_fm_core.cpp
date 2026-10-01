@@ -14,6 +14,22 @@
 
 namespace fxchain::smaf {
 
+double pcmModulationSine(double phase) {
+    // 32KiB shared table, initialized once, no allocation per voice/sample.
+    // The interpolation bound is (2*pi/4096)^2/8 <3e-7, negligible compared
+    // with source PCM quantization. Keep legacy FM arithmetic unchanged.
+    static const std::array<double,4097> table = [] {
+        std::array<double,4097> values{};
+        for(size_t i=0;i<4096;++i) values[i]=std::sin(6.283185307179586*double(i)/4096.0);
+        values[4096]=0.0;
+        return values;
+    }();
+    double position=phase*4096.0;
+    size_t index=size_t(position);
+    double fraction=position-double(index);
+    return table[index]+(table[index+1]-table[index])*fraction;
+}
+
 namespace {
 constexpr double kTwoPi = 6.283185307179586;
 
@@ -24,12 +40,18 @@ inline double tlToGain(uint8_t tl) {
 }
 
 // A chip rate mapped to a fraction of the documented 0..96 dB transition time.
-inline double rateToStep(uint8_t rate, double sampleRate, bool attack, int offset) {
+inline double rateToStep(uint8_t rate, double sampleRate, bool attack, int offset,
+                         uint8_t lowBit) {
     // Related Yamaha YMF825 manual, EG rate table. Approximation of the
     // continuous curve, not a cycle-accurate MA chip emulator. Rate zero must
     // stay stopped, including when key scaling is enabled.
-    if (rate == 0) return 0.0;
-    int r = std::clamp(int(rate) * 4 + offset, 4, 63);
+    lowBit &= 1;
+    if (rate == 0 && lowBit == 0) return 0.0;
+    // Retain the existing timing exactly for even MA-7 / legacy rates.
+    // Odd MA-7 rates occupy the intermediate effective-rate step in this
+    // related-chip approximation; they are not measured MA-7 timings.
+    int r = std::clamp(int(rate) * 4 + int(lowBit) * 2 + offset,
+                       rate == 0 && lowBit ? 2 : 4, 63);
     if (attack && r >= 60) return 1.0;
     static constexpr double attackMs[16] = {
         2942.78,2354.23,1961.86,1681.59,1471.39,1177.11,980.92,840.80,
@@ -37,7 +59,11 @@ inline double rateToStep(uint8_t rate, double sampleRate, bool attack, int offse
     };
     static constexpr double otherMs[4] = {43008.0,34406.4,28672.0,24576.0};
     double ms;
-    if (attack) {
+    if (r < 4) {
+        // Only MA-7 rate1 can reach these slow intermediate steps. Extend
+        // the same octave progression; the exact MA-7 curve is unverified.
+        ms = attack ? attackMs[r] * 2.0 : otherMs[r] * 2.0;
+    } else if (attack) {
         // Base table 4..19; each increment of four approximately halves time.
         ms = attackMs[(r - 4) % 16] * std::pow(0.5, 4 * ((r - 4) / 16));
     } else {
@@ -132,12 +158,110 @@ const FmVoicePatch& FmVoicePatch::drumApprox(int note) {
     return kit[note < 44 ? 0 : note < 52 ? 1 : 2];
 }
 
+const FmVoicePatch& FmVoicePatch::gmModernApprox(int program) {
+    // Original synthesis recipes, not extracted GM/handset patches. Distinct
+    // attack/body layers and detuned carriers replace the single-family tone.
+    static const std::array<FmVoicePatch,128> bank = [] {
+        std::array<FmVoicePatch,128> b{};
+        for(int pc=0;pc<128;++pc) {
+            auto v=gmApprox(pc);
+            v.modernTimbre=true;
+            if(pc<8) {
+                v.fourOp=true; v.algorithm=5;
+                v.ops[0].multi=1; v.ops[0].tl=24; v.ops[0].dr=8; v.ops[0].sr=3;
+                v.ops[1].dr=5; v.ops[1].sl=5; v.ops[1].sr=3; v.ops[1].rr=9;
+                v.ops[2]=v.ops[0]; v.ops[2].multi=3; v.ops[2].tl=30; v.ops[2].dr=10;
+                v.ops[3]=v.ops[1]; v.ops[3].tl=5; v.ops[3].dt=5;
+            } else if(pc>=16 && pc<24) {
+                v.fourOp=true; v.algorithm=2; v.feedback=0;
+                for(int i=0;i<4;++i) {
+                    v.ops[i]=FmOpPatch{}; v.ops[i].multi=uint8_t(i==3?4:i+1);
+                    v.ops[i].tl=uint8_t(i==0?4:10+i*3); v.ops[i].rr=11;
+                }
+            } else if(pc>=40 && pc<56) {
+                v.fourOp=true; v.algorithm=2; v.feedback=0;
+                for(int i=0;i<4;++i) {
+                    auto& o=v.ops[i]; o=FmOpPatch{};
+                    o.multi=1; o.wave=uint8_t(i==3?16:24); o.tl=uint8_t(i==3?11:6);
+                    o.dt=uint8_t(i==0?0:i==1?2:i==2?6:1);
+                    o.ar=12; o.dr=0; o.sr=0; o.sl=0; o.rr=8;
+                    o.vib=true; o.dvb=0;
+                }
+                v.lfo=1;
+            }
+            b[pc]=v;
+        }
+        return b;
+    }();
+    return bank[std::clamp(program,0,127)];
+}
+
+const FmVoicePatch* FmVoicePatch::romApprox(int waveId) {
+    // Yamaha MA7 authoring manual p94 lists 22 percussion waves, four piano
+    // zones, three string zones. Program/mapped note is NOT the wave's identity.
+    // MA3/5 observed IDs/loop endpoints agree; cross-generation classification
+    // and all synthesis recipes remain private DEV approximations.
+    if(waveId<0 || waveId>=29) return nullptr;
+    static const std::array<FmVoicePatch,29> bank=[] {
+        std::array<FmVoicePatch,29> b{};
+        for(int id=0;id<29;++id) {
+            if(id>=22) {
+                b[id]=gmModernApprox(id<26?0:48);
+                continue;
+            }
+            auto v=drumApprox(id==0?36:id==1||id==9?38:60);
+            v.modernTimbre=true; v.feedback=0;
+            for(int op=0;op<2;++op) {
+                auto& o=v.ops[op]; o.ar=15; o.sl=15; o.sr=0;
+                o.egType=false; o.xof=true; o.rr=12;
+            }
+            switch(id) {
+                case 0: // kick: low body, short bright contact
+                    v.ops[0].multi=1; v.ops[0].tl=18; v.ops[0].fb=0;
+                    v.ops[1].multi=1; v.ops[1].tl=3; v.ops[1].dr=10; v.ops[1].fb=0; break;
+                case 1: case 9: case 10: // snare/roll/clap: broadband FM transient
+                    v.ops[0].multi=11; v.ops[0].fb=7; v.ops[0].tl=8;
+                    v.ops[1].multi=1; v.ops[1].tl=7;
+                    v.ops[0].dr=uint8_t(id==9?8:9); v.ops[1].dr=uint8_t(id==10?10:9); break;
+                case 2: case 14: case 15: case 16: case 17: // tuned membranes
+                    v.ops[0].multi=2; v.ops[0].fb=0; v.ops[0].tl=26;
+                    v.ops[1].multi=1; v.ops[1].tl=4;
+                    v.ops[0].dr=11; v.ops[1].dr=uint8_t(id==15?11:id==2?8:9); break;
+                case 3: case 4: case 5: case 6: case 11: case 21: // metallic/noisy percussion
+                    v.fourOp=true; v.algorithm=5;
+                    v.ops[0].multi=11; v.ops[0].fb=7; v.ops[0].tl=12;
+                    v.ops[1].multi=7; v.ops[1].tl=13;
+                    v.ops[0].dr=v.ops[1].dr=uint8_t(id==3?12:id==6?7:9);
+                    v.ops[2]=v.ops[0]; v.ops[2].multi=15; v.ops[2].dt=2;
+                    v.ops[3]=v.ops[1]; v.ops[3].multi=9; v.ops[3].dt=6;
+                    if(id==11 || id==21) v.ops[0].dr=v.ops[1].dr=v.ops[2].dr=v.ops[3].dr=11;
+                    break;
+                case 7: case 8: // rim clicks
+                    v.ops[0].multi=6; v.ops[0].fb=2; v.ops[0].tl=17;
+                    v.ops[1].multi=2; v.ops[1].tl=9; v.ops[1].dr=12; break;
+                case 12: // cowbell
+                    v.ops[0].multi=7; v.ops[0].fb=0; v.ops[0].tl=14;
+                    v.ops[1].multi=5; v.ops[1].tl=12; v.ops[1].dr=9; break;
+                case 13: case 18: // rattles/scrapes
+                    v.ops[0].multi=15; v.ops[0].fb=7; v.ops[0].tl=15;
+                    v.ops[1].multi=3; v.ops[1].tl=11; v.ops[1].dr=9; break;
+                default: // cuica, shorter/longer rubbed membrane variants
+                    v.ops[0].multi=2; v.ops[0].fb=1; v.ops[0].tl=10;
+                    v.ops[1].multi=1; v.ops[1].tl=8; v.ops[1].dr=uint8_t(id==19?11:8); break;
+            }
+            b[id]=v;
+        }
+        return b;
+    }();
+    return &bank[waveId];
+}
+
 // ── FmEnvelope ───────────────────────────────────────────────────────────────
 void FmEnvelope::configure(const FmOpPatch& p, double sampleRate, int rateOffset) {
-    atkStep_ = rateToStep(p.ar, sampleRate, true, rateOffset);
-    decStep_ = std::exp(-11.052408446 * rateToStep(p.dr, sampleRate, false, rateOffset));
-    susStep_ = std::exp(-11.052408446 * rateToStep(p.sr, sampleRate, false, rateOffset));
-    relStep_ = std::exp(-11.052408446 * rateToStep(p.rr, sampleRate, false, rateOffset));
+    atkStep_ = rateToStep(p.ar, sampleRate, true, rateOffset, p.rateLowBits >> 3);
+    decStep_ = std::exp(-11.052408446 * rateToStep(p.dr, sampleRate, false, rateOffset, p.rateLowBits >> 2));
+    susStep_ = std::exp(-11.052408446 * rateToStep(p.sr, sampleRate, false, rateOffset, p.rateLowBits >> 1));
+    relStep_ = std::exp(-11.052408446 * rateToStep(p.rr, sampleRate, false, rateOffset, p.rateLowBits));
     // Yamaha-family sustain attenuation: 3 dB steps, final code ~93 dB.
     susLevel_ = std::pow(10.0, -(p.sl == 15 ? 93.0 : 3.0 * p.sl) / 20.0);
     sustaining_ = p.egType;
@@ -185,7 +309,8 @@ float FmEnvelope::advance() {
 }
 
 // ── FmOperator ───────────────────────────────────────────────────────────────
-void FmOperator::configure(const FmOpPatch& p, double sampleRate, int rateOffset) {
+void FmOperator::configure(const FmOpPatch& p, double sampleRate, int rateOffset,
+                           bool modernTimbre) {
     patch_ = p;
     sampleRate_ = sampleRate;
     wave_ = p.wave;
@@ -197,6 +322,10 @@ void FmOperator::configure(const FmOpPatch& p, double sampleRate, int rateOffset
     static constexpr float  kTrem[4] = { 0.129f, 0.242f, 0.424f, 0.669f };
     vibAmt_ = p.vib ? kVib[p.dvb & 3] : 0.0;
     amAmt_  = p.am  ? kTrem[p.dam & 3] : 0.0f;
+    if(modernTimbre && p.am) {
+        static constexpr double depths[4]={1.3,2.8,5.8,11.8};
+        amAmt_=float(1.0-std::pow(10.0,-depths[p.dam&3]/20.0));
+    }
     env_.configure(p, sampleRate, rateOffset);
 }
 
@@ -336,7 +465,7 @@ void FmVoice::noteOn(const FmVoicePatch& patch, double freqHz, float velocity) {
     int nops = fourOp_ ? 4 : 2;
     for (int i = 0; i < nops; ++i) {
         int offset = patch.ops[i].ksr ? block * 2 + high : block / 2;
-        ops_[i].configure(patch.ops[i], sampleRate_, offset);
+        ops_[i].configure(patch.ops[i], sampleRate_, offset, patch.modernTimbre);
         ops_[i].noteOn(freqHz);
     }
     active_ = true;
@@ -362,7 +491,11 @@ float FmVoice::modOp_(int i, double extModCycles) {
         // feedback in cycles, averaged over the last two outputs (OPL trick to
         // damp the self-oscillation), scaled gently by the 0..7 amount.
         double avg = (fbMem_[i][0] + fbMem_[i][1]) * 0.5;
-        fbc = avg * (double(opFb_[i]) / 24.0);
+        // Related YMF825 reference uses exponential feedback. MA hardware
+        // calibration is unverified; only modern trial voices opt into it.
+        static constexpr double modernFeedback[8]={0,1.0/32,1.0/16,1.0/8,1.0/4,1.0/2,1,2};
+        fbc = avg * (patch_.modernTimbre ? modernFeedback[opFb_[i]&7]
+                                      : double(opFb_[i])/24.0);
     }
     float o = ops_[i].tick(extModCycles + fbc, lfoSin_);
     fbMem_[i][1] = fbMem_[i][0]; fbMem_[i][0] = o;

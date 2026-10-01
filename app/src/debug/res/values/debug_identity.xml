@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="launcher_debug_background">#E86A17</color>
+    <string name="app_name">MMF Pocket DEV</string>
+</resources>

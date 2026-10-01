@@ -16,12 +16,19 @@ MMF Pocket changes the vendored source in the following ways:
 - Parser and decoder resource ceilings are added for tracks, wave chunks, custom voices and chunk scans.
 - Bounds checks used while skipping malformed event data are hardened.
 - SMAF 10/20/40/50 ms timebases and the published VM35 operator waveform shapes are implemented.
-- MA-7 Score Format 3 is detected and rejected rather than decoded with the incompatible MA-3/MA-5 grammar.
+- MA-7 Score Format 3 uses its own validated event grammar and supported
+  expanded FM/WT voice and wave-RAM layouts, rather than the incompatible
+  MA-3/MA-5 grammar. Signed PCM8 is experimental; AL filter DSP, nonneutral
+  pitch envelopes and fixed-frequency synthesis remain incomplete.
 - Envelope sustain, zero rates, decay curves, detune and LFO behaviour are
   corrected using related Yamaha documentation; see `docs/audio-fidelity.md`.
 - Note-instance gate matching, FM routing/voice retirement and release draining
   are corrected. MA-3 PCM parameters/voice-wave blocks are unpacked and played
   with ROM/RAM separation, authored pitch/loop settings and live controllers.
+- Recorded score Audio uses separate sample addressing/slots. Custom drum
+  pitch, bend sensitivity, MA-7 controller curves and expanded envelope-rate
+  fields are retained. Authored sampled-voice modulation is applied without
+  changing recorded Audio, while missing ROM waves use original approximations.
 
 Modified source files carry a modification notice as required by Apache-2.0.
 
