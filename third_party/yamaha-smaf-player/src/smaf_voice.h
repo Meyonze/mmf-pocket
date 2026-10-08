@@ -57,17 +57,21 @@ struct AnalogLiteParams {
 struct ParsedVoice {
     VoiceKey     key;
     FmVoicePatch patch;
-    PcmParams    pcm;             // valid when isPcm
+    PcmParams    pcm;             // usable only when valid && isPcm
     int          keyHigh = 127;   // upper split key; 127 when unsplit
     int          fixedFmNote = -1; // custom drum sounding key, distinct from trigger; 0 is valid
-    bool         isPcm = false;   // pcm voices play a sampled wave, not fm
+    bool         isPcm = false;   // decoded family; may also be true on invalid images
     bool         valid = false;
     AnalogLiteParams al;
+    bool sequenced = false; // inline tone definition, not initial setup
+    uint64_t activationSample = 0;
+    bool activated = false; // runtime; reset on seek, set by its stream event
 };
 
 // parse ONE exclusive payload (the bytes between the F0 length and the trailing
 // F7, i.e. starting at the 0x43 maker id). returns valid=false for anything we
-// do not synthesise (pcm voices, unknown makers).
+// cannot decode as a supported complete image. PCM is supported; sample
+// availability (including proprietary ROM) is checked separately at note-on.
 ParsedVoice parseVoiceExclusive(const uint8_t* p, size_t n);
 
 // MA-3 SysEx packing: each mask's bits 6..0 supply bit7 of the next

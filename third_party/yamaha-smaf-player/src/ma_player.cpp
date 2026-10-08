@@ -12,6 +12,7 @@
 // thread and trivial to smoke-test.
 
 #include "ma_player.h"
+#include "pcm_interpolation.h"
 #include "yamaha_adpcm.h"   // unused until m1 (embedded pcm voices); included so
                             // the codec always compiles alongside the engine.
 
@@ -26,6 +27,27 @@ namespace {
 constexpr double kSafetySeconds = 600.0;   // hard cap so a broken loop can't hang
 constexpr size_t kMaxEvents     = 400000;  // total decoded-event ceiling (anti-DoS)
 constexpr size_t kMaxCustomVoices = 2048;  // cap malformed exclusive-message floods
+constexpr size_t kMaxVoiceWaveVersions = 512;
+constexpr size_t kMaxVoiceWaveVersionBytes = 16u << 20; // extra inline decoded RAM
+
+// MA7 SMAF guideline 8.3.5: channel pan has cosine/sine amplitude gains,
+// including the default control64. Cache at allocation/controller time, never
+// evaluate trigonometry in the per-sample mixing loop. Authored voice PE uses
+// a separate 5-bit register; leave that uncalibrated law and older profiles alone.
+void channelPanGains(float pan, bool ma7, float& left, float& right) {
+    if (!ma7) { left = 1.0f - pan; right = 1.0f + pan; return; }
+    static const std::array<std::array<float,2>,128> table = [] {
+        std::array<std::array<float,2>,128> values{};
+        for (int i=0;i<128;++i) {
+            const double angle=1.5707963267948966*double(i)/127.0;
+            values[i]={float(std::cos(angle)),float(std::sin(angle))};
+        }
+        values[0]={1,0};values[127]={0,1};
+        return values;
+    }();
+    const int value=std::clamp(int(std::lround(double(pan)*64.0+64.0)),0,127);
+    left=table[size_t(value)][0];right=table[size_t(value)][1];
+}
 
 inline uint32_t be32(const uint8_t* p) {
     return (uint32_t(p[0]) << 24) | (uint32_t(p[1]) << 16) |
@@ -54,6 +76,147 @@ inline uint32_t readVlq(const uint8_t*& p, const uint8_t* end) {
     return v;
 }
 } // namespace
+
+void MaPlayer::audit_(ScoreAudit::Domain domain, ScoreAudit::Status status,
+                      int opcode, int value, uint64_t sample, int channel) {
+    scoreAudit_.record(domain, status, auditFormat_, auditTrack_, channel,
+                       opcode, value, sample);
+}
+
+uint32_t MaPlayer::readScoreLength_(const uint8_t*& p, const uint8_t* end,
+                                   bool hps, uint64_t sample, ScoreAudit::Domain domain) {
+    const uint8_t* start = p;
+    // Use the existing reader and preserve its recovery/output exactly.
+    uint32_t result = hps ? readVarHps(p, end) : readVlq(p, end);
+    bool valid = p > start;
+    if (valid && hps) valid = *start < 0x80 || p - start == 2;
+    if (valid && !hps) valid = (p[-1] & 0x80) == 0;
+    if (!valid) audit_(domain, ScoreAudit::Status::Malformed, 0x100, int(p - start), sample);
+    return result;
+}
+
+bool MaPlayer::scoreBytes_(const uint8_t* p, const uint8_t* end, size_t count,
+                          int opcode, uint64_t sample, int channel) {
+    if (size_t(end - p) >= count) return true;
+    audit_(ScoreAudit::Domain::Sequence, ScoreAudit::Status::Malformed,
+           opcode, int(count), sample, channel);
+    return false;
+}
+
+void MaPlayer::routeController_(uint64_t at, int ch, int cc, int val, bool ma7) {
+    using S = ScoreAudit::Status;
+    S status = S::Routed;
+    Ev::T type = Ev::Volume;
+    int b = 0, routedValue = val;
+    bool route = true;
+    // One routing table owns both coverage classification and scheduling.
+    // Routed means scheduled, NOT that it necessarily changes an active voice.
+    switch (cc) {
+        case 0: type = Ev::BankMsb; break;
+        case 32: type = Ev::BankLsb; break;
+        case 7: type = Ev::Volume; break;
+        case 10: type = Ev::Pan; break;
+        case 11: type = Ev::Expression; break;
+        case 1:
+            type = Ev::Modulation;
+            if (!ma7 || val > 127) status = S::Unapplied;
+            break;
+        case 15:
+            type = Ev::PitchBendRange;
+            // Mobile compact sensitivity remains an empirical compatibility
+            // interpretation; diagnostics do not upgrade it to a specification.
+            status = ma7 ? S::Routed : S::Compatibility;
+            if (val > 24) { route = false; status = S::Unapplied; }
+            break;
+        case 101: case 100:
+            type = cc == 101 ? Ev::RpnMsb : Ev::RpnLsb;
+            if (ma7) { route = false; status = S::Unsupported; }
+            else status = val > 127 ? S::Unapplied :
+                val == 0 || val == 127 ? S::Routed : S::Partial;
+            break;
+        case 64:
+            type = Ev::Hold;
+            if (ma7) { route = false; status = S::Unsupported; }
+            else if (val > 127) { route = false; status = S::Unapplied; }
+            break;
+        case 120:
+            // All Sound Off stops even release/held/XOF voices, without
+            // resetting the channel's authored controls or voice selection.
+            type = Ev::AllSoundOff;
+            if (ma7) { route = false; status = S::Unsupported; }
+            else if (val != 0) { route = false; status = S::Unapplied; }
+            break;
+        case 121:
+            // Mobile standard Reset All Controllers. Reset only implemented
+            // per-channel controls; do not infer compact MA7 semantics.
+            type = Ev::ResetControllers;
+            if (ma7) { route = false; status = S::Unsupported; }
+            else if (val != 0) { route = false; status = S::Unapplied; }
+            break;
+        case 123:
+            // Mobile Bch 7B 00: standard MIDI All Notes Off. Do not extend
+            // this interpretation to the unconfirmed MA7 compact transport.
+            type = Ev::AllNotesOff;
+            if (ma7) { route = false; status = S::Unsupported; }
+            else if (val != 0) { route = false; status = S::Unapplied; }
+            break;
+        case 6: case 38:
+            type = Ev::RpnData; b = cc == 38 ? 1 : 0;
+            if (ma7) { route = false; status = S::Unsupported; }
+            else status = val <= (b ? 99 : 24) ? S::Conditional : S::Unapplied;
+            break;
+        case 98: case 99:
+            type = Ev::NrpnSelect; routedValue = 0;
+            // Only cancels RPN selection; NRPN parameters are not synthesized.
+            if (ma7) { route = false; status = S::Unsupported; }
+            else status = S::Partial;
+            break;
+        default: route = false; status = S::Unsupported; break;
+    }
+    if ((cc == 7 || cc == 10 || cc == 11 || cc == 32) && val > 127)
+        status = S::Partial; // legacy masking, not a validated high-bit value
+    audit_(ScoreAudit::Domain::Controller, status, cc, val, at, ch);
+    if (route) events_.push_back({at, type, uint16_t(ch), int16_t(routedValue), int16_t(b)});
+}
+
+void MaPlayer::auditVoice_(const ParsedVoice& v, uint64_t at) {
+    using D = ScoreAudit::Domain;
+    using S = ScoreAudit::Status;
+    // Definition inventory only. An unused patch is NOT an audible defect.
+    audit_(D::VoiceDefinition, S::Routed, 0, v.key.pc, at);
+    if (v.al.present) {
+        // AL is retained but no AL DSP runs, even when all register bytes are
+        // zero. Uncalibrated zero values do not prove a hardware bypass. This
+        // records definition presence, never a claim of audible use/impact.
+        audit_(D::VoiceDefinition, S::Unapplied, 0x101, v.key.pc, at);
+    }
+    if (v.isPcm && v.pcm.rom) audit_(D::VoiceDefinition, S::Compatibility, 0x102, v.pcm.waveId, at);
+    const int count = v.isPcm ? 1 : v.patch.fourOp ? 4 : 2;
+    for (int i = 0; i < count; ++i) {
+        const auto& op = v.isPcm ? v.pcm.env : v.patch.ops[size_t(i)];
+        if (op.fixedFrequency) audit_(D::VoiceDefinition, S::Unapplied, 0x110 + i, v.key.pc, at);
+        if (op.ma7Multipliers && op.ma7Detune)
+            audit_(D::VoiceDefinition, S::Partial, 0x120 + i, op.ma7Detune, at);
+        // MA5 manual4.18.2: WS15/23/31 select user SRAM waveforms, not
+        // reserved values. Their transport/binding is not implemented here.
+        // Definition presence is a support gap, not proof a note uses it.
+        if (!v.isPcm && (op.wave == 15 || op.wave == 23 || op.wave == 31))
+            audit_(D::VoiceDefinition, S::Unsupported, 0x130 + i, op.wave, at);
+    }
+}
+
+void MaPlayer::auditExclusive_(const uint8_t* p, size_t n, uint64_t at) {
+    // Call once per exclusive, not once for every voice/wave parser candidate.
+    // Numeric header classifications only: never retain lyrics/raw SysEx.
+    const bool wave = n >= 5 && p[0] == 0x43 && p[1] == 0x79 && p[3] == 0x7f &&
+        (p[4] == 3 || p[4] == 0x23);
+    if (wave) return; // actual decoder records success/rejection below
+    const ParsedVoice v = parseVoiceExclusive(p, n);
+    if (v.valid) return;
+    const int opcode = n >= 5 && p[0] == 0x43 && p[1] == 0x79
+        ? (int(p[2]) << 8) | p[4] : n ? p[0] : -1;
+    audit_(ScoreAudit::Domain::Setup, ScoreAudit::Status::Unsupported, opcode, int(n), at);
+}
 
 // ── huffman (okumura tree) inflate ──────────────────────────────────────────
 std::vector<uint8_t> smafHuffmanInflate(const uint8_t* p, size_t n) {
@@ -125,7 +288,10 @@ bool MaPlayer::init(const SmafFile& file, uint32_t sampleRate,
     pcmLimit_ = std::any_of(file.tracks.begin(), file.tracks.end(),
         [](const TrackChunk& t) { return !t.isAudioTrack && t.formatType == 3; }) ? 32 : 16;
     scoreEndSample_ = 0; motionPace_ = 1; ended_ = false; diagnostics_ = {};
+    scoreAudit_ = {}; auditFormat_ = auditTrack_ = -1;
     for (auto& wave : voiceWaveBank_) wave = PcmSample{};
+    voiceWaveVersions_.clear(); voiceWaveVersionBytes_ = 0;
+    activeVoiceWaveVersion_.fill(-1);
     for (auto& c : chans_) c = Chan{};
     for (auto& v : pool_) { v = FmVoice{}; v.setSampleRate(double(rate_)); }
     for (auto& pv : pcmPool_) pv.active = false;
@@ -133,8 +299,14 @@ bool MaPlayer::init(const SmafFile& file, uint32_t sampleRate,
     // Reject at engine level too. Unknown grammars must never silently produce
     // plausible-looking wrong events; Format 3 is the validated MA-7 SEQU path.
     for (const auto& t : file.tracks)
-        if (!t.isAudioTrack && (t.formatType < 0 || t.formatType > 3)) return false;
+        if (!t.isAudioTrack && (t.formatType < 0 || t.formatType > 3)) {
+            auditFormat_ = t.formatType; auditTrack_ = t.trackNumber;
+            audit_(ScoreAudit::Domain::Sequence, ScoreAudit::Status::Unsupported, 0x101);
+            scoreAudit_.scanComplete = false;
+            return false;
+        }
     poolNoteId_.fill(0);
+    poolPanLocked_.fill(false);
     // ~10 kHz analog-lite output filter (two 1-pole stages).
     lpCoef_ = float(1.0 - std::exp(-2.0 * 3.14159265358979 * 10000.0 / double(rate_)));
     lp1L_ = lp1R_ = lp2L_ = lp2R_ = 0.0f;
@@ -146,10 +318,11 @@ bool MaPlayer::init(const SmafFile& file, uint32_t sampleRate,
     for (auto& pv : pcmPool_) pv.active = false;
 
     auto play = file.playableScoreTracks();
-    if (play.empty()) return false;
+    if (play.empty()) { scoreAudit_.scanComplete = false; return false; }
 
     for (size_t idx : play) {
         const TrackChunk& t = file.tracks[idx];
+        if (t.isAudioTrack) continue; // pure ATR fallback is decoded below, once
         // handyphone = 4 channels/track, mobile = 16. global channel base keeps
         // multi-track files from colliding.
         int base = (t.formatType == 0x00) ? t.trackNumber * 4
@@ -160,53 +333,34 @@ bool MaPlayer::init(const SmafFile& file, uint32_t sampleRate,
     }
 
     // audio (ATR) tracks: the wave-trigger sequence that plays the sampled
-    // drums/voices alongside the score. it reuses the handyphone grammar with
-    // the note nibble as the wave number. an ATR often declares timebase 0
-    // (1 ms) while it is authored against the score's tick, so inherit the
-    // first score track's timebase (same song, same clock).
+    // drums/voices alongside the score. It uses a SIX-bit wave ID and its own
+    // D/G clocks (SMAF 3.05 pp49,51), never a score track's unrelated clock.
     {
-        double scoreTb = 0.0;
-        if (!play.empty()) scoreTb = TrackChunk::timeBaseMs(file.tracks[play[0]].durationTimeBase);
         for (const TrackChunk& t : file.tracks) {
             if (!t.isAudioTrack || t.sequenceData.empty() || t.waves.empty()) continue;
-            double tb = TrackChunk::timeBaseMs(t.durationTimeBase);
-            if (t.durationTimeBase == 0 && scoreTb > 0.0) tb = scoreTb;
+            auditFormat_ = 0; auditTrack_ = t.trackNumber;
+            if (t.formatType != 0 || t.sequenceType != 0) {
+                audit_(ScoreAudit::Domain::Sequence, ScoreAudit::Status::Unsupported,
+                       t.formatType, t.sequenceType);
+                scoreAudit_.scanComplete = false;
+                continue;
+            }
+            ScoreAudit::increment(scoreAudit_.decodedTracks);
             decodeHandyPhone_(t.sequenceData.data(), t.sequenceData.size(),
-                              /*base=*/120, tb, tb, /*atrWaveMode=*/true);
+                              /*base=*/120, TrackChunk::timeBaseMs(t.durationTimeBase),
+                              TrackChunk::timeBaseMs(t.gateTimeBase), true, t.trackNumber);
         }
     }
 
     if (events_.empty()) return false;
 
-    // setup-ramp hoist: many files stagger each channel's first BankMsb/BankLsb/
-    // Program over the first couple of ticks WHILE the first notes already play
-    // (the real chip rewrites the channel registers, so a sounding note takes the
-    // patch over mid-note; we snapshot at note-on). hoist each channel's FIRST
-    // bank/program assignment to t=0 when it lands inside the setup window, so
-    // the opening notes bind the intended voice instead of the gm fallback.
-    {
-        const uint64_t setupWin = uint64_t(rate_) / 20;     // 50 ms
-        bool seen[128][3] = {};                             // per ch: msb/lsb/pc
-        for (Ev& e : events_) {
-            int k = (e.type == Ev::BankMsb) ? 0
-                  : (e.type == Ev::BankLsb) ? 1
-                  : (e.type == Ev::Program) ? 2 : -1;
-            if (k < 0) continue;
-            bool& s = seen[e.ch & 127][k];
-            if (s) continue;
-            s = true;
-            if (e.sample <= setupWin) e.sample = 0;
-        }
-    }
-    // controllers first at equal timestamps, so a same-tick bank/program lands
-    // before the note-on that depends on it.
+    // Duration belongs to the following event (SMAF 3.05, p42). Never move
+    // early bank/program messages back to sample zero or move controllers
+    // ahead of preceding notes in the same tick. Preserve decode insertion
+    // order for ties, including the existing generated gate-off tie-break.
     std::stable_sort(events_.begin(), events_.end(),
                      [](const Ev& a, const Ev& b) {
-                         if (a.sample != b.sample) return a.sample < b.sample;
-                         auto isNote = [](const Ev& e) {
-                             return e.type == Ev::NoteOn || e.type == Ev::NoteOff;
-                         };
-                         return !isNote(a) && isNote(b);
+                         return a.sample < b.sample;
                      });
 
     if (suppressHpsSlapbackDuplicates) suppressHpsSlapbackDuplicates_();
@@ -308,11 +462,11 @@ void MaPlayer::suppressHpsSlapbackDuplicates_() {
 void MaPlayer::buildWaveBank_(const SmafFile& file) {
     waveBank_.clear();
     scoreWaveBanks_.clear();
+    audioWaveBanks_.clear();
     for (const TrackChunk& t : file.tracks) {
         for (const WaveData& w : t.waves) {
             if (w.number < 0 || w.data.empty()) continue;
-            if (size_t(w.number) >= waveBank_.size()) waveBank_.resize(w.number + 1);
-            PcmSample& ps = waveBank_[w.number];
+            PcmSample ps;
             ps.fs = w.samplingRate ? int(w.samplingRate) : 8000;
             if (w.adpcm) {
                 YamahaAdpcm dec;
@@ -330,9 +484,15 @@ void MaPlayer::buildWaveBank_(const SmafFile& file) {
                         : int(w.data[i]) - 128) * 256);
             }
             if (!t.isAudioTrack) {
+                if (size_t(w.number) >= waveBank_.size()) waveBank_.resize(w.number + 1);
+                waveBank_[w.number] = ps;
                 auto& bank = scoreWaveBanks_[t.trackNumber];
                 if (size_t(w.number) >= bank.size()) bank.resize(w.number + 1);
-                bank[w.number] = ps;
+                bank[w.number] = std::move(ps);
+            } else {
+                auto& bank = audioWaveBanks_[t.trackNumber];
+                if (size_t(w.number) >= bank.size()) bank.resize(w.number + 1);
+                bank[w.number] = std::move(ps);
             }
         }
     }
@@ -340,14 +500,54 @@ void MaPlayer::buildWaveBank_(const SmafFile& file) {
 
 void MaPlayer::collectVoices_(const SmafFile& file) {
     for (const TrackChunk& t : file.tracks) {
+        auditFormat_ = t.formatType; auditTrack_ = t.trackNumber;
         bool mobile = (t.formatType != 0x00);
         if (!t.setupData.empty()) addExclusivesFrom_(t.setupData, mobile);
     }
 }
 
 void MaPlayer::addVoiceWave_(const uint8_t* p, size_t n) {
+    PcmSample decoded;
+    if (decodeVoiceWave_(p, n, decoded, 65536 * sizeof(int16_t))) {
+        audit_(ScoreAudit::Domain::WaveDefinition, ScoreAudit::Status::Routed, p[6]);
+        voiceWaveBank_[p[5]] = std::move(decoded);
+    } else if (n >= 5 && p[0] == 0x43 && p[1] == 0x79 && p[3] == 0x7f &&
+               (p[4] == 3 || p[4] == 0x23)) {
+        audit_(ScoreAudit::Domain::WaveDefinition, ScoreAudit::Status::Unsupported,
+               n >= 7 ? p[6] : -1, int(n));
+    }
+}
+
+void MaPlayer::addTimedWave_(const uint8_t* p, size_t n, uint64_t sample) {
+    // Every SysEx is offered to both parsers. A full wave bank must not report
+    // a voice-only message as a dropped wave definition.
+    const bool waveMessage = n >= 5 && p[0] == 0x43 && p[1] == 0x79 && p[3] == 0x7f &&
+        (p[4] == 3 || p[4] == 0x23);
+    // Check event/version ceilings BEFORE unpacking or allocating wave memory.
+    if (events_.size() >= kMaxEvents || voiceWaveVersions_.size() >= kMaxVoiceWaveVersions ||
+        voiceWaveVersionBytes_ >= kMaxVoiceWaveVersionBytes) {
+        if (waveMessage) audit_(ScoreAudit::Domain::WaveDefinition, ScoreAudit::Status::ResourceLimit, 0x101, 0, sample);
+        return;
+    }
+    PcmSample decoded;
+    if (!decodeVoiceWave_(p, n, decoded, kMaxVoiceWaveVersionBytes - voiceWaveVersionBytes_)) {
+        if (n >= 5 && p[0] == 0x43 && p[1] == 0x79 && p[3] == 0x7f &&
+            (p[4] == 3 || p[4] == 0x23))
+            audit_(ScoreAudit::Domain::WaveDefinition, ScoreAudit::Status::Unsupported,
+                   n >= 7 ? p[6] : -1, int(n), sample);
+        return;
+    }
+    audit_(ScoreAudit::Domain::WaveDefinition, ScoreAudit::Status::Routed, p[6], 0, sample);
+    const auto version = int16_t(voiceWaveVersions_.size());
+    voiceWaveVersionBytes_ += decoded.pcm.size() * sizeof(int16_t);
+    voiceWaveVersions_.push_back(std::move(decoded));
+    events_.push_back({sample, Ev::WaveActivation, 0, version, int16_t(p[5])});
+}
+
+bool MaPlayer::decodeVoiceWave_(const uint8_t* p, size_t n, PcmSample& out,
+                                 size_t maxDecodedBytes) {
     if (!p || n < 8 || p[0] != 0x43 || p[1] != 0x79 ||
-        p[3] != 0x7f || p[5] >= 128) return;
+        p[3] != 0x7f || p[5] >= 128) return false;
     // MA-7 Format 3 carries native 8-bit bytes, NOT MA-3's seven-bit
     // transport. ADPCM (0), unsigned PCM8 (2), and signed PCM8 (3) are
     // separate formats. PCM8 signedness does not change sample addressing.
@@ -355,12 +555,20 @@ void MaPlayer::addVoiceWave_(const uint8_t* p, size_t n) {
     // private DEV build; the manufacturer editor confirms internal3=signed8.
     // Bound allocations to the 16-bit voice address space; unsupported
     // codecs and malformed/oversize payloads leave the bank untouched.
-    if (p[2] == 0x08 && p[4] == 0x23) {
+    // Native MA-5 07/03 also carries raw bytes. Codec 0/2 interpretation
+    // is corpus-supported (decoded lengths match its PCM patch endpoints),
+    // not a claim that all MA-5 codecs match MA-7. Keep codec 3 MA-7 only.
+    const bool rawMa5 = p[2] == 0x07 && p[4] == 0x03;
+    const bool rawMa7 = p[2] == 0x08 && p[4] == 0x23;
+    if (rawMa5 || rawMa7) {
+        if (p[6] != 0 && p[6] != 2 && !(rawMa7 && p[6] == 3)) return false;
         const size_t bytes = n - 7;
+        const size_t sampleBytes = p[6] == 0 ? 4 : 2;
+        if (bytes > maxDecodedBytes / sampleBytes) return false;
         if (p[6] == 0 && bytes <= 32768) {
             YamahaAdpcm decoder;
-            voiceWaveBank_[p[5]].pcm = decoder.decodeAll(p + 7, bytes, false);
-            voiceWaveBank_[p[5]].retireSilentLoop = false;
+            out.pcm = decoder.decodeAll(p + 7, bytes, false);
+            out.retireSilentLoop = false;
         } else if ((p[6] == 2 || p[6] == 3) && bytes <= 65536) {
             std::vector<int16_t> pcm(bytes);
             for (size_t i = 0; i < bytes; ++i) {
@@ -369,29 +577,33 @@ void MaPlayer::addVoiceWave_(const uint8_t* p, size_t n) {
                 else if (sample >= 128) sample -= 256;
                 pcm[i] = int16_t(sample * 256);
             }
-            voiceWaveBank_[p[5]].pcm = std::move(pcm);
-            voiceWaveBank_[p[5]].retireSilentLoop = p[6] == 3;
+            out.pcm = std::move(pcm);
+            out.retireSilentLoop = p[6] == 3;
         }
-        return;
+        return !out.pcm.empty();
     }
     // MA-3 voice waves use seven-bit transport for ADPCM or unsigned PCM8.
     // Only these validated codecs are enabled. Unknown variants are
     // not guessed. 16-bit LP/EP addressing bounds a wave to 65536 samples.
     if (!p || n < 9 || p[0] != 0x43 || p[1] != 0x79 || p[2] != 0x06 ||
-        p[3] != 0x7f || p[4] != 3 || p[5] >= 128 || (p[6] != 0 && p[6] != 2)) return;
+        p[3] != 0x7f || p[4] != 3 || p[5] >= 128 || (p[6] != 0 && p[6] != 2)) return false;
+    const size_t packedSize = n - 7;
+    const size_t unpackedSize = packedSize - (packedSize + 7) / 8;
+    if (unpackedSize > maxDecodedBytes / (p[6] == 0 ? 4 : 2)) return false;
     auto bytes = unpackMa3Bytes(p + 7, n - 7, p[6] == 0 ? 32768 : 65536);
-    if (bytes.empty()) return;
+    if (bytes.empty()) return false;
     if (p[6] == 0) {
         YamahaAdpcm decoder;
-        voiceWaveBank_[p[5]].pcm = decoder.decodeAll(bytes.data(), bytes.size(), false);
+        out.pcm = decoder.decodeAll(bytes.data(), bytes.size(), false);
     } else {
         std::vector<int16_t> pcm(bytes.size());
         for (size_t i = 0; i < bytes.size(); ++i)
             pcm[i] = int16_t((int(bytes[i]) - 128) * 256);
-        voiceWaveBank_[p[5]].pcm = std::move(pcm);
+        out.pcm = std::move(pcm);
     }
-    voiceWaveBank_[p[5]].retireSilentLoop = false;
+    out.retireSilentLoop = false;
     // Playback rate belongs to the selecting PCM patch's Fs, not this block.
+    return !out.pcm.empty();
 }
 
 // walk a setup-data blob and pull every yamaha voice exclusive out of it.
@@ -401,28 +613,44 @@ void MaPlayer::addExclusivesFrom_(const std::vector<uint8_t>& buf, bool mobile) 
     const uint8_t* p = buf.data();
     const uint8_t* end = p + buf.size();
     while (p < end) {
-        if (*p == 0xFF) { ++p; if (p >= end) break; }
-        if (*p != 0xF0) { ++p; continue; }
+        if (*p == 0xFF) { ++p; if (p >= end) {
+            audit_(ScoreAudit::Domain::Setup, ScoreAudit::Status::Malformed, 0xff); break;
+        } }
+        if (*p != 0xF0) {
+            audit_(ScoreAudit::Domain::Setup, ScoreAudit::Status::Unsupported, *p);
+            ++p; continue;
+        }
         ++p;                              // consume F0
-        if (p >= end) break;
+        if (p >= end) {
+            audit_(ScoreAudit::Domain::Setup, ScoreAudit::Status::Malformed, 0xf0); break;
+        }
         // length: try vlq for mobile, single byte for hps, but fall back so a
         // len >= 0x80 hps value is read as the 2-byte form.
         uint32_t len;
-        if (mobile) len = readVlq(p, end);
-        else { len = readVarHps(p, end); }
-        if (len == 0 || len > size_t(end - p)) break;   // count, never a past-end ptr
+        len = readScoreLength_(p, end, !mobile, 0, ScoreAudit::Domain::Setup);
+        if (len == 0 || len > size_t(end - p)) {
+            audit_(ScoreAudit::Domain::Setup, ScoreAudit::Status::Malformed, 0xf0, int(len));
+            break;
+        }
         // payload includes the trailing F7; parse from the maker id up to it.
         size_t plen = len;
         if (plen && p[plen - 1] == 0xF7) --plen;
         addVoiceWave_(p, plen);
         ParsedVoice v = parseVoiceExclusive(p, plen);
-        if ((v.valid || v.isPcm) && voiceTable_.size() < kMaxCustomVoices)
-            voiceTable_.push_back(v);
+        // isPcm identifies a decoded family, not a complete usable image.
+        // Invalid PCM definitions must not mask a previously valid voice.
+        if (v.valid) {
+            auditVoice_(v, 0);
+            if (voiceTable_.size() < kMaxCustomVoices) voiceTable_.push_back(v);
+            else audit_(ScoreAudit::Domain::VoiceDefinition, ScoreAudit::Status::ResourceLimit, 0x100);
+        } else auditExclusive_(p, plen, 0);
         p += len;
     }
 }
 
 void MaPlayer::decodeTrack_(const TrackChunk& t, int base) {
+    auditFormat_ = t.formatType; auditTrack_ = t.trackNumber;
+    ScoreAudit::increment(scoreAudit_.decodedTracks);
     double tbD = TrackChunk::timeBaseMs(t.durationTimeBase);
     double tbG = TrackChunk::timeBaseMs(t.gateTimeBase);
     // MTR channel status: per-channel 2-bit type field (0 no-care / 1 melody /
@@ -443,17 +671,29 @@ void MaPlayer::decodeTrack_(const TrackChunk& t, int base) {
             c.streamTrack = t.trackNumber;
             c.squaredControllers = t.formatType == 3;
             c.modernTimbre = true;
+            if (t.formatType == 1 || t.formatType == 2) c.fixedFmDrumPitch = false;
             c.volume = 100.0f / 127.0f;
             if (c.squaredControllers) c.volume *= c.volume;
         }
-        for (size_t i = 0; i < t.channelStatus.size() && i < 32; ++i)
+        for (size_t i = 0; i < t.channelStatus.size() && i < 32; ++i) {
             chans_[(base + i) & 127].rhythm = ((t.channelStatus[i] & 0x03) == 3);
+            // Mobile bits7..6: 0 unspecified, 1 OFF (fixed), 2 ON (key-scaled).
+            // For unspecified, use score pitch as the original smaf825 player
+            // does. This is a compatibility policy, not measured chip behavior.
+            // Do not reinterpret the LED/vibration bits as KeyControl.
+            if ((t.formatType == 1 || t.formatType == 2) && i < 16)
+                chans_[(base + i) & 127].fixedFmDrumPitch = (t.channelStatus[i] >> 6) == 1;
+        }
     }
     if (t.formatType == 0x00) {
         decodeHandyPhone_(t.sequenceData.data(), t.sequenceData.size(), base, tbD, tbG);
     } else if (t.formatType == 0x01) {
         // huffman-compressed mobile body.
         auto inflated = smafHuffmanInflate(t.sequenceData.data(), t.sequenceData.size());
+        if (t.sequenceData.size() < 4 || inflated.empty() ||
+            inflated.size() != be32(t.sequenceData.data()))
+            audit_(ScoreAudit::Domain::Sequence, ScoreAudit::Status::Malformed,
+                   0x102, int(inflated.size()));
         if (!inflated.empty())
             decodeMobile_(inflated.data(), inflated.size(), base, tbD, tbG);
     } else if (t.formatType == 0x02) {
@@ -465,43 +705,44 @@ void MaPlayer::decodeTrack_(const TrackChunk& t, int base) {
 
 // ── handyphone standard event stream ────────────────────────────────────────
 void MaPlayer::decodeHandyPhone_(const uint8_t* p, size_t n, int base, double tbDms, double tbGms,
-                                 bool atrWaveMode) {
+                                 bool atrWaveMode, int atrTrack) {
     const uint8_t* end = p + n;
     double curMs = 0.0;
     auto msToSample = [&](double ms) { return uint64_t(ms * rate_ / 1000.0); };
     int guard = 0;
     while (p < end && guard++ < 2000000 && events_.size() < kMaxEvents) {
-        uint32_t dur = readVarHps(p, end);
+        uint32_t dur = readScoreLength_(p, end, true, msToSample(curMs), ScoreAudit::Domain::Sequence);
         curMs += dur * tbDms;
-        if (p >= end) break;
+        if (!scoreBytes_(p, end, 1, 0x103, msToSample(curMs))) break;
         uint8_t e1 = *p++;
         if (e1 == 0xFF) {
-            if (p >= end) break;
+            if (!scoreBytes_(p, end, 1, 0xff, msToSample(curMs))) break;
             uint8_t e2 = *p++;
             if (e2 == 0x00) continue;                 // NOP
             if (e2 == 0xF0) {                         // exclusive (voice)
-                uint32_t len = readVarHps(p, end);
-                if (len > size_t(end - p)) break;
+                uint32_t len = readScoreLength_(p, end, true, msToSample(curMs), ScoreAudit::Domain::Sequence);
+                if (!scoreBytes_(p, end, len, 0xf0, msToSample(curMs))) break;
                 size_t plen = len; if (plen && p[plen-1]==0xF7) --plen;
-                ParsedVoice v = parseVoiceExclusive(p, plen);
-                if ((v.valid || v.isPcm) && voiceTable_.size() < kMaxCustomVoices)
-                    voiceTable_.push_back(v);
+                addTimedVoice_(p, plen, msToSample(curMs));
                 p += len;
                 continue;
             }
             // 0x2F/0x51/0x58 style meta: read a length byte + skip.
-            if (p >= end) break;
+            if (!scoreBytes_(p, end, 1, 0xff, msToSample(curMs))) break;
             uint8_t l = *p++;
+            scoreBytes_(p, end, l, 0xff, msToSample(curMs));
+            audit_(ScoreAudit::Domain::Sequence, ScoreAudit::Status::Reserved, 0xff, e2, msToSample(curMs));
             p += (size_t(end - p) >= l) ? l : size_t(end - p);
             continue;
         }
         if (e1 == 0x00) {
-            if (p >= end) break;
+            if (!scoreBytes_(p, end, 1, 0, msToSample(curMs))) break;
             uint8_t e2 = *p++;
             if (e2 == 0x00) {                         // extended / EOS
-                if (p >= end) break;
+                if (!scoreBytes_(p, end, 1, 0, msToSample(curMs))) break;
                 uint8_t e3 = *p++;
                 if (e3 == 0x00) break;                // End Of Sequence
+                audit_(ScoreAudit::Domain::Sequence, ScoreAudit::Status::Unsupported, 0x200, e3, msToSample(curMs));
                 continue;
             }
             int ch = base + ((e2 >> 6) & 3);
@@ -509,8 +750,12 @@ void MaPlayer::decodeHandyPhone_(const uint8_t* p, size_t n, int base, double tb
             int data = e2 & 0x0f;
             uint64_t s = msToSample(curMs);
             if (cls == 3) {                           // long event: value byte
-                if (p >= end) break;
+                if (!scoreBytes_(p, end, 1, data, s, ch)) break;
                 uint8_t v = *p++;
+                const bool supported = data == 0 || data == 1 || data == 2 ||
+                    data == 4 || data == 7 || data == 10 || data == 11;
+                audit_(ScoreAudit::Domain::HpsLong, supported ? ScoreAudit::Status::Routed :
+                    ScoreAudit::Status::Unsupported, data, v, s, ch);
                 switch (data) {
                     case 0x0: events_.push_back({s, Ev::Program, uint16_t(ch), int16_t(v & 0x7f), 0}); break;
                     case 0x1:                          // bank select (raw; bit7 = drum)
@@ -529,15 +774,18 @@ void MaPlayer::decodeHandyPhone_(const uint8_t* p, size_t n, int base, double tb
                     default: break;                    // consume + ignore
                 }
             } else if (cls == 0) {
+                audit_(ScoreAudit::Domain::HpsShort, ScoreAudit::Status::Routed, cls, data, s, ch);
                 // expression SHORT: value = data==1 ? 0 : data*8+15 (spec table).
                 int v = (data <= 1) ? (data == 0 ? 0 : 0) : (data * 8 + 15);
                 if (v > 0x7f) v = 0x7f;
                 events_.push_back({s, Ev::Expression, uint16_t(ch), int16_t(v), 0});
             } else if (cls == 1) {
+                audit_(ScoreAudit::Domain::HpsShort, ScoreAudit::Status::Routed, cls, data, s, ch);
                 // pitch-bend SHORT: msb = data*8, centre at data==8.
                 int v14 = (data * 8) << 7;
                 events_.push_back({s, Ev::PitchBend, uint16_t(ch), int16_t(v14 - 8192), 0});
             } else {   // cls == 2
+                audit_(ScoreAudit::Domain::HpsShort, ScoreAudit::Status::Unapplied, cls, data, s, ch);
                 // modulation SHORT: spec table, index 1..14.
                 static const uint8_t modTab[16] = { 0,0x00,0x08,0x10,0x18,0x20,0x28,0x30,
                                                     0x38,0x40,0x48,0x50,0x60,0x70,0x7f,0x7f };
@@ -549,12 +797,18 @@ void MaPlayer::decodeHandyPhone_(const uint8_t* p, size_t n, int base, double tb
         int ch = base + ((e1 >> 6) & 3);
         int octave = (e1 >> 4) & 3;
         int note = e1 & 0x0f;
-        uint32_t gate = readVarHps(p, end);
+        uint32_t gate = readScoreLength_(p, end, true, msToSample(curMs), ScoreAudit::Domain::Sequence);
         if (gate == 0) continue;                       // spec: skip zero-gate
         if (atrWaveMode) {
-            // ATR sequence: the note nibble IS the wave number; the wave plays
-            // one-shot at native rate, so only the trigger matters.
-            events_.push_back({msToSample(curMs), Ev::WaveOn, uint16_t(ch), int16_t(note), 127});
+            const int wave = e1 & 0x3f;
+            if (wave == 0 || wave == 63) {
+                audit_(ScoreAudit::Domain::Sequence, ScoreAudit::Status::Reserved,
+                       wave, 0, msToSample(curMs), ch);
+                continue;
+            }
+            // One-shot policy unchanged; e.b binds the source ATR, not velocity.
+            events_.push_back({msToSample(curMs), Ev::WaveOn, uint16_t(ch),
+                               int16_t(wave), int16_t(atrTrack)});
             continue;
         }
         // (oct 0, note 0) = MIDI 36, per vavi-sound MidiContext.retrievePitch
@@ -570,6 +824,8 @@ void MaPlayer::decodeHandyPhone_(const uint8_t* p, size_t n, int base, double tb
         events_.push_back({on,  Ev::NoteOn,  uint16_t(ch), int16_t(midi), 127, id});
         events_.push_back({off, Ev::NoteOff, uint16_t(ch), int16_t(midi), 0, id});
     }
+    if (p < end && (guard >= 2000000 || events_.size() >= kMaxEvents))
+        audit_(ScoreAudit::Domain::Sequence, ScoreAudit::Status::ResourceLimit, 0x104, 0, msToSample(curMs));
 }
 
 // ── mobile standard event stream ────────────────────────────────────────────
@@ -583,102 +839,108 @@ void MaPlayer::decodeMobile_(const uint8_t* p, size_t n, int base, double tbDms,
     for (auto& v : runVel) v = 64;
     int guard = 0;
     while (p < end && guard++ < 4000000 && events_.size() < kMaxEvents) {
-        uint32_t dur = readVlq(p, end);
+        uint32_t dur = readScoreLength_(p, end, false, msToSample(curMs), ScoreAudit::Domain::Sequence);
         curMs += dur * tbDms;
-        if (p >= end) break;
+        if (!scoreBytes_(p, end, 1, 0x103, msToSample(curMs))) break;
         uint8_t s = *p++;
-        if (s < 0x80) continue;                        // stray data byte
+        if (s < 0x80) {
+            audit_(ScoreAudit::Domain::Sequence, ScoreAudit::Status::Malformed, s, 0, msToSample(curMs));
+            continue;
+        }
         int ch = base + (s & 0x0f);
         uint64_t at = msToSample(curMs);
         switch (s & 0xf0) {
             case 0x80: case 0x90: {                    // note off-vel / on-vel
-                if (p >= end) break;
+                if (!scoreBytes_(p, end, 1, s, at, ch)) break;
                 int note = *p++;
                 int vel;
                 if ((s & 0xf0) == 0x90) {
-                    if (p >= end) break;
+                    if (!scoreBytes_(p, end, 1, s, at, ch)) break;
                     vel = *p++;
                     runVel[s & 0x0f] = uint8_t(vel & 0x7f);   // remember
                 } else {
                     vel = runVel[s & 0x0f];                    // reuse remembered
                 }
-                uint32_t gate = readVlq(p, end);
+                uint32_t gate = readScoreLength_(p, end, false, at, ScoreAudit::Domain::Sequence);
                 if (gate == 0) break;
                 uint64_t off = at + msToSample(gate * tbGms);
                 const uint64_t id = nextNoteId_++;
                 events_.push_back({at,  Ev::NoteOn,  uint16_t(ch), int16_t(note & 0x7f), int16_t(vel & 0x7f), id});
                 events_.push_back({off, Ev::NoteOff, uint16_t(ch), int16_t(note & 0x7f), 0, id});
             } break;
-            case 0xA0: p += (end - p >= 2 ? 2 : (end - p)); break;   // reserved
+            case 0xA0:
+                scoreBytes_(p, end, 2, s, at, ch);
+                audit_(ScoreAudit::Domain::Sequence, ScoreAudit::Status::Reserved, 0xa0, 0, at, ch);
+                p += (end - p >= 2 ? 2 : (end - p)); break;   // reserved
             case 0xB0: {                                // control change
-                if (size_t(end - p) < 2) { p = end; break; }
+                if (!scoreBytes_(p, end, 2, s, at, ch)) { p = end; break; }
                 int cc = *p++, val = *p++;
-                switch (cc) {
-                    case 0x00: events_.push_back({at, Ev::BankMsb, uint16_t(ch), int16_t(val), 0}); break;
-                    case 0x20: events_.push_back({at, Ev::BankLsb, uint16_t(ch), int16_t(val), 0}); break;
-                    case 0x07: events_.push_back({at, Ev::Volume,  uint16_t(ch), int16_t(val), 0}); break;
-                    case 0x0A: events_.push_back({at, Ev::Pan,     uint16_t(ch), int16_t(val), 0}); break;
-                    case 101: events_.push_back({at, Ev::RpnMsb,uint16_t(ch),int16_t(val),0}); break;
-                    case 100: events_.push_back({at, Ev::RpnLsb,uint16_t(ch),int16_t(val),0}); break;
-                    case 6: events_.push_back({at, Ev::RpnData,uint16_t(ch),int16_t(val),0}); break;
-                    case 38: events_.push_back({at, Ev::RpnData,uint16_t(ch),int16_t(val),1}); break;
-                    case 98: case 99: events_.push_back({at,Ev::NrpnSelect,uint16_t(ch),0,0}); break;
-                    case 0x0B: events_.push_back({at, Ev::Expression, uint16_t(ch), int16_t(val), 0}); break;
-                    case 0x01: events_.push_back({at, Ev::Modulation, uint16_t(ch), int16_t(val), 0}); break;
-                    default: break;
-                }
+                routeController_(at, ch, cc, val, false);
             } break;
-            case 0xC0: { if (p >= end) break; int pc = *p++;
+            case 0xC0: { if (!scoreBytes_(p, end, 1, s, at, ch)) break; int pc = *p++;
                 events_.push_back({at, Ev::Program, uint16_t(ch), int16_t(pc & 0x7f), 0}); } break;
-            case 0xD0: if (p < end) ++p; break;          // reserved
+            case 0xD0:
+                scoreBytes_(p, end, 1, s, at, ch);
+                audit_(ScoreAudit::Domain::Sequence, ScoreAudit::Status::Reserved, 0xd0, 0, at, ch);
+                if (p < end) ++p; break;          // reserved
             case 0xE0: {                                 // pitch bend lsb,msb
-                if (size_t(end - p) < 2) { p = end; break; }
+                if (!scoreBytes_(p, end, 2, s, at, ch)) { p = end; break; }
                 int lsb = *p++, msb = *p++;
                 int v14 = ((msb & 0x7f) << 7) | (lsb & 0x7f);
                 events_.push_back({at, Ev::PitchBend, uint16_t(ch), int16_t(v14 - 8192), 0});
             } break;
             case 0xF0: {
                 if (s == 0xF0) {                         // exclusive
-                    uint32_t len = readVlq(p, end);
-                    if (len > size_t(end - p)) { p = end; break; }
+                    uint32_t len = readScoreLength_(p, end, false, at, ScoreAudit::Domain::Sequence);
+                    if (!scoreBytes_(p, end, len, s, at)) { p = end; break; }
                     size_t plen = len; if (plen && p[plen-1]==0xF7) --plen;
-                    addVoiceWave_(p, plen);
-                    ParsedVoice v = parseVoiceExclusive(p, plen);
-                    if ((v.valid || v.isPcm) && voiceTable_.size() < kMaxCustomVoices)
-                        voiceTable_.push_back(v);
+                    addTimedWave_(p, plen, at);
+                    addTimedVoice_(p, plen, at);
                     p += len;
                 } else if (s == 0xFF) {                  // meta
-                    if (p >= end) break;
+                    if (!scoreBytes_(p, end, 1, s, at, ch)) break;
                     uint8_t m = *p++;
                     if (m == 0x00) break;                // NOP
                     if (m == 0x2F) { p = end; }          // EOS
                     else if (p < end) {
                         uint8_t l = *p++;
+                        scoreBytes_(p, end, l, s, at);
+                        audit_(ScoreAudit::Domain::Sequence, ScoreAudit::Status::Reserved, 0xff, m, at);
                         p += (end - p >= l ? l : (end - p));   // clamp, never past end
-                    }
+                    } else scoreBytes_(p, end, 1, s, at);
+                } else {
+                    audit_(ScoreAudit::Domain::Sequence, ScoreAudit::Status::Unsupported, s, 0, at);
+                    scoreAudit_.scanComplete = false;
                 }
             } break;
             default: break;
         }
     }
+    if (p < end && (guard >= 4000000 || events_.size() >= kMaxEvents))
+        audit_(ScoreAudit::Domain::Sequence, ScoreAudit::Status::ResourceLimit, 0x104, 0, msToSample(curMs));
 }
 
 // ── voice resolution ────────────────────────────────────────────────────────
-const FmVoicePatch& MaPlayer::patchFor_(int ch, int note, bool& isPcmOut) const {
-    isPcmOut = false;
-    const Chan& c = chans_[ch & 127];
-    // drum voices bind on (bank, pc, drumNote==note); melody on (bank, pc).
-    const ParsedVoice* melodyHit = nullptr;
-    for (const ParsedVoice& v : voiceTable_) {
-        if (v.key.bankMSB == c.bankMsb && v.key.bankLSB == c.bankLsb && v.key.pc == c.program) {
-            if (v.key.drumNote != 0) { if (v.key.drumNote == note) { if (v.isPcm){isPcmOut=true;} return v.patch; } }
-            else if (note <= v.keyHigh && (!melodyHit || v.keyHigh < melodyHit->keyHigh)) {
-                melodyHit = &v;
-            }
-        }
+void MaPlayer::addTimedVoice_(const uint8_t* p, size_t n, uint64_t sample) {
+    if (voiceTable_.size() >= kMaxCustomVoices || events_.size() >= kMaxEvents) {
+        const bool waveMessage = n >= 5 && p[0] == 0x43 && p[1] == 0x79 && p[3] == 0x7f &&
+            (p[4] == 3 || p[4] == 0x23);
+        if (!waveMessage) audit_(ScoreAudit::Domain::VoiceDefinition, ScoreAudit::Status::ResourceLimit, 0x100, 0, sample);
+        return;
     }
-    if (melodyHit) { if (melodyHit->isPcm) isPcmOut = true; return melodyHit->patch; }
-    return FmVoicePatch::gmApprox(c.program);
+    ParsedVoice v = parseVoiceExclusive(p, n);
+    if (!v.valid) { auditExclusive_(p, n, sample); return; }
+    auditVoice_(v, sample);
+    v.sequenced = true;
+    v.activationSample = sample;
+    events_.push_back({sample, Ev::VoiceActivation, 0, int16_t(voiceTable_.size()), 0});
+    voiceTable_.push_back(v);
+}
+
+const FmVoicePatch& MaPlayer::patchFor_(int ch, int note, bool& isPcmOut) const {
+    const ParsedVoice* v = resolveVoice_(ch, note);
+    isPcmOut = v && v->isPcm;
+    return v ? v->patch : FmVoicePatch::gmApprox(chans_[ch & 127].program);
 }
 
 // the matched voice for a channel + note, or nullptr when only the gm fallback
@@ -686,14 +948,21 @@ const FmVoicePatch& MaPlayer::patchFor_(int ch, int note, bool& isPcmOut) const 
 const ParsedVoice* MaPlayer::resolveVoice_(int ch, int note) const {
     const Chan& c = chans_[ch & 127];
     const ParsedVoice* melodyHit = nullptr;
+    const ParsedVoice* drumHit = nullptr;
+    auto newer = [](const ParsedVoice& v, const ParsedVoice* old) {
+        return !old || (v.sequenced && (!old->sequenced || v.activationSample >= old->activationSample));
+    };
     for (const ParsedVoice& v : voiceTable_) {
+        if (v.sequenced && !v.activated) continue;
         if (v.key.bankMSB == c.bankMsb && v.key.bankLSB == c.bankLsb && v.key.pc == c.program) {
-            if (v.key.drumNote != 0) { if (v.key.drumNote == note) return &v; }
-            else if (note <= v.keyHigh && (!melodyHit || v.keyHigh < melodyHit->keyHigh))
+            if (v.key.bankMSB == 125 || v.key.drumNote != 0) {
+                if (v.key.drumNote == note && newer(v, drumHit)) drumHit = &v;
+            } else if (note <= v.keyHigh && (!melodyHit || v.keyHigh < melodyHit->keyHigh ||
+                       (v.keyHigh == melodyHit->keyHigh && newer(v, melodyHit))))
                 melodyHit = &v;
         }
     }
-    return melodyHit;
+    return drumHit ? drumHit : melodyHit;
 }
 
 // start a sampled (pcm) note on a free pcm slot. drums play at native rate,
@@ -725,33 +994,34 @@ void MaPlayer::decodeMa7_(const uint8_t* p, size_t n, int base,
 
     int guard = 0;
     while (p < end && guard++ < 4000000 && events_.size() < kMaxEvents) {
-        uint32_t dur = readVlq(p, end);
+        uint32_t dur = readScoreLength_(p, end, false, msToSample(curMs), ScoreAudit::Domain::Sequence);
         curMs += dur * tbDms;
-        if (p >= end) break;
+        if (!scoreBytes_(p, end, 1, 0x103, msToSample(curMs))) break;
         uint8_t status = *p++;
         uint64_t at = msToSample(curMs);
 
         if (status == 0xF0) {
-            uint32_t len = readVlq(p, end);
-            if (len > size_t(end - p)) break;
+            uint32_t len = readScoreLength_(p, end, false, at, ScoreAudit::Domain::Sequence);
+            if (!scoreBytes_(p, end, len, status, at)) break;
             size_t plen = len;
             if (plen && p[plen - 1] == 0xF7) --plen;
-            ParsedVoice v = parseVoiceExclusive(p, plen);
-            if ((v.valid || v.isPcm) && voiceTable_.size() < kMaxCustomVoices)
-                voiceTable_.push_back(v);
+            addTimedWave_(p, plen, at);
+            addTimedVoice_(p, plen, at);
             p += len;
             continue;
         }
         if (status == 0xFF) {
-            if (p >= end) break;
+            if (!scoreBytes_(p, end, 1, status, at)) break;
             uint8_t meta = *p++;
             if (meta == 0x00) continue;
             if (meta == 0x2F) {
                 if (p < end) ++p; // zero-length byte
                 break;
             }
-            if (p >= end) break;
-            uint32_t len = readVlq(p, end);
+            if (!scoreBytes_(p, end, 1, status, at)) break;
+            uint32_t len = readScoreLength_(p, end, false, at, ScoreAudit::Domain::Sequence);
+            scoreBytes_(p, end, len, status, at);
+            audit_(ScoreAudit::Domain::Sequence, ScoreAudit::Status::Reserved, 0xff, meta, at);
             p += std::min<size_t>(len, size_t(end - p));
             continue;
         }
@@ -762,15 +1032,15 @@ void MaPlayer::decodeMa7_(const uint8_t* p, size_t n, int base,
         switch (eventClass) {
             case 0x00:
             case 0x10: {
-                if (p >= end) { p = end; break; }
+                if (!scoreBytes_(p, end, 1, status, at, ch)) { p = end; break; }
                 int note = *p++ & 0x7F;
                 int vel = runVel[local];
                 if (eventClass == 0x10) {
-                    if (p >= end) { p = end; break; }
+                    if (!scoreBytes_(p, end, 1, status, at, ch)) { p = end; break; }
                     vel = *p++ & 0x7F;
                     runVel[local] = uint8_t(vel);
                 }
-                uint32_t gate = readVlq(p, end);
+                uint32_t gate = readScoreLength_(p, end, false, at, ScoreAudit::Domain::Sequence);
                 if (gate == 0) break;
                 uint64_t off = at + msToSample(gate * tbGms);
                 const uint64_t id = nextNoteId_++;
@@ -778,44 +1048,40 @@ void MaPlayer::decodeMa7_(const uint8_t* p, size_t n, int base,
                 events_.push_back({off, Ev::NoteOff, uint16_t(ch), int16_t(note), 0, id});
             } break;
             case 0x20: // reserved, two data bytes
+                scoreBytes_(p, end, 2, status, at, ch);
+                audit_(ScoreAudit::Domain::Sequence, ScoreAudit::Status::Reserved, 0x20, 0, at, ch);
                 p += std::min<size_t>(2, size_t(end - p));
                 break;
             case 0x30: {
-                if (size_t(end - p) < 2) { p = end; break; }
+                if (!scoreBytes_(p, end, 2, status, at, ch)) { p = end; break; }
                 int cc = *p++, val = *p++;
-                switch (cc) {
-                    case 0x00: events_.push_back({at, Ev::BankMsb, uint16_t(ch), int16_t(val), 0}); break;
-                    case 0x20: events_.push_back({at, Ev::BankLsb, uint16_t(ch), int16_t(val), 0}); break;
-                    case 0x07: events_.push_back({at, Ev::Volume, uint16_t(ch), int16_t(val), 0}); break;
-                    case 0x0A: events_.push_back({at, Ev::Pan, uint16_t(ch), int16_t(val), 0}); break;
-                    case 0x0B: events_.push_back({at, Ev::Expression, uint16_t(ch), int16_t(val), 0}); break;
-                    case 0x01: events_.push_back({at, Ev::Modulation, uint16_t(ch), int16_t(val), 0}); break;
-                    // MA7 Format3 compacts SMF RPN0/0 + DataEntry into CC15.
-                    // Mobile sequences use their separate RPN interpretation.
-                    case 0x0F:
-                        if (val <= 24) events_.push_back({at, Ev::PitchBendRange, uint16_t(ch), int16_t(val), 0});
-                        break;
-                    default: break;
-                }
+                routeController_(at, ch, cc, val, true);
             } break;
             case 0x40:
+                scoreBytes_(p, end, 1, status, at, ch);
                 if (p < end)
                     events_.push_back({at, Ev::Program, uint16_t(ch), int16_t(*p++ & 0x7F), 0});
                 break;
             case 0x50: // reserved, one data byte
+                scoreBytes_(p, end, 1, status, at, ch);
+                audit_(ScoreAudit::Domain::Sequence, ScoreAudit::Status::Reserved, 0x50, 0, at, ch);
                 if (p < end) ++p;
                 break;
             case 0x60: {
-                if (size_t(end - p) < 2) { p = end; break; }
+                if (!scoreBytes_(p, end, 2, status, at, ch)) { p = end; break; }
                 int lsb = *p++, msb = *p++;
                 int v14 = ((msb & 0x7F) << 7) | (lsb & 0x7F);
                 events_.push_back({at, Ev::PitchBend, uint16_t(ch), int16_t(v14 - 8192), 0});
             } break;
             default:
+                audit_(ScoreAudit::Domain::Sequence, ScoreAudit::Status::Unsupported, eventClass, 0, at, ch);
+                scoreAudit_.scanComplete = false;
                 p = end; // 0x70 is reserved and has no validated width.
                 break;
         }
     }
+    if (p < end && (guard >= 4000000 || events_.size() >= kMaxEvents))
+        audit_(ScoreAudit::Domain::Sequence, ScoreAudit::Status::ResourceLimit, 0x104, 0, msToSample(curMs));
 }
 
 bool MaPlayer::startPcm_(int ch, int rawNote, int soundingNote, const ParsedVoice& v,
@@ -825,9 +1091,12 @@ bool MaPlayer::startPcm_(int ch, int rawNote, int soundingNote, const ParsedVoic
     const PcmSample* ws = nullptr;
     int wid = v.pcm.waveId;
     if (v.pcm.rom) return false; // ROM IDs must never alias a local RAM sample
-    if (wid >= 0 && wid < 128 && !voiceWaveBank_[wid].pcm.empty())
-        ws = &voiceWaveBank_[wid];
-    else if (!v.pcm.voiceWaveOnly && wid >= 0 && size_t(wid) < waveBank_.size() && !waveBank_[wid].pcm.empty())
+    if (wid >= 0 && wid < 128) {
+        const int version = activeVoiceWaveVersion_[wid];
+        const PcmSample& selected = version >= 0 ? voiceWaveVersions_[size_t(version)] : voiceWaveBank_[wid];
+        if (!selected.pcm.empty()) ws = &selected;
+    }
+    if (!ws && !v.pcm.voiceWaveOnly && wid >= 0 && size_t(wid) < waveBank_.size() && !waveBank_[wid].pcm.empty())
         ws = &waveBank_[wid];
     if (!ws) return false;
     if (v.pcm.endPt == 0) return true; // EP=0 intentionally does not pronounce
@@ -836,12 +1105,20 @@ bool MaPlayer::startPcm_(int ch, int rawNote, int soundingNote, const ParsedVoic
     PcmVoice& pv = pcmPool_[slot];
     pv.streamAudio = false;
     pv.pcm = ws->pcm.data(); pv.len = ws->pcm.size();
-    bool isDrum = v.key.drumNote != 0;
+    // Bank125 is a custom drum voice even when its mapped trigger key is zero.
+    // A zero key must not turn a native-rate drum into a five-octave-down tone.
+    bool isDrum = v.key.bankMSB == 125 || v.key.drumNote != 0;
     double base = double(v.pcm.fs) / double(rate_);
     double semis = isDrum ? 0.0 : double(soundingNote - 60);   // root C4
     pv.baseRate = base * std::pow(2.0, semis / 12.0);
     pv.rate = pv.baseRate * std::pow(2.0, c.bend / 12.0);
     pv.pos = 0.0;
+    pv.qualityInterpolation = c.modernTimbre;
+    pv.loopTravel = 0;
+    if (pv.qualityInterpolation) {
+        (void)pcm_detail::interpolationKernels();
+        (void)pcm_detail::downsamplingKernels();
+    }
     // Share the existing FM approximation rather than invent a different
     // WT vibrato curve. The hardware LFO rate/shape remains uncalibrated.
     static constexpr double lfoHz[4] = {1.8, 4.0, 5.9, 7.0};
@@ -849,11 +1126,12 @@ bool MaPlayer::startPcm_(int ch, int rawNote, int soundingNote, const ParsedVoic
     static constexpr float legacyTremolo[4] = {0.129f, 0.242f, 0.424f, 0.669f};
     static constexpr double damDb[4] = {1.3, 2.8, 5.8, 11.8};
     pv.lfoPhase = 0.0;
-    pv.vibDepth = v.pcm.env.vib ? vibrato[v.pcm.env.dvb & 3] : 0.0;
+    pv.baseVibDepth = v.pcm.env.vib ? vibrato[v.pcm.env.dvb & 3] : 0.0;
+    pv.vibDepth = pv.baseVibDepth * (c.squaredControllers ? c.vibratoScale : 1.0);
     pv.amDepth = v.pcm.env.am ? (c.modernTimbre
         ? float(1.0 - std::pow(10.0, -damDb[v.pcm.env.dam & 3] / 20.0))
         : legacyTremolo[v.pcm.env.dam & 3]) : 0.0f;
-    pv.lfoInc = (pv.vibDepth != 0.0 || pv.amDepth != 0.0f)
+    pv.lfoInc = (pv.baseVibDepth != 0.0 || pv.amDepth != 0.0f)
         ? lfoHz[v.pcm.lfo & 3] / double(rate_) : 0.0;
     // LP/EP are sample indices into the decoded stream; clamp to the wave.
     pv.loopEnd   = (v.pcm.endPt > 0 && size_t(v.pcm.endPt) <= pv.len) ? size_t(v.pcm.endPt) : pv.len;
@@ -862,6 +1140,8 @@ bool MaPlayer::startPcm_(int ch, int rawNote, int soundingNote, const ParsedVoic
     pv.silentLoop = ws->retireSilentLoop && pv.loop &&
         std::all_of(ws->pcm.begin() + pv.loopStart, ws->pcm.begin() + pv.loopEnd,
                     [](int16_t sample) { return sample == 0; });
+    // Preserve the existing exact-zero retirement contract (sinc has history).
+    if (pv.silentLoop) pv.qualityInterpolation = false;
     pv.env.configure(v.pcm.env, double(rate_)); pv.env.keyOn();
     pv.gain = float(std::pow(10.0, -0.75 * double(v.pcm.env.tl) / 20.0));
     // Match FM voices: authored note velocity is part of the musical balance,
@@ -871,6 +1151,7 @@ bool MaPlayer::startPcm_(int ch, int rawNote, int soundingNote, const ParsedVoic
     pv.noteVelocity = noteVelocity;
     pv.pan = v.pcm.panEnabled ? v.pcm.pan : c.pan;
     pv.panLocked = v.pcm.panEnabled;
+    channelPanGains(pv.pan, c.squaredControllers && !pv.panLocked, pv.panLeft, pv.panRight);
     pv.channel = ch; pv.keyNote = rawNote; pv.active = true;
     pv.noteId = noteId;
     pv.released = false; pv.recentLevel = 0;
@@ -896,6 +1177,7 @@ void MaPlayer::startAudio_(int ch, int note, float velocity, uint64_t noteId) {
     slot->pcm = ws.pcm.data(); slot->len = ws.pcm.size();
     slot->rate = double(ws.fs) / double(rate_);
     slot->vel = velocity; slot->pan = chans_[ch & 127].pan;
+    channelPanGains(slot->pan, chans_[ch & 127].squaredControllers, slot->panLeft, slot->panRight);
     slot->channel = ch; slot->keyNote = note; slot->noteId = noteId;
     slot->startedAt = cursor_;
     slot->streamAudio = true; slot->active = true;
@@ -909,17 +1191,26 @@ float MaPlayer::PcmVoice::tick() {
     if (silentLoop && pos >= double(loopStart)) { active = false; return 0.0f; }
     size_t end = (loopEnd > 0 && loopEnd <= len) ? loopEnd : len;
     if (pos >= double(end)) {
-        if (loop && loopEnd > loopStart)
-            pos = double(loopStart) + std::fmod(pos - double(end), double(loopEnd - loopStart));
+        if (loop && loopEnd > loopStart) {
+            const double wrapped = double(loopStart)
+                + std::fmod(pos - double(end), double(loopEnd - loopStart));
+            // Preserve original attack history across the first few traversals
+            // of a very short loop; cap once every kernel tap is periodic.
+            const size_t length = loopEnd - loopStart;
+            const size_t history = qualityInterpolation ? 16 : 8;
+            const size_t limit = ((end + history + length - 1) / length) * length;
+            if (loopTravel < limit) {
+                const double traversals = std::floor((pos - double(end)) / double(length)) + 1.0;
+                const size_t removed = size_t(std::min(double(limit), traversals * double(length)));
+                loopTravel = std::min(limit, loopTravel + removed);
+            }
+            pos = wrapped;
+        }
         else { active = false; return 0.0f; }
     }
     size_t i = size_t(pos);
     if (i >= len) { active = false; return 0.0f; }
     float frac = float(pos - double(i));
-    float s0 = pcm[i] * (1.0f / 32768.0f);
-    size_t next = i + 1 < end ? i + 1 : (loop ? loopStart : i);
-    float s1 = pcm[next] * (1.0f / 32768.0f);
-    float s = s0 + (s1 - s0) * frac;
     double lfo = 0.0;
     if (lfoInc != 0.0) {
         lfoPhase += lfoInc;
@@ -928,7 +1219,12 @@ float MaPlayer::PcmVoice::tick() {
     }
     // Keep controller bend in rate; apply vibrato transiently, not by
     // accumulating it into rate/baseRate on each sample or controller event.
-    pos += rate * (1.0 + vibDepth * lfo);
+    const double advance = rate * (1.0 + vibDepth * lfo);
+    float allocationSample;
+    const float s = pcm_detail::interpolatePcm(pcm, end, i, frac, loop,
+        loopStart, loopTravel, qualityInterpolation && !streamAudio, advance,
+        &allocationSample);
+    pos += advance;
     float e;
     if (streamAudio) {
         if (stopFade == 0) { active = false; return 0.0f; }
@@ -938,8 +1234,14 @@ float MaPlayer::PcmVoice::tick() {
         if (env.isFinished()) active = false;
     }
     float result = s * e * gain * vel;
-    if (amDepth != 0.0f) result *= 1.0f - amDepth * float(0.5 + 0.5 * lfo);
-    recentLevel += (std::fabs(result) - recentLevel) * 0.01f;
+    float allocationLevel = allocationSample * e * gain * vel;
+    if (amDepth != 0.0f) {
+        const float modulation = 1.0f - amDepth * float(0.5 + 0.5 * lfo);
+        result *= modulation;
+        allocationLevel *= modulation;
+    }
+    // Interpolation quality must not reorder the established voice-steal policy.
+    recentLevel += (std::fabs(allocationLevel) - recentLevel) * 0.01f;
     return result;
 }
 
@@ -958,6 +1260,14 @@ int MaPlayer::activeVoices_() const {
 void MaPlayer::fireEvent_(const Ev& e) {
     Chan& c = chans_[e.ch & 127];
     switch (e.type) {
+        case Ev::WaveActivation:
+            if (e.a >= 0 && size_t(e.a) < voiceWaveVersions_.size() && e.b >= 0 && e.b < 128)
+                activeVoiceWaveVersion_[size_t(e.b)] = e.a;
+            break;
+        case Ev::VoiceActivation:
+            if (e.a >= 0 && size_t(e.a) < voiceTable_.size())
+                voiceTable_[size_t(e.a)].activated = true;
+            break;
         case Ev::Program:   c.program = e.a; break;
         case Ev::BankMsb:   c.bankMsb = e.a; break;
         case Ev::BankLsb:
@@ -986,18 +1296,49 @@ void MaPlayer::fireEvent_(const Ev& e) {
         } break;
         case Ev::Pan:
             c.pan = ((e.a & 0x7f) - 64) / 64.0f;
+            for (int i = 0; i < kPoolSize; ++i)
+                if (pool_[i].active() && pool_[i].channel == int(e.ch) && !poolPanLocked_[i]) {
+                    poolPan_[i] = c.pan;
+                    channelPanGains(c.pan, c.squaredControllers, poolPanLeft_[i], poolPanRight_[i]);
+                }
             for (auto& voice : audioPool_)
-                if (voice.active && voice.channel == int(e.ch)) voice.pan = c.pan;
-            for (auto& voice : pcmPool_)
-                if (voice.active && voice.channel == int(e.ch) && voice.keyNote >= 0 && !voice.panLocked)
+                if (voice.active && voice.channel == int(e.ch)) {
                     voice.pan = c.pan;
+                    channelPanGains(c.pan, c.squaredControllers, voice.panLeft, voice.panRight);
+                }
+            for (auto& voice : pcmPool_)
+                if (voice.active && voice.channel == int(e.ch) && voice.keyNote >= 0 && !voice.panLocked) {
+                    voice.pan = c.pan;
+                    channelPanGains(c.pan, c.squaredControllers, voice.panLeft, voice.panRight);
+                }
             break;
         case Ev::Modulation:
             if (e.b == 1) c.octShift = e.a - 1000;    // octave-shift marker
+            else if (c.squaredControllers && e.a >= 0 && e.a <= 127) {
+                // MA7 SMAF guideline8.3.2/Table6: magnify each voice's own
+                // vibrato by OFF,1,2,4,8. No effect on tremolo or recorded Audio.
+                c.vibratoScale = e.a == 0 ? 0.0 : double(1 << (e.a / 32));
+                for (auto& voice : pool_)
+                    if (voice.active() && voice.channel == int(e.ch)) voice.setVibratoScale(c.vibratoScale);
+                for (auto& voice : pcmPool_)
+                    if (voice.active && voice.channel == int(e.ch) && voice.keyNote >= 0)
+                        voice.vibDepth = voice.baseVibDepth * c.vibratoScale;
+            }
             break;
         case Ev::RpnMsb: if(e.a>=0 && e.a<=127) c.rpnMsb=e.a; break;
         case Ev::RpnLsb: if(e.a>=0 && e.a<=127) c.rpnLsb=e.a; break;
         case Ev::NrpnSelect: c.rpnMsb=c.rpnLsb=127; break;
+        case Ev::Hold: {
+            c.hold = e.a >= 64;
+            for (auto& voice : pool_)
+                if (voice.active() && voice.channel == int(e.ch)) voice.setHold(c.hold);
+            for (auto& voice : pcmPool_)
+                if (voice.active && voice.channel == int(e.ch) && voice.keyNote >= 0) {
+                    bool pending = voice.env.keyOffDeferred();
+                    voice.env.setHold(c.hold);
+                    if (pending && !voice.env.keyOffDeferred()) voice.released = true;
+                }
+        } break;
         case Ev::RpnData:
         case Ev::PitchBendRange:
         case Ev::PitchBend: {
@@ -1021,9 +1362,53 @@ void MaPlayer::fireEvent_(const Ev& e) {
                 if (pool_[i].active() && pool_[i].channel == int(e.ch))
                     pool_[i].setPitch(poolBaseFreq_[i] * std::pow(2.0, c.bend / 12.0));
         } break;
-        case Ev::NoteOff: {
+        case Ev::ResetControllers:
+            // RP-015: reset expression, pedal and pitch position, and null
+            // parameter selection, not bank/PC/volume/pan or parameter VALUES.
+            // Reuse live-control paths so released/Hold-deferred voices also
+            // receive the update. Do not manufacture any new NoteOff events.
+            fireEvent_({e.sample, Ev::Expression, e.ch, 127, 0});
+            fireEvent_({e.sample, Ev::Hold, e.ch, 0, 0});
+            fireEvent_({e.sample, Ev::PitchBend, e.ch, 0, 0});
+            c.rpnMsb = c.rpnLsb = 127;
+            // Mobile CC1/pressures/other pedals are not synthesized yet.
+            // Authored intrinsic EVB is not a modulation-wheel setting and
+            // must remain intact. Audio/ATR keep their existing CC exclusions.
+            break;
+        case Ev::AllSoundOff: {
+            // No key-identity test: already released and pedal-deferred voices
+            // also belong to All Sound Off. Preserve shared filter/limiter
+            // history so other channels are not disturbed by this command.
+            for (int i = 0; i < kPoolSize; ++i)
+                if (pool_[i].active() && pool_[i].channel == int(e.ch)) {
+                    pool_[i] = FmVoice{};
+                    pool_[i].setSampleRate(double(rate_));
+                    poolNoteId_[i] = 0;
+                }
+            for (auto& voice : pcmPool_)
+                if (voice.active && voice.channel == int(e.ch) && voice.keyNote >= 0) {
+                    voice.active = false; voice.noteId = 0;
+                }
             for (auto& voice : audioPool_)
-                if (voice.active && voice.noteId == e.noteId) {
+                if (voice.active && voice.channel == int(e.ch)) {
+                    voice.active = false; voice.noteId = 0;
+                }
+            // ATR one-shots are an independent AudioTrack source, not keyed
+            // score voices; retain their existing exclusion from channel CCs.
+        } break;
+        case Ev::AllNotesOff:
+        case Ev::NoteOff: {
+            const bool all = e.type == Ev::AllNotesOff;
+            // A consumed identity denotes an already lifted key, not a new
+            // key-off request. This also excludes ATR one-shots (identity0).
+            // Consuming once prevents later gates/commands from rearming Hold
+            // or restarting an Audio stop fade. A new allocation gets a new ID.
+            auto matches = [&](int channel, uint64_t id) {
+                return channel == int(e.ch) && id != 0 && (all || id == e.noteId);
+            };
+            for (auto& voice : audioPool_)
+                if (voice.active && matches(voice.channel, voice.noteId)) {
+                    voice.noteId = 0;
                     voice.stopFadeTotal = std::max(1, int(rate_ / 500));
                     voice.stopFade = voice.stopFadeTotal;
                     voice.released = true;
@@ -1031,28 +1416,34 @@ void MaPlayer::fireEvent_(const Ev& e) {
             // Every scheduled gate belongs to one note instance. Same-pitch
             // notes may overlap, finish out of order, or reuse a stolen slot.
             for (int i = 0; i < kPoolSize; ++i)
-                if (pool_[i].active() && poolNoteId_[i] == e.noteId) {
-                    pool_[i].noteOff();
-                    break;
+                if (pool_[i].active() && matches(pool_[i].channel, poolNoteId_[i])) {
+                    poolNoteId_[i] = 0;
+                    pool_[i].noteOff(c.hold);
+                    if (!all) break;
                 }
             for (int i = 0; i < kPcmPool; ++i)          // release a held pcm note
-                if (pcmPool_[i].active && pcmPool_[i].noteId == e.noteId) {
-                    pcmPool_[i].env.keyOff();
-                    pcmPool_[i].released = true;
+                if (pcmPool_[i].active && matches(pcmPool_[i].channel, pcmPool_[i].noteId)) {
+                    pcmPool_[i].noteId = 0;
+                    pcmPool_[i].env.keyOff(c.hold);
+                    pcmPool_[i].released = !pcmPool_[i].env.keyOffDeferred();
                 }
         } break;
         case Ev::WaveOn: {
             // ATR wave trigger: play wave e.a one-shot at its native rate, no
             // envelope shaping (the sample IS the sound, it ends on its own).
             int wid = e.a;
-            if (wid < 0 || size_t(wid) >= waveBank_.size() || waveBank_[wid].pcm.empty()) break;
-            const PcmSample& ws = waveBank_[wid];
+            const auto bank = audioWaveBanks_.find(e.b);
+            if (wid < 1 || wid > 62 || bank == audioWaveBanks_.end() ||
+                size_t(wid) >= bank->second.size() || bank->second[wid].pcm.empty()) break;
+            const PcmSample& ws = bank->second[wid];
             int slot = allocatePcmSlot_();
             PcmVoice& pv = pcmPool_[slot];
             pv.streamAudio = false;
+            pv.qualityInterpolation = false;
+            pv.loopTravel = 0;
             pv.pcm = ws.pcm.data(); pv.len = ws.pcm.size();
             pv.rate = double(ws.fs) / double(rate_);
-            pv.lfoPhase = pv.lfoInc = pv.vibDepth = 0.0;
+            pv.lfoPhase = pv.lfoInc = pv.vibDepth = pv.baseVibDepth = 0.0;
             pv.amDepth = 0.0f; // ATR must not inherit a stolen WT slot's LFO
             pv.pos = 0.0; pv.loopStart = 0; pv.loopEnd = pv.len; pv.loop = false;
             pv.silentLoop = false;
@@ -1060,6 +1451,7 @@ void MaPlayer::fireEvent_(const Ev& e) {
             flat.ar = 15; flat.sl = 0; flat.sr = 0; flat.egType = true;
             pv.env.configure(flat, double(rate_)); pv.env.keyOn();
             pv.gain = 1.0f; pv.vel = 1.0f; pv.pan = 0.0f;
+            pv.panLeft = pv.panRight = 1.0f;
             pv.channel = int(e.ch); pv.keyNote = -1; pv.active = true;
             pv.noteId = 0; // ATR one-shots have no scheduled key-off
             pv.released = false; pv.recentLevel = 0;
@@ -1132,8 +1524,9 @@ void MaPlayer::fireEvent_(const Ev& e) {
                 ++diagnostics_.stolenFm;
             }
             // Retain the trigger key and noteId for voice lookup / scheduled
-            // key-off, but custom FM drums sound at their authored DrumKey.
-            int midi = (rv && rv->fixedFmNote >= 0 ? rv->fixedFmNote : soundingNote) + patch.noteShift;
+            // key-off. Only the selected key-control policy uses DrumKey.
+            int midi = (rv && c.fixedFmDrumPitch && rv->fixedFmNote >= 0
+                        ? rv->fixedFmNote : soundingNote) + patch.noteShift;
             double baseFreq=noteToFreq_(midi);
             if(romPatch && missingRom->pcm.waveId<22) {
                 // Mapped drum keys are addresses, not pitches (e.g. crash on 90).
@@ -1151,7 +1544,15 @@ void MaPlayer::fireEvent_(const Ev& e) {
             // gm-style squared velocity curve: linear velocity made every mid-
             // velocity note nearly full-scale and the mix bus pump the limiter.
             pool_[slot].noteOn(patch, freq, noteVelocity);
-            poolPan_[slot] = (c.pan != 0.0f) ? c.pan : patch.panDefault;
+            pool_[slot].setVibratoScale(c.squaredControllers ? c.vibratoScale : 1.0);
+            // PE is a flag, not a nonzero-pan test: explicit centre must also
+            // ignore channel Pan. A missing ROM waveform does not discard its
+            // independently defined authored pan when selecting a substitute.
+            poolPanLocked_[slot] = missingRom ? missingRom->pcm.panEnabled : patch.panEnabled;
+            poolPan_[slot] = poolPanLocked_[slot]
+                ? (missingRom ? missingRom->pcm.pan : patch.panDefault) : c.pan;
+            channelPanGains(poolPan_[slot], c.squaredControllers && !poolPanLocked_[slot],
+                            poolPanLeft_[slot], poolPanRight_[slot]);
         } break;
     }
 }
@@ -1188,20 +1589,18 @@ int MaPlayer::render(float* out, int frames) {
         for (int i = 0; i < kPoolSize; ++i) {
             if (!pool_[i].active()) continue;
             float s = pool_[i].tick();
-            float pan = poolPan_[i];
-            l += s * kMixGain * (1.0f - pan); r += s * kMixGain * (1.0f + pan);
+            l += s * kMixGain * poolPanLeft_[i]; r += s * kMixGain * poolPanRight_[i];
         }
         for (int i = 0; i < kPcmPool; ++i) {           // sampled drum/pcm voices
             if (!pcmPool_[i].active) continue;
             float s = pcmPool_[i].tick();
-            float pan = pcmPool_[i].pan;
-            l += s * kMixGain * (1.0f - pan); r += s * kMixGain * (1.0f + pan);
+            l += s * kMixGain * pcmPool_[i].panLeft; r += s * kMixGain * pcmPool_[i].panRight;
         }
         for (auto& voice : audioPool_) {
             if (!voice.active) continue;
             const float s = voice.tick();
-            l += s * kMixGain * (1.0f - voice.pan);
-            r += s * kMixGain * (1.0f + voice.pan);
+            l += s * kMixGain * voice.panLeft;
+            r += s * kMixGain * voice.panRight;
         }
         // 2-pole one-pole-cascade low-pass (the analog output filter's warmth),
         // then a transparent peak limiter. the old tanh soft-knee WAS the
@@ -1213,7 +1612,10 @@ int MaPlayer::render(float* out, int frames) {
         l = lp2L_; r = lp2R_;
         float peak = std::max(std::fabs(l), std::fabs(r));
         limEnv_ = std::max(peak, limEnv_ * limRelease_);   // instant attack
-        if (limEnv_ > 0.92f) { float g = 0.92f / limEnv_; l *= g; r *= g; }
+        if (limEnv_ > 0.92f) {
+            ++diagnostics_.limitedFrames;
+            float g = 0.92f / limEnv_; l *= g; r *= g;
+        }
         // Do not introduce a discontinuity when a pathological envelope or
         // the ten-minute file limit reaches the hard safety boundary.
         const uint64_t fadeFrames = std::max<uint64_t>(2, rate_ / 50);
@@ -1237,20 +1639,25 @@ int MaPlayer::render(float* out, int frames) {
 
 void MaPlayer::seekToStart() {
     nextEvent_ = 0; cursor_ = 0;
+    for (auto& v : voiceTable_) if (v.sequenced) v.activated = false;
+    activeVoiceWaveVersion_.fill(-1);
     ended_ = false; diagnostics_ = {};
     // MTR mode/source association is init-time state, not controller state.
     // Preserve it so drum retriggering and Audio binding survive a seek.
     for (auto& c : chans_) {
-        bool rh = c.rhythm, mono = c.monophonic, squared = c.squaredControllers, modern=c.modernTimbre; int track = c.streamTrack;
+        bool rh = c.rhythm, mono = c.monophonic, squared = c.squaredControllers, modern=c.modernTimbre;
+        bool fixedDrum = c.fixedFmDrumPitch; int track = c.streamTrack;
         c = Chan{}; c.rhythm = rh; c.monophonic = mono; c.streamTrack = track;
         c.squaredControllers = squared;
         c.modernTimbre=modern;
+        c.fixedFmDrumPitch=fixedDrum;
         if (squared) c.volume *= c.volume;
     }
     for (auto& v : pool_) { v = FmVoice{}; v.setSampleRate(double(rate_)); }
     for (auto& pv : pcmPool_) pv.active = false;
     for (auto& pv : audioPool_) pv.active = false;
     poolNoteId_.fill(0);
+    poolPanLocked_.fill(false);
     fmSteal_ = pcmSteal_ = 0;
     lp1L_ = lp1R_ = lp2L_ = lp2R_ = 0.0f;
     limEnv_ = 0.0f;

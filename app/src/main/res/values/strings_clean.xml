@@ -9,13 +9,14 @@
     <string name="stop_description">停止</string>
     <string name="previous_track_description">前の曲</string>
     <string name="next_track_description">次の曲</string>
-    <string name="select_mmf_prompt">MMFファイルを選択してください</string>
+    <string name="select_mmf_prompt">MMF / WAVファイルを選択してください</string>
     <string name="scanning_folder">フォルダを読み込んでいます…</string>
-    <string name="folder_item_count">MMF %1$d件・フォルダ %2$d件</string>
+    <string name="folder_item_count">MMF / WAV %1$d件・フォルダ %2$d件</string>
     <string name="parent_folder">↑  上のフォルダ</string>
     <string name="version_label">v%1$s</string>
     <string name="folder_read_failed">フォルダを読み込めません: %1$s</string>
     <string name="player_status_converting">変換しています…</string>
+    <string name="player_status_loading">読み込んでいます…</string>
     <string name="playback_failed">再生できません: %1$s</string>
     <string name="file_open_failed">ファイルを開けません</string>
     <string name="file_too_large">ファイルが大きすぎます（上限16MB）</string>

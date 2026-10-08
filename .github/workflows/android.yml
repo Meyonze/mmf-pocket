@@ -41,6 +41,12 @@ jobs:
           chmod +x gradlew
           ./gradlew lint assembleDebug assembleRelease --stacktrace
 
+      - name: Check MMF and WAV filename policy
+        run: |
+          mkdir -p build/audio-file-type-tests
+          javac -encoding UTF-8 -d build/audio-file-type-tests app/src/main/java/app/mmfpocket/player/AudioFileTypes.java tools/AudioFileTypesTest.java
+          java -cp build/audio-file-type-tests app.mmfpocket.player.AudioFileTypesTest
+
   native-security-smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 10

@@ -66,6 +66,12 @@ struct FmOpPatch {
     bool fixedFrequency = false;
     uint8_t fixedBlock = 0;
     uint16_t fixedFnum = 0;
+    bool holdEnabled = false; // VM35/MA7 SUS: responds to Hold1, not VMA SUS
+    // Parsed VM35 synthesis family: multiplier aliases and modern PM scale.
+    // Only MA3/MA5 parser branches set this; not MA7/VMA/original fallbacks.
+    bool ma35Multipliers = false;
+    bool ma7Multipliers = false; // expanded MA7 FM has separate fractional selections
+    uint8_t ma7Detune = 0; // all four raw DT bits retained; physical units uncalibrated
 };
 
 // ── a voice patch: 2-op or 4-op, one connection algorithm ───────────────────
@@ -90,6 +96,7 @@ struct FmVoicePatch {
     static const FmVoicePatch* romApprox(int waveId);
     static const FmVoicePatch& gmModernApprox(int program);
     bool modernTimbre = false; // related-chip feedback/tremolo; legacy defaults unchanged
+    bool panEnabled = false; // Channel Pan Off: authored pan overrides even at centre
 };
 
 // ── envelope generator (adsr, exponential, chip-style discrete rates) ───────
@@ -98,7 +105,9 @@ public:
     // Discrete key-scaling offset added to 4*nibble + 2*MA7-low-bit.
     void configure(const FmOpPatch& p, double sampleRate, int rateOffset = 0);
     void keyOn();
-    void keyOff();
+    void keyOff(bool holdOn = false);
+    void setHold(bool on);
+    bool keyOffDeferred() const { return pendingKeyOff_; }
     float advance();                 // returns linear gain 0..1 for this sample
     bool  isFinished() const { return phase_ == Phase::Idle; }
 private:
@@ -109,6 +118,7 @@ private:
     double susLevel_ = 0.0;
     bool   sustaining_ = true;
     bool   xof_ = false;             // ignore key-off (drums ring out fully)
+    bool holdEnabled_ = false, pendingKeyOff_ = false;
 };
 
 // ── operator: phase generator + waveform + envelope ─────────────────────────
@@ -117,12 +127,14 @@ public:
     void configure(const FmOpPatch& p, double sampleRate, int rateOffset = 0,
                    bool modernTimbre = false);
     void noteOn(double freqHz);
-    void noteOff();
+    void noteOff(bool holdOn = false);
+    void setHold(bool on) { env_.setHold(on); }
+    bool keyOffDeferred() const { return env_.keyOffDeferred(); }
     // modIn is the phase-modulation input in cycles (0 for a pure carrier).
     // lfoSin is the voice LFO value (-1..1); the operator applies its own
     // vibrato/tremolo depth from the patch when VIB/AM are enabled.
     // returns the operator output in roughly [-1, 1] scaled by tl + envelope.
-    float tick(double modIn, double lfoSin = 0.0);
+    float tick(double modIn, double lfoSin = 0.0, double vibratoScale = 1.0);
     bool  finished() const { return env_.isFinished(); }
     void  setBaseFreq(double f) { freqHz_ = f; recalc_(); }
 private:
@@ -139,6 +151,7 @@ private:
     float  amAmt_      = 0.0f;  // tremolo depth as a linear gain span
     bool   nyMute_     = false; // operator lands above fs/2 -> silent, no alias
     uint8_t wave_      = 0;
+    bool modernTimbre_ = false;
     static float waveform_(uint8_t wave, double phase01);
 };
 
@@ -147,7 +160,9 @@ class FmVoice {
 public:
     void setSampleRate(double sr) { sampleRate_ = sr; }
     void noteOn(const FmVoicePatch& patch, double freqHz, float velocity);
-    void noteOff();
+    void noteOff(bool holdOn = false);
+    void setHold(bool on);
+    void setVibratoScale(double scale) { vibratoScale_ = scale; }
     void setPitch(double freqHz);         // pitch bend / portamento
     void setVolume(float v) { volume_ = v; }   // channel volume 0..1
     float tick();                          // one mono sample, ~[-1,1]
@@ -165,6 +180,8 @@ private:
     float  volume_   = 1.0f;
     bool   active_   = false;
     bool   released_ = false;
+    bool keyOffRequested_ = false;
+    void updateReleaseState_();
     float  recentLevel_ = 0.0f;
     bool   fourOp_   = false;
     uint8_t algo_    = 0;
@@ -173,6 +190,8 @@ private:
     double  fbMem_[4][2] = {{0,0},{0,0},{0,0},{0,0}};  // per-op feedback history
     double  lfoPhase_ = 0.0, lfoInc_ = 0.0;            // one LFO per voice
     double  lfoSin_   = 0.0;                           // this sample's LFO value
+    double vibratoScale_ = 1.0; // channel modulation affects pitch only, not AM
+    double modDepth_ = 0.42; // selected once per note; compatibility default
     // one modulator step: run op[i] with its own feedback + an external phase-mod
     // input (in cycles). returns its output. keeps the FM index musical.
     float modOp_(int i, double extModCycles);

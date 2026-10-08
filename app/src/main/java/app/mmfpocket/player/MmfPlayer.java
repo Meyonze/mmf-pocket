@@ -5,6 +5,7 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.res.AssetFileDescriptor;
 import android.media.AudioFocusRequest;
 import android.media.AudioManager;
 import android.media.MediaPlayer;
@@ -29,6 +30,7 @@ import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
 
 import java.io.File;
+import java.io.IOException;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -39,7 +41,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.function.BooleanSupplier;
 
-/** Media3 adapter that exposes the existing MMF engines as a single audio player. */
+/** Media3 adapter for the existing MMF engines and direct platform WAV playback. */
 @UnstableApi
 final class MmfPlayer extends SimpleBasePlayer {
     static final String EXTRA_PHONE_SPEAKER = "app.mmfpocket.extra.PHONE_SPEAKER";
@@ -239,6 +241,11 @@ final class MmfPlayer extends SimpleBasePlayer {
         prepared = false;
         invalidateState();
         int requestGeneration = ++generation;
+        if (isDirectWav(currentItem)) {
+            updateFormatMetadata("WAV", IllustratedMafuMascotView.PACE_NORMAL);
+            prepareDirectWav(uri, requestGeneration);
+            return Futures.immediateVoidFuture();
+        }
         boolean phoneSpeakerMode = currentItem.mediaMetadata.extras != null
                 && currentItem.mediaMetadata.extras.getBoolean(EXTRA_PHONE_SPEAKER, false);
         preparationWorker.execute(() -> {
@@ -454,6 +461,57 @@ final class MmfPlayer extends SimpleBasePlayer {
     }
 
     private void startMediaPlayer(File wav, int requestGeneration) {
+        startMediaPlayer(wav, null, requestGeneration);
+    }
+
+    private static boolean isDirectWav(MediaItem item) {
+        return item != null && item.localConfiguration != null
+                && AudioFileTypes.isWavMedia(item.localConfiguration.mimeType,
+                        item.mediaMetadata.title);
+    }
+
+    private void prepareDirectWav(Uri uri, int requestGeneration) {
+        preparationWorker.execute(() -> {
+            AssetFileDescriptor descriptor = null;
+            String failure = "";
+            try {
+                // SAF may involve a slow/cloud provider. Never open it on the
+                // session looper, so Stop/next/focus events remain responsive.
+                descriptor = context.getContentResolver().openAssetFileDescriptor(uri, "r");
+                if (descriptor == null) failure = "WAVファイルを開けません";
+            } catch (Exception error) {
+                failure = error.getMessage() == null
+                        ? error.getClass().getSimpleName() : error.getMessage();
+            }
+            AssetFileDescriptor result = descriptor;
+            String message = failure;
+            boolean posted = mainHandler.post(() -> {
+                try {
+                    if (released || requestGeneration != generation) return;
+                    if (result == null) {
+                        fail(message, PlaybackException.ERROR_CODE_IO_UNSPECIFIED);
+                        return;
+                    }
+                    startMediaPlayer(null, result, requestGeneration);
+                } finally {
+                    closeDescriptor(result);
+                }
+            });
+            if (!posted) closeDescriptor(result);
+        });
+    }
+
+    private static void closeDescriptor(AssetFileDescriptor descriptor) {
+        if (descriptor == null) return;
+        try {
+            descriptor.close();
+        } catch (IOException ignored) {
+            // MediaPlayer owns a duplicated descriptor after setDataSource.
+        }
+    }
+
+    private void startMediaPlayer(File wav, AssetFileDescriptor directWav,
+                                  int requestGeneration) {
         releaseBackend();
         currentWav = wav;
         MediaPlayer player = new MediaPlayer();
@@ -464,7 +522,8 @@ final class MmfPlayer extends SimpleBasePlayer {
                     .setContentType(android.media.AudioAttributes.CONTENT_TYPE_MUSIC)
                     .build());
             player.setVolume(volume, volume);
-            player.setDataSource(wav.getAbsolutePath());
+            if (directWav != null) player.setDataSource(directWav);
+            else player.setDataSource(wav.getAbsolutePath());
             player.setOnPreparedListener(preparedPlayer -> {
                 if (requestGeneration != generation || preparedPlayer != mediaPlayer) return;
                 prepared = true;
@@ -547,6 +606,23 @@ final class MmfPlayer extends SimpleBasePlayer {
 
     void setPhoneSoundMode(boolean enabled) {
         if (playlist.isEmpty()) return;
+        for (int index = 0; index < playlist.size(); index++) {
+            MediaItem item = playlist.get(index);
+            Bundle extras = item.mediaMetadata.extras == null
+                    ? new Bundle() : new Bundle(item.mediaMetadata.extras);
+            extras.putBoolean(EXTRA_PHONE_SPEAKER, enabled && !isDirectWav(item));
+            MediaMetadata metadata = new MediaMetadata.Builder()
+                    .populate(item.mediaMetadata)
+                    .setExtras(extras)
+                    .build();
+            playlist.set(index, item.buildUpon().setMediaMetadata(metadata).build());
+        }
+        currentItem = playlist.get(currentIndex);
+        // Keep a direct WAV running; mode affects only upcoming MMF items.
+        if (isDirectWav(currentItem)) {
+            invalidateState();
+            return;
+        }
         generation++;
         releaseBackend();
         playWhenReady = false;
@@ -560,18 +636,6 @@ final class MmfPlayer extends SimpleBasePlayer {
         startPositionMs = 0;
         pendingDiscontinuityMs = 0;
         pendingDiscontinuityReason = Player.DISCONTINUITY_REASON_SEEK;
-        for (int index = 0; index < playlist.size(); index++) {
-            MediaItem item = playlist.get(index);
-            Bundle extras = item.mediaMetadata.extras == null
-                    ? new Bundle() : new Bundle(item.mediaMetadata.extras);
-            extras.putBoolean(EXTRA_PHONE_SPEAKER, enabled);
-            MediaMetadata metadata = new MediaMetadata.Builder()
-                    .populate(item.mediaMetadata)
-                    .setExtras(extras)
-                    .build();
-            playlist.set(index, item.buildUpon().setMediaMetadata(metadata).build());
-        }
-        currentItem = playlist.get(currentIndex);
         abandonAudioFocus();
         setWakeLockHeld(false);
         invalidateState();
@@ -796,6 +860,7 @@ final class MmfPlayer extends SimpleBasePlayer {
         Bundle extras = currentItem.mediaMetadata.extras == null
                 ? new Bundle() : new Bundle(currentItem.mediaMetadata.extras);
         extras.putString(EXTRA_FORMAT_LABEL, formatLabel);
+        if (isDirectWav(currentItem)) extras.putBoolean(EXTRA_PHONE_SPEAKER, false);
         extras.putInt(EXTRA_MOTION_PACE, motionPace);
         MediaMetadata metadata = new MediaMetadata.Builder()
                 .populate(currentItem.mediaMetadata)

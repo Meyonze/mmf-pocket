@@ -1,6 +1,7 @@
 package app.mmfpocket.player;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.ComponentName;
 import android.content.Intent;
 import android.content.res.ColorStateList;
@@ -30,6 +31,10 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import java.util.ArrayDeque;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -50,6 +55,9 @@ import com.google.common.util.concurrent.ListenableFuture;
 @UnstableApi
 public final class MainActivity extends Activity {
     private static final int REQUEST_FOLDER = 1001;
+    private static final int REQUEST_DEBUG_WAV = 1002;
+    private static final String STATE_DEBUG_WAV = "pending_debug_wav";
+    private String pendingDebugCacheName;
     private static final String PREFS = "mmf_player";
     private static final String PREF_TREE_URI = "tree_uri";
     private static final String PREF_PHONE_SOUND = "phone_sound";
@@ -133,6 +141,9 @@ public final class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        if (BuildConfig.DEBUG && savedInstanceState != null) {
+            pendingDebugCacheName = savedInstanceState.getString(STATE_DEBUG_WAV);
+        }
         setContentView(buildUi());
 
         String saved = getSharedPreferences(PREFS, MODE_PRIVATE).getString(PREF_TREE_URI, null);
@@ -194,6 +205,14 @@ public final class MainActivity extends Activity {
 
         TextView versionLabel = new TextView(this);
         versionLabel.setText(getString(R.string.version_label, BuildConfig.VERSION_NAME));
+        if (BuildConfig.DEBUG) {
+            versionLabel.setContentDescription(BuildConfig.VERSION_NAME
+                    + "（長押し：再生WAVを保存）");
+            versionLabel.setOnLongClickListener(view -> {
+                showDebugWavExport();
+                return true;
+            });
+        }
         versionLabel.setTextSize(11);
         versionLabel.setTextColor(0xFF757575);
         versionLabel.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
@@ -580,6 +599,15 @@ public final class MainActivity extends Activity {
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == REQUEST_DEBUG_WAV) {
+            String cacheName = pendingDebugCacheName;
+            pendingDebugCacheName = null;
+            if (BuildConfig.DEBUG && resultCode == RESULT_OK && data != null
+                    && data.getData() != null && cacheName != null) {
+                exportDebugWav(cacheName, data.getData());
+            }
+            return;
+        }
         if (requestCode != REQUEST_FOLDER || resultCode != RESULT_OK || data == null) return;
 
         Uri uri = data.getData();
@@ -595,6 +623,102 @@ public final class MainActivity extends Activity {
         getSharedPreferences(PREFS, MODE_PRIVATE)
                 .edit().putString(PREF_TREE_URI, uri.toString()).apply();
         loadFolder(uri);
+    }
+
+    @Override
+    protected void onSaveInstanceState(Bundle outState) {
+        super.onSaveInstanceState(outState);
+        if (BuildConfig.DEBUG) outState.putString(STATE_DEBUG_WAV, pendingDebugCacheName);
+    }
+
+    // Export the finished cache actually selected by the playing item's metadata.
+    // Never silently regenerate a different reference or stop/change playback.
+    // Hash/version/phone suffix remain in the filename for source identification.
+    private void showDebugWavExport() {
+        if (!BuildConfig.DEBUG || pendingDebugCacheName != null) return;
+        MediaItem item = mediaController == null ? null : mediaController.getCurrentMediaItem();
+        if (item == null || item.localConfiguration == null) {
+            Toast.makeText(this, "曲を再生してから長押ししてください", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        Uri uri = item.localConfiguration.uri;
+        if (AudioFileTypes.isWavMedia(item.localConfiguration.mimeType,
+                item.mediaMetadata.title)) {
+            Toast.makeText(this, "WAVは元ファイルを直接再生しています（変換キャッシュなし）",
+                    Toast.LENGTH_LONG).show();
+            return;
+        }
+        Bundle extras = item.mediaMetadata.extras;
+        boolean phone = extras != null && extras.getBoolean(MmfPlayer.EXTRA_PHONE_SPEAKER, false);
+        new AlertDialog.Builder(this)
+                .setTitle("診断用：実際の再生WAV")
+                .setMessage("実再生の携帯風：" + (phone ? "オン" : "オフ")
+                        + "\n音を加工せず、変換済みキャッシュを保存します。")
+                .setNegativeButton("キャンセル", null)
+                .setPositiveButton("WAVを保存", (dialog, which) -> worker.execute(() -> {
+                    try {
+                        MmfAudioRepository.PlaybackSource source =
+                                MmfAudioRepository.preparePlaybackSource(this, uri, phone);
+                        runOnUiThread(() -> {
+                            if (isFinishing() || isDestroyed()) return;
+                            if (source.cached == null) {
+                                Toast.makeText(this, "変換が完了してからもう一度お試しください",
+                                        Toast.LENGTH_LONG).show();
+                                return;
+                            }
+                            pendingDebugCacheName = source.cached.getName();
+                            Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+                            intent.addCategory(Intent.CATEGORY_OPENABLE);
+                            intent.setType("audio/wav");
+                            intent.putExtra(Intent.EXTRA_TITLE, "MMF-Pocket-"
+                                    + BuildConfig.VERSION_NAME + "-" + pendingDebugCacheName);
+                            try {
+                                startActivityForResult(intent, REQUEST_DEBUG_WAV);
+                            } catch (RuntimeException error) {
+                                pendingDebugCacheName = null;
+                                Toast.makeText(this, "保存先を開けませんでした", Toast.LENGTH_LONG).show();
+                            }
+                        });
+                    } catch (Exception error) {
+                        showDebugExportResult("再生WAVを確認できませんでした：" + error.getMessage());
+                    }
+                })).show();
+    }
+
+    private void exportDebugWav(String cacheName, Uri destination) {
+        worker.execute(() -> {
+            try {
+                File directory = new File(getCacheDir(), MmfAudioRepository.CACHE_DIR_NAME);
+                File source = new File(directory, cacheName);
+                if (!cacheName.endsWith(".wav") || !source.getCanonicalFile().getParentFile()
+                        .equals(directory.getCanonicalFile()) || !source.isFile() || source.length() <= 44) {
+                    throw new IOException("再生キャッシュが見つかりません");
+                }
+                long expected = source.length();
+                long copied = 0;
+                try (FileInputStream input = new FileInputStream(source);
+                     OutputStream output = getContentResolver().openOutputStream(destination, "wt")) {
+                    if (output == null) throw new IOException("保存先を開けません");
+                    byte[] buffer = new byte[64 * 1024];
+                    int count;
+                    while ((count = input.read(buffer)) != -1) {
+                        if (Thread.currentThread().isInterrupted()) throw new IOException("保存を中断しました");
+                        output.write(buffer, 0, count);
+                        copied += count;
+                    }
+                    if (copied != expected) throw new IOException("保存サイズが一致しません");
+                }
+                showDebugExportResult("再生WAVを保存しました");
+            } catch (Exception error) {
+                showDebugExportResult("WAV保存に失敗しました：" + error.getMessage());
+            }
+        });
+    }
+
+    private void showDebugExportResult(String message) {
+        runOnUiThread(() -> {
+            if (!isFinishing() && !isDestroyed()) Toast.makeText(this, message, Toast.LENGTH_LONG).show();
+        });
     }
 
     private void loadFolder(Uri treeUri) {
@@ -644,7 +768,7 @@ public final class MainActivity extends Activity {
                 adapter.notifyDataSetChanged();
                 listView.clearChoices();
                 listView.setEnabled(true);
-                batchButton.setEnabled(!entries.isEmpty() && !batchConverting);
+                batchButton.setEnabled(hasConvertibleEntries() && !batchConverting);
                 statusLabel.setText(found.isEmpty()
                         ? getString(R.string.empty_folder_ja)
                         : getString(R.string.folder_item_count, entries.size(), folderCount));
@@ -672,7 +796,7 @@ public final class MainActivity extends Activity {
                     if (name == null) continue;
                     if (DocumentsContract.Document.MIME_TYPE_DIR.equals(mime)) {
                         result.add(BrowserEntry.directory(name, childId));
-                    } else if (name.toLowerCase(Locale.ROOT).endsWith(".mmf")) {
+                    } else if (AudioFileTypes.isPlayable(name)) {
                         Uri fileUri = DocumentsContract.buildDocumentUriUsingTree(
                                 treeUri, childId);
                         result.add(BrowserEntry.file(new MmfEntry(name, fileUri)));
@@ -718,7 +842,8 @@ public final class MainActivity extends Activity {
         formatLabel.setText("");
         playPauseButton.setEnabled(true);
         stopButton.setEnabled(true);
-        statusLabel.setText(R.string.player_status_converting);
+        statusLabel.setText(AudioFileTypes.isWav(entry.name)
+                ? R.string.player_status_loading : R.string.player_status_converting);
         MediaController controller = mediaController;
         if (controller == null) {
             pendingPlaybackRequest = request;
@@ -753,8 +878,12 @@ public final class MainActivity extends Activity {
 
     private void convertAllFiles() {
         if (entries.isEmpty() || batchConverting) return;
+        List<MmfEntry> snapshot = new ArrayList<>();
+        for (MmfEntry entry : entries) {
+            if (AudioFileTypes.isMmf(entry.name)) snapshot.add(entry);
+        }
+        if (snapshot.isEmpty()) return;
         int generation = batchGeneration.incrementAndGet();
-        List<MmfEntry> snapshot = new ArrayList<>(entries);
         boolean phoneSpeakerMode = phoneSoundSwitch.isChecked();
         batchConverting = true;
         batchPaused = false;
@@ -808,7 +937,7 @@ public final class MainActivity extends Activity {
                 if (generation != batchGeneration.get() || isFinishing() || isDestroyed()) return;
                 batchConverting = false;
                 batchPaused = false;
-                batchButton.setEnabled(!entries.isEmpty());
+                batchButton.setEnabled(hasConvertibleEntries());
                 batchPauseButton.setVisibility(View.GONE);
                 batchStatusLabel.setVisibility(View.GONE);
                 Toast.makeText(this, getString(R.string.batch_complete,
@@ -862,7 +991,7 @@ public final class MainActivity extends Activity {
             batchPaused = false;
             batchPauseLock.notifyAll();
         }
-        batchButton.setEnabled(!entries.isEmpty());
+        batchButton.setEnabled(hasConvertibleEntries());
         batchPauseButton.setVisibility(View.GONE);
         batchStatusLabel.setVisibility(View.GONE);
     }
@@ -938,6 +1067,9 @@ public final class MainActivity extends Activity {
             Bundle extras = item.mediaMetadata.extras;
             formatLabel.setText(extras == null ? ""
                     : extras.getString(MmfPlayer.EXTRA_FORMAT_LABEL, ""));
+            phoneSoundSwitch.setEnabled(item.localConfiguration == null
+                    || !AudioFileTypes.isWavMedia(item.localConfiguration.mimeType,
+                            item.mediaMetadata.title));
             mafuMotionPace = extras == null ? IllustratedMafuMascotView.PACE_NORMAL
                     : extras.getInt(MmfPlayer.EXTRA_MOTION_PACE,
                             IllustratedMafuMascotView.PACE_NORMAL);
@@ -967,7 +1099,11 @@ public final class MainActivity extends Activity {
             statusLabel.setText(getString(R.string.playback_failed,
                     controller.getPlayerError().getMessage()));
         } else if (state == Player.STATE_BUFFERING && name != null) {
-            statusLabel.setText(R.string.player_status_converting);
+            boolean directWav = item != null && item.localConfiguration != null
+                    && AudioFileTypes.isWavMedia(item.localConfiguration.mimeType,
+                            item.mediaMetadata.title);
+            statusLabel.setText(directWav
+                    ? R.string.player_status_loading : R.string.player_status_converting);
         } else if (state == Player.STATE_READY && name != null) {
             if (controller.isPlaying()) {
                 statusLabel.setText(R.string.player_status_playing);
@@ -1120,6 +1256,13 @@ public final class MainActivity extends Activity {
                 : randomPlaybackEnabled
                         ? R.string.random_playback_on_description
                         : R.string.random_playback_off_description));
+    }
+
+    private boolean hasConvertibleEntries() {
+        for (MmfEntry entry : entries) {
+            if (AudioFileTypes.isMmf(entry.name)) return true;
+        }
+        return false;
     }
 
     private int indexOfEntry(List<MmfEntry> queue, String mediaId) {

@@ -49,6 +49,7 @@ void applyVm35Body(const uint8_t* g, size_t n, int operatorCount, FmVoicePatch& 
     applyAlg(v, alg);
     v.noteShift = boToSemitones(bo);
     v.panDefault = pe ? panpotToPan(pp) : 0.0f;
+    v.panEnabled = pe;
     v.lfo = (g[2] >> 6) & 0x03;            // voice LFO rate (vm35fm.go Global+2)
 
     const uint8_t* op = g + 3;
@@ -59,7 +60,7 @@ void applyVm35Body(const uint8_t* g, size_t n, int operatorCount, FmVoicePatch& 
         o.sr  =  (op[0] >> 4) & 0x0f;
         o.ksr =   op[0] & 0x01;
         // SR=0 holds after decay. Do not reinterpret it as a percussive flag.
-        // SUS (op+0 bit1) remains unimplemented; XOF is handled separately.
+        o.holdEnabled = (op[0] & 2) != 0; // SUS responds to MIDI Hold1
         o.egType = true; // VM35 always enters SR stage; SR=0 holds the level.
         o.rr  =  (op[1] >> 4) & 0x0f;
         o.dr  =   op[1] & 0x0f;
@@ -133,6 +134,7 @@ bool applyPcmBody(const uint8_t* b, size_t n, ParsedVoice& out) {
     pc.env.sl =  b[6] & 0x0f;
     pc.env.egType = true;
     pc.env.xof = (b[4] & 8) != 0;
+    pc.env.holdEnabled = (b[4] & 2) != 0;
     // VM35 PCM has its own authored EAM/EVB and depth fields. These were
     // discarded even when the referenced wave decoded correctly.
     pc.lfo = (b[3] >> 6) & 3;
@@ -229,6 +231,8 @@ ParsedVoice parseVoiceExclusive(const uint8_t* p, size_t n) {
             for (int op = 0; op < operators; ++op) {
                 const size_t src = 4 + size_t(op) * 10;
                 auto& target = out.patch.ops[op];
+                target.ma7Multipliers = true;
+                target.ma7Detune = voice[src + 9] & 15;
                 target.rateLowBits = voice[src + 5] & 15;
                 target.fixedFrequency = (voice[src] & 4) != 0;
                 target.fixedBlock = (voice[src + 7] >> 2) & 7;
@@ -295,10 +299,17 @@ ParsedVoice parseVoiceExclusive(const uint8_t* p, size_t n) {
         // PANPOT and the alg sits in byte 3 (its low 3 bits survive the bit-steal,
         // per vm35fm.go); peek the right byte or we truncate 4-op voices to 2.
         size_t algByte = (p[2] == 0x06) ? 3 : 2;
-        int alg = (bn > algByte) ? (body[algByte] & 0x07) : 0;
+        if (bn <= algByte) return out;
+        int alg = body[algByte] & 0x07;
         int ops = opCountFromAlg(alg);
+        // A partial image must not replace a valid voice with default/padded
+        // operators. Keep accepting trailing bytes used by legacy writers.
+        const size_t required = (p[2] == 0x06) ? 4 + size_t(ops) * 8
+                                              : 3 + size_t(ops) * 7;
+        if (bn < required) return out;
         if (p[2] == 0x06) applyMa3Packed(body, bn, ops, out.patch);   // MA-3 packed
         else              applyVm35Body(body, bn, ops, out.patch);    // MA-5 direct
+        for (auto& op : out.patch.ops) op.ma35Multipliers = true;
         // Global DrumKey is the oscillator pitch, not the header's mapped key.
         // MA-3's carrier precedes it; the sounding key itself is seven-bit.
         const size_t drumKeyByte = p[2] == 0x06 ? 1 : 0;
@@ -312,8 +323,11 @@ ParsedVoice parseVoiceExclusive(const uint8_t* p, size_t n) {
     if (n >= 6 && p[1] == 0x05 && p[2] == 0x01) {
         out.key.bankMSB = 0; out.key.bankLSB = p[3]; out.key.pc = p[4];
         const uint8_t* body = p + 5; size_t bn = n - 5;
-        int alg = (bn >= 3) ? (body[2] & 0x07) : 0;
+        if (bn < 3) return out;
+        int alg = body[2] & 0x07;
+        if (bn < 3 + size_t(opCountFromAlg(alg)) * 7) return out;
         applyVm35Body(body, bn, opCountFromAlg(alg), out.patch);
+        for (auto& op : out.patch.ops) op.ma35Multipliers = true;
         out.valid = true;
         return out;
     }
@@ -330,6 +344,7 @@ ParsedVoice parseVoiceExclusive(const uint8_t* p, size_t n) {
         if (gn >= 2) {
             int fb  = (g[0] >> 3) & 0x07;
             int alg = g[0] & 0x07;         // g[1] = the 0x01 enigma constant
+            if (gn < 2 + size_t(opCountFromAlg(alg)) * 5) return out;
             applyAlg(out.patch, alg);
             out.patch.feedback = uint8_t(fb);
             out.patch.lfo = uint8_t((g[0] >> 6) & 3);   // voice LFO rate

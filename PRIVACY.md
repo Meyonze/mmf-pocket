@@ -1,6 +1,6 @@
 # Privacy policy
 
-Last updated: 2026-09-25
+Last updated: 2026-10-08
 
 MMF Pocket does not collect, transmit, sell or share personal data.
 
@@ -9,7 +9,7 @@ MMF Pocket does not collect, transmit, sell or share personal data.
 The app processes only data selected by the user through Android's system folder picker:
 
 - the selected folder URI and its persisted read permission;
-- MMF file names and contents;
+- MMF and WAV file names and contents selected for playback;
 - WAV files generated in the app's private cache;
 - the selected sound-mode preference.
 

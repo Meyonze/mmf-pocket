@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <jni.h>
+#ifdef MMF_SCORE_AUDIT_LOG
+#include <android/log.h>
+#endif
 
 #include "ma_player.h"
 #include "smaf_file.h"
@@ -80,7 +83,33 @@ std::string initializePlayer(const uint8_t* bytes, size_t size,
     fxchain::smaf::SmafFile file;
     if (!file.parse(bytes, size)) return "有効なSMAF/MMFファイルではありません";
 
-    if (!player.init(file, kSampleRate, needsSo2SlapbackCorrection(bytes, size)))
+    const bool initialized = player.init(file, kSampleRate, needsSo2SlapbackCorrection(bytes, size));
+#ifdef MMF_SCORE_AUDIT_LOG
+    const auto& audit = player.scoreAudit();
+    using S = fxchain::smaf::ScoreAudit::Status;
+    __android_log_print(ANDROID_LOG_INFO, "MMFScoreAudit",
+        "init=%d complete=%d tracks=%llu groups=%zu overflow=%llu unapplied=%llu unsupported=%llu partial=%llu compatibility=%llu",
+        initialized, audit.scanComplete, (unsigned long long)audit.decodedTracks,
+        audit.groups.size(), (unsigned long long)audit.overflowOccurrences,
+        (unsigned long long)audit.totals[size_t(S::Unapplied)],
+        (unsigned long long)audit.totals[size_t(S::Unsupported)],
+        (unsigned long long)audit.totals[size_t(S::Partial)],
+        (unsigned long long)audit.totals[size_t(S::Compatibility)]);
+    size_t emitted = 0, omitted = 0;
+    for (const auto& g : audit.groups) {
+        if (g.status == S::Routed || g.status == S::Reserved || g.status == S::Conditional) continue;
+        if (emitted == 32) { ++omitted; continue; }
+        ++emitted;
+        __android_log_print(ANDROID_LOG_INFO, "MMFScoreAudit",
+            "status=%s domain=%d format=%d track=%d ch=%d opcode=%d count=%llu first_ms=%llu last_ms=%llu min=%d max=%d",
+            fxchain::smaf::ScoreAudit::name(g.status), int(g.domain), g.format,
+            g.track, g.channel, g.opcode, (unsigned long long)g.count,
+            (unsigned long long)(g.firstSample * 1000 / kSampleRate),
+            (unsigned long long)(g.lastSample * 1000 / kSampleRate), g.minValue, g.maxValue);
+    }
+    if (omitted) __android_log_print(ANDROID_LOG_INFO, "MMFScoreAudit", "omitted_groups=%zu", omitted);
+#endif
+    if (!initialized)
         return "再生可能なトラックがありません";
     return {};
 }

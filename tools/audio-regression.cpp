@@ -2,6 +2,7 @@
 // Synthetic fixtures only. No copyrighted ringtone data is embedded.
 #include "ma_player.h"
 #include "smaf_voice.h"
+#include "fm_dc_blocker.h" // standalone experiment tests only, not engine DSP
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
@@ -88,6 +89,37 @@ void addPcmFixture(SmafFile& file, int waveId = 1, uint8_t rr = 9) {
     }
     file.tracks[0].waves.push_back(wave);
 }
+
+// Transport-equivalence fixtures predate channel-pan calibration. The MA7
+// centered reference now has the explicit documented cosine/sine gains.
+// Only quiet independent-channel fixtures use this linear reference; not songs
+// with limiting. Sub-threshold natural filter-drain length may differ slightly.
+bool matchesMa7Center(const std::vector<float>& actual, const std::vector<float>& legacy) {
+    const double angle=1.5707963267948966*64.0/127.0;
+    const float gains[2]={float(std::cos(angle)),float(std::sin(angle))};
+    if(actual.size()>legacy.size()+128 || legacy.size()>actual.size()+128)return false;
+    const size_t count=std::max(actual.size(),legacy.size());
+    for(size_t i=0;i<count;++i) {
+        const float a=i<actual.size()?actual[i]:0;
+        const float b=i<legacy.size()?legacy[i]*gains[i&1]:0;
+        if(std::fabs(a-b)>1e-6f)return false;
+    }
+    return true;
+}
+
+#include "hold-regression.h"
+#include "timed-voice-regression.h"
+#include "vm35-modulation-regression.h"
+#include "oscillator-regression.h"
+#include "ma7-oscillator-regression.h"
+#include "timed-wave-regression.h"
+#include "ma5-wave-regression.h"
+#include "ma7-pan-regression.h"
+#include "ma7-modulation-regression.h"
+#include "pcm-interpolation-regression.h"
+#include "pcm-downsample-regression.h"
+#include "score-audit-regression.h"
+#include "fm-dc-regression.h"
 
 void checkPcmModulation() {
     for(int i=0;i<100000;++i) {
@@ -223,7 +255,8 @@ void checkMa7ControllerCurve() {
     // The fixture's MIDI-looking status uses MA7 channel16; no channel status
     // is supplied, so controller mode must still be set for all32 channels.
     const float old=firstBlockPeak(legacy), now=firstBlockPeak(ma7);
-    check(std::fabs(now/old-100.0f/127.0f)<1e-5,"MA7 default100 uses squared amplitude");
+    const float centerRight=float(std::sin(1.5707963267948966*64.0/127.0));
+    check(std::fabs(now/old-(100.0f/127.0f)*centerRight)<1e-5,"MA7 default100 uses squared amplitude and documented default pan");
     auto explicitDefault=ma7;
     explicitDefault.tracks[0].sequenceData.insert(explicitDefault.tracks[0].sequenceData.begin(),{0,0xb0,7,100});
     check(renderAll(ma7)==renderAll(explicitDefault),"MA7 default100 equals explicit CC7=100");
@@ -236,6 +269,7 @@ void checkMa7ControllerCurve() {
     check(std::fabs(firstBlockPeak(expression)/firstBlockPeak(loud)-std::pow(28.0f/127,2))<1e-5,
           "MA7 CC11 curve follows the authored fade");
     auto pcm=ma7; addPcmFixture(pcm);
+    pcm.tracks[0].setupData[14]=uint8_t((15<<3)|1); // voice PE centre isolates gain law from channel pan
     pcm.tracks[0].sequenceData={0,0xb0,7,127,0,0x90,60,100,20,5,0xb0,11,28,15,0xff,0x2f,0};
     auto midi=pcm; midi.tracks[0].formatType=2;
     // Use linear CC11=127 before the update; first50ms must match. After the
@@ -383,7 +417,11 @@ void checkMa7PitchRange() {
     auto legacy=fixture(); addPcmFixture(legacy);
     legacy.tracks[0].sequenceData={0,0xb0,15,24,0,0xe0,0,96,0,0x90,60,100,40,40,0xff,0x2f,0};
     auto legacyDefault=legacy; legacyDefault.tracks[0].sequenceData[3]=2;
-    check(renderAll(legacy)==renderAll(legacyDefault),"MA3/5 CC15 meaning is unchanged");
+    auto legacyRpn=legacy;auto& lr=legacyRpn.tracks[0].sequenceData;
+    lr.erase(lr.begin(),lr.begin()+4);
+    lr.insert(lr.begin(),{0,0xb0,101,0,0,0xb0,100,0,0,0xb0,6,24});
+    check(renderAll(legacy)!=renderAll(legacyDefault)&&renderAll(legacy)==renderAll(legacyRpn),
+          "Mobile compact CC15 compatibility selects authored range instead of prior ignored default");
     check(player.init(legacy,8000),"legacy fresh init after wide MA7 range");
     replay.clear(); while((n=player.render(buffer,512))>0)replay.insert(replay.end(),buffer,buffer+n*2);
     check(replay==renderAll(legacy),"fresh legacy init clears MA7 range state");
@@ -415,12 +453,12 @@ void checkMobileRpn() {
     };
     for(int range:{0,1,2,4,8,24}) {
         const auto a=renderAll(make(false,range));
-        check(near(a,renderAll(make(true,range))),"Mobile RPN and MA7 CC15 select equivalent bend ranges");
+        check(matchesMa7Center(renderAll(make(true,range)),a),"Mobile RPN and MA7 CC15 select equivalent bend ranges with distinct channel pan");
         check(a==renderAll(make(false,range),1),"RPN range conversion is block independent");
     }
     auto wt=make(false,8),wtReference=make(true,8);
     addPcmFixture(wt); addPcmFixture(wtReference);
-    check(near(renderAll(wt),renderAll(wtReference)),"Mobile RPN also adjusts authored WT playback rate");
+    check(matchesMa7Center(renderAll(wtReference),renderAll(wt)),"Mobile RPN also adjusts authored WT playback rate apart from channel pan");
     auto held=make(false,2);
     auto& heldSeq=held.tracks[0].sequenceData;
     heldSeq.erase(heldSeq.end()-4,heldSeq.end());
@@ -449,6 +487,42 @@ void checkMobileRpn() {
     check(p.init(unselected,8000),"fresh RPN init succeeds"); n=p.render(a,1024);
     MaPlayer fresh; check(fresh.init(unselected,8000),"clean RPN fixture succeeds");
     check(fresh.render(b,1024)==n && std::equal(a,a+n*2,b),"fresh init clears previous RPN/cents");
+    auto compact=[&](int range) {
+        auto f=make(false,2);auto& s=f.tracks[0].sequenceData;
+        s.erase(s.begin()+4,s.begin()+16);
+        s.insert(s.begin()+4,{0,0xb0,15,uint8_t(range)});
+        return f;
+    };
+    for(int range:{0,1,2,4,8,12,24}) {
+        auto f=compact(range);const auto expected=renderAll(make(false,range));
+        check(renderAll(f)==expected,"Mobile compact CC15 matches semitone RPN range");
+        check(renderAll(f,1)==expected&&renderAll(f,257)==expected&&renderAll(f,512)==expected,
+              "Mobile compact bend range is block independent");
+        addPcmFixture(f);auto wtExpected=make(false,range);addPcmFixture(wtExpected);
+        check(renderAll(f)==renderAll(wtExpected),"Mobile compact bend range applies to WT too");
+    }
+    for(int invalid:{25,127,255})check(renderAll(compact(invalid))==renderAll(make(false,2)),
+        "out-of-range Mobile compact bend sensitivity is ignored");
+    check(renderAll(make(false,2,{0,0xb1,15,12}))==renderAll(make(false,2)),
+        "Mobile compact range remains channel-local");
+    auto compactHeld=compact(2);auto& h=compactHeld.tracks[0].sequenceData;
+    h.erase(h.end()-4,h.end());h.insert(h.end(),{5,0xb0,15,12,35,0xff,0x2f,0});
+    auto rpnHeld=make(false,2);auto& r=rpnHeld.tracks[0].sequenceData;
+    r.erase(r.end()-4,r.end());r.insert(r.end(),{5,0xb0,6,12,35,0xff,0x2f,0});
+    check(renderAll(compactHeld)==renderAll(rpnHeld),"live compact range retunes held FM without accumulated bend");
+    addPcmFixture(compactHeld);addPcmFixture(rpnHeld);
+    check(renderAll(compactHeld)==renderAll(rpnHeld),"live compact range retunes held WT without accumulated bend");
+    check(p.init(compactHeld,8000),"compact range seek fixture initializes");
+    n=p.render(a,1024);p.seekToStart();
+    check(p.render(b,1024)==n&&std::equal(a,a+n*2,b),"seek reconstructs compact bend range exactly");
+    check(renderAll(make(false,2,{0,0xb0,38,50,0,0xb0,15,2}))==renderAll(make(false,2)),
+        "compact whole-semitone range resets prior bend cents");
+    check(renderAll(make(false,2,{0,0xb0,100,1,0,0xb0,15,12,0,0xb0,6,4}))==renderAll(compact(12)),
+        "compact range does not select RPN0 or disturb another RPN");
+    check(renderAll(make(false,2,{0,0xb0,99,0,0,0xb0,15,12,0,0xb0,6,4}))==renderAll(compact(12)),
+        "compact range preserves NRPN cancellation of Data Entry");
+    check(renderAll(make(false,2,{0,0xb0,15,12,0,0xb0,6,4}))==renderAll(make(false,4)),
+        "selected RPN can still replace a compact range later");
 }
 
 void checkFmDrumKeys() {
@@ -459,6 +533,8 @@ void checkFmDrumKeys() {
     };
     auto makeScore=[&](int trigger,int sounding,int bank=125) {
         auto f=fixture();
+        f.tracks[0].channelStatus.assign(16,0);
+        f.tracks[0].channelStatus[0]=0x40; // Mobile KeyControl OFF: fixed DrumKey
         setVoice(f,makeVoice(trigger,sounding,bank));
         f.tracks[0].sequenceData={0,0xb0,0,uint8_t(bank),0,0xc0,10,
             0,0x90,uint8_t(trigger),100,20,40,0xff,0x2f,0};
@@ -470,6 +546,30 @@ void checkFmDrumKeys() {
     check(firstBlockPeak(reference)>0.001f,"fixed FM drum comparison is audible");
     check(renderAll(a)==expected && renderAll(b)==expected,
           "custom FM mapped keys sound at the separate authored DrumKey");
+    const auto triggerExpected=renderAll(makeScore(42,0,124));
+    for(int status:{0x00,0x10,0x20,0x33,0x80,0xb3,0xc0}) {
+        auto keyed=a; keyed.tracks[0].channelStatus[0]=uint8_t(status);
+        check(renderAll(keyed)==triggerExpected,
+              "Mobile unspecified/ON/reserved uses score pitch, not LED/vibration/rhythm flags");
+        check(renderAll(keyed,1)==triggerExpected && renderAll(keyed,512)==triggerExpected,
+              "Mobile key-control policy is render-block independent");
+    }
+    auto noStatus=a; noStatus.tracks[0].channelStatus.clear();
+    check(renderAll(noStatus)==triggerExpected,"missing Mobile KeyControl uses unspecified policy");
+    auto fixedFlags=a; fixedFlags.tracks[0].channelStatus[0]=0x73;
+    check(renderAll(fixedFlags)==expected,"explicit OFF survives LED/vibration/rhythm flags");
+    for(int status:{0x00,0x40,0x80}) {
+        auto keyed=a;keyed.tracks[0].channelStatus[0]=uint8_t(status);
+        const auto initial=renderAll(keyed);
+        MaPlayer player;check(player.init(keyed,8000),"key-control seek fixture initializes");
+        float block[514];while(player.render(block,257)>0){}
+        player.seekToStart();std::vector<float> replay;int n;
+        while((n=player.render(block,257))>0)replay.insert(replay.end(),block,block+n*2);
+        check(replay==initial,"seek preserves Mobile key-control policy");
+        check(player.init(a,8000),"key-control reinit fixture initializes");
+        replay.clear();while((n=player.render(block,257))>0)replay.insert(replay.end(),block,block+n*2);
+        check(replay==expected,"reinit restores explicit OFF, no channel-policy leakage");
+    }
     auto direct=makeVoice(42,81);
     auto v=parseVoiceExclusive(direct.data(),direct.size());
     check(v.valid && v.key.drumNote==42 && v.fixedFmNote==81,
@@ -510,7 +610,17 @@ void checkFmDrumKeys() {
     auto ma7=a; ma7.tracks[0].formatType=3; setVoice(ma7,expanded);
     ma7.tracks[0].sequenceData={0,0x30,0,125,0,0x40,10,0,0x10,42,100,20,40,0xff,0x2f,0};
     fullVolume(ma7);
-    check(renderAll(ma7)==expected,"MA7 fixed-key FM matches direct voice");
+    auto ma7Reference=ma7;auto expandedMelodic=expanded;
+    expandedMelodic[5]=124;expandedMelodic[8]=0;expandedMelodic[11]=0;
+    setVoice(ma7Reference,expandedMelodic);
+    ma7Reference.tracks[0].sequenceData={0,0x30,0,124,0,0x40,10,0,0x10,81,100,20,40,0xff,0x2f,0};
+    fullVolume(ma7Reference);
+    check(renderAll(ma7)==renderAll(ma7Reference),"MA7 fixed-key drum matches same-family melodic sounding key");
+    for(int status:{0x00,0x40,0x80,0xc0}) {
+        auto unchanged=ma7; unchanged.tracks[0].channelStatus[0]=uint8_t(status);
+        check(renderAll(unchanged)==renderAll(ma7),
+              "MA7 retains prior fixed-key policy independently of Mobile status handling");
+    }
     // Different mapped keys can overlap at one sounding pitch. Their gates
     // must remain independent, just like two instances of the same mapped key.
     auto overlap=a, same=a;
@@ -606,7 +716,7 @@ void checkAudioStreams() {
     auto samples=renderAll(base);
     check(samples==renderAll(base,1) && samples==renderAll(base,1024), "Audio block-size invariant");
     check(samples==renderAll(make(92)) && samples==renderAll(make(110)), "Audio note-to-wave ID mapping, not pitched playback");
-    check(samples==renderAll(make(0,3)), "Audio Mobile/MA7 equivalence");
+    check(matchesMa7Center(renderAll(make(0,3)),samples), "Audio Mobile/MA7 equivalence apart from channel pan law");
     auto native=base;
     native.tracks[0].waves[0].samplingRate=8000;
     native.tracks[0].waves[0].data.clear();
@@ -619,11 +729,14 @@ void checkAudioStreams() {
     controls.tracks[0].sequenceData={0,0xb0,0,125,0,0xb0,32,0,0,0xb0,7,0,
         0,0xb0,11,0,0,0xe0,127,127,0,0x90,0,127,20,20,0xff,0x2f,0};
     check(samples==renderAll(controls), "Audio ignores instrument volume/expression/bend");
+    auto pedalAudio=base;
+    pedalAudio.tracks[0].sequenceData.insert(pedalAudio.tracks[0].sequenceData.begin(),{0,0xb0,64,127});
+    check(samples==renderAll(pedalAudio),"recorded Audio gate is not extended by Hold1");
     auto ma7Controls=make(0,3);
     ma7Controls.tracks[0].sequenceData={0,0x30,0,125,0,0x30,32,0,
         0,0x30,15,24,0,0x60,0,96,0,0x10,0,127,20,
         5,0x30,15,5,15,0xff,0x2f,0};
-    check(samples==renderAll(ma7Controls),"MA7 recorded Audio ignores initial/live pitch sensitivity and bend");
+    check(matchesMa7Center(renderAll(ma7Controls),samples),"MA7 recorded Audio ignores initial/live pitch sensitivity and bend");
     auto quiet=base; quiet.tracks[0].sequenceData[11]=64;
     check(std::fabs(firstBlockPeak(quiet)/firstBlockPeak(base)-std::pow(64.0f/127,2))<1e-5,
           "Audio squared velocity");
@@ -699,6 +812,90 @@ void checkMwaHeaders() {
         check(parse(wave).tracks[0].waves.empty(),"unsupported/truncated Mwa rejected");
 }
 
+void checkFmPanAndZeroDrumKey() {
+    std::vector<uint8_t> fm{0x43,0x79,7,0x7f,1,0,0,0,0,0,
+        0,1,0, 0,0x90,0xf0,0xfc,0,0x10,0, 0,0x90,0xf0,0,0,0x10,0};
+    auto make=[&](bool locked,int pan) {
+        auto f=fixture(); auto image=fm;
+        image[11]=uint8_t(1|(pan<<3)); image[12]=locked?32:0;
+        setVoice(f,image);
+        f.tracks[0].sequenceData={0,0x90,60,100,40,10,0xb0,10,0,30,0xff,0x2f,0};
+        return f;
+    };
+    auto moving=make(false,31); const auto live=renderAll(moving);
+    float leftPeak=0;
+    for(size_t i=1000;i<2000;++i) {
+        leftPeak=std::max(leftPeak,std::fabs(live[i*2]));
+        check(std::fabs(live[i*2+1])<1e-7,"held FM follows channel Pan");
+    }
+    check(leftPeak>0.001f,"live-panned FM remains audible");
+    check(live==renderAll(make(false,0)),"unlocked authored FM pan is ignored");
+    check(live==renderAll(moving,1) && live==renderAll(moving,512),"live FM pan is chunk independent");
+    for(int pp:{0,15,31}) {
+        auto locked=make(true,pp); const auto sound=renderAll(locked);
+        auto without=locked;
+        without.tracks[0].sequenceData={0,0x90,60,100,40,40,0xff,0x2f,0};
+        check(sound==renderAll(without),"PE locks authored FM pan during held note");
+        for(size_t i=0;i<sound.size()/2;++i) {
+            if(pp==0) check(sound[i*2+1]==0,"authored FM left overrides channel");
+            if(pp==31) check(sound[i*2]==0,"authored FM right overrides channel");
+            if(pp==15) check(sound[i*2]==sound[i*2+1],"explicit authored centre remains locked");
+        }
+        auto image=fm; image[11]=uint8_t(1|(pp<<3));image[12]=32;
+        auto parsed=parseVoiceExclusive(image.data(),image.size());
+        check(parsed.valid && parsed.patch.panEnabled,"VM35 retains PE independently of pan value");
+        std::vector<uint8_t> ma7{0x43,0x79,8,0x7f,0x21,0,0,0,0,0,0,image[10],image[11],image[12]};
+        for(int op=0;op<2;++op) {
+            const uint8_t* p=image.data()+13+op*7;
+            ma7.insert(ma7.end(),{p[0],p[1],p[2],p[3],p[4],0,p[6],0,0,p[5]});
+        }
+        parsed=parseVoiceExclusive(ma7.data(),ma7.size());
+        check(parsed.valid && parsed.patch.panEnabled && parsed.patch.panDefault==(pp==0?-1.0f:pp==31?1.0f:0.0f),
+              "expanded MA7 FM preserves authored pan and flag");
+        auto folded=locked;setVoice(folded,ma7);
+        // Expanded MA7 and VM35 now have deliberately distinct PM profiles.
+        // Verify the PE contract within each family, not cross-family timbre.
+        auto foldedWithout=without;setVoice(foldedWithout,ma7);
+        const auto foldedSound=renderAll(folded);
+        check(foldedSound==renderAll(foldedWithout),"MA7 PE also locks pan during held note");
+        for(size_t i=0;i<foldedSound.size()/2;++i){
+            if(pp==0)check(foldedSound[i*2+1]==0,"expanded MA7 authored left overrides channel");
+            if(pp==31)check(foldedSound[i*2]==0,"expanded MA7 authored right overrides channel");
+            if(pp==15)check(foldedSound[i*2]==foldedSound[i*2+1],"expanded MA7 authored centre remains locked");
+        }
+    }
+    auto rom=fixture();addPcmFixture(rom);
+    std::vector<uint8_t> pcm{0x43,0x79,7,0x7f,1,0,0,0,0,1,
+        0x1f,0x40,0x79,0,0,0x90,0xf0,0,0,0,0,0,0,0,80,0x81};
+    setVoice(rom,pcm);rom.tracks[0].sequenceData=moving.tracks[0].sequenceData;
+    const auto replacement=renderAll(rom);
+    for(size_t i=0;i<replacement.size()/2;++i)
+        check(replacement[i*2]==replacement[i*2+1],"missing ROM substitute retains authored centre PE");
+    auto drum=[&](int key) {
+        auto f=fixture();auto image=pcm;image[5]=125;image[6]=1;image[7]=10;
+        image[8]=uint8_t(key);image[12]=0;image[25]=1;
+        setVoice(f,image);
+        std::vector<uint8_t> bulk{0x43,0x79,8,0x7f,0x23,1,2};
+        for(int i=0;i<80;++i) bulk.push_back(uint8_t(128+int(15*std::sin(i*6.283185307179586/40))));
+        appendExclusive(f,bulk);
+        f.tracks[0].sequenceData={0,0xb0,0,125,0,0xb0,32,1,0,0xc0,10,
+            0,0x90,uint8_t(key),100,40,40,0xff,0x2f,0};
+        return f;
+    };
+    check(renderAll(drum(0))==renderAll(drum(40)),"bank125 PCM trigger zero retains native drum pitch");
+    auto unmapped=drum(0);unmapped.tracks[0].sequenceData[13]=40;
+    MaPlayer unknownDrum;check(unknownDrum.init(unmapped,8000),"zero mapped drum lookup initializes");
+    float diagnostic[512*2];while(unknownDrum.render(diagnostic,512)>0) {}
+    check(unknownDrum.diagnostics().pcmNotes==0 && unknownDrum.diagnostics().fallbackNotes==1,
+          "mapped drum zero is not a catch-all melodic voice for other keys");
+    MaPlayer p;check(p.init(moving,8000),"FM pan seek initializes");
+    std::vector<float> replay,buf(512*2);int n;
+    while(p.render(buf.data(),512)>0) {}
+    p.seekToStart();while((n=p.render(buf.data(),512))>0)
+        replay.insert(replay.end(),buf.begin(),buf.begin()+n*2);
+    check(replay==live,"FM live/locked pan resets correctly on seek");
+}
+
 void checkPcmControllers() {
     for (int cc : {7,11}) {
         auto f=fixture(); addPcmFixture(f);
@@ -758,8 +955,8 @@ void checkMa7Sequ() {
         0,0x40,5, 0,0x30,7,127, 0,0x60,0,64,
         0,0x10,60,80,10, 10,0x00,62,10, 10,0xff,0x2f,0};
     highBank.tracks[0].sequenceData = mobile.tracks[0].sequenceData;
-    check(renderAll(lowBank) == renderAll(mobile), "MA7 low channel bank event mapping");
-    check(renderAll(highBank) == renderAll(mobile), "MA7 high channel bank event mapping");
+    check(matchesMa7Center(renderAll(lowBank),renderAll(mobile)), "MA7 low channel bank event mapping");
+    check(matchesMa7Center(renderAll(highBank),renderAll(mobile)), "MA7 high channel bank event mapping");
 }
 
 void checkMa7Voices() {
@@ -822,7 +1019,7 @@ void checkMa7WaveRam() {
         wave.data.push_back(uint8_t(signedSample));
     }
     appendExclusive(ma7,bulk);
-    check(renderAll(ma7)==renderAll(legacy), "MA7 native unsigned PCM8 agrees with PCM16 reference");
+    check(matchesMa7Center(renderAll(ma7),renderAll(legacy)), "MA7 native unsigned PCM8 agrees with PCM16 reference apart from pan law");
     check(renderAll(ma7,31)==renderAll(ma7,512), "MA7 wave rendering independent of output block size");
     check(player.init(ma7,8000), "MA7 PCM8 initializes");
     player.render(samples,512);
@@ -873,7 +1070,7 @@ void checkMa7WaveRam() {
     bulk.resize(7); bulk[6]=0;
     bulk.insert(bulk.end(),wave.data.begin(),wave.data.end());
     setVoice(ma7,wt); appendExclusive(ma7,bulk);
-    check(renderAll(ma7)==renderAll(legacy), "MA7 raw ADPCM agrees with legacy decoder");
+    check(matchesMa7Center(renderAll(ma7),renderAll(legacy)), "MA7 raw ADPCM agrees with legacy decoder apart from pan law");
 
     setVoice(ma7,wt); bulk[6]=4; appendExclusive(ma7,bulk);
     check(player.init(ma7,8000), "MA7 unknown codec initializes");
@@ -912,8 +1109,9 @@ void checkMa7SignedWaveRam() {
         reference.data.push_back(uint8_t(word>>8)); reference.data.push_back(uint8_t(word));
     }
     appendExclusive(file,signedBulk);
-    const auto expected=renderAll(direct);
-    check(expected==renderAll(file),"MA7 signed PCM8 all byte values match PCM16 reference");
+    const auto legacyExpected=renderAll(direct);
+    const auto expected=renderAll(file);
+    check(matchesMa7Center(expected,legacyExpected),"MA7 signed PCM8 all byte values match PCM16 reference apart from pan law");
     auto unsignedFile=file; setVoice(unsignedFile,wt); appendExclusive(unsignedFile,unsignedBulk);
     check(expected==renderAll(unsignedFile),"MA7 signed PCM8 matches offset unsigned PCM8");
     check(expected==renderAll(file,1) && expected==renderAll(file,1024),
@@ -949,7 +1147,7 @@ void checkMa7SignedWaveRam() {
     replay.clear();
     while((frames=player.render(scratch.data(),257))>0)
         replay.insert(replay.end(),scratch.begin(),scratch.begin()+frames*2);
-    check(replay==expected,"signed voice RAM cannot leak into subsequent legacy file");
+    check(replay==legacyExpected,"signed voice RAM cannot leak into subsequent legacy file");
 
     // An authored one-shot may end in a zero-only endpoint loop while a
     // very slow envelope is still active. Retire ONLY when every future
@@ -1143,10 +1341,56 @@ void checkVoiceStealing() {
     check(player.diagnostics().stolenHeldPcm==0, "PCM release tails stolen before held melody");
 }
 
+#include "protocol-regression.h"
+#include "pcm-validation-regression.h"
+#include "channel-mode-regression.h"
+#include "all-sound-off-regression.h"
+#include "reset-controllers-regression.h"
+#include "atr-format-regression.h"
+#include "empty-chunk-regression.h"
+
 int main() {
+    checkProtocolSequencing();
+    checkPcmDefinitionValidation();
+    checkChannelMode();
+    checkAllSoundOff();
+    checkResetControllers();
+    checkAtrFormat();
+    checkEmptyChunks();
+    checkFmDcBlocker();
+    checkScoreAudit();
+    testPcmInterpolation();
+    testPcmDownsampling();
+    // Downsampling must retain event scheduling, bend/CC1 updates and seek,
+    // independently of the caller's render chunk size.
+    for (int format : {2,3}) {
+        auto highPcm = fixture(format); addPcmFixture(highPcm);
+        highPcm.tracks[0].sequenceData = {
+            0,0x90,84,100,40, 10,0xe0,0,96, 10,0xb0,1,127,
+            30,0xff,0x2f,0};
+        const auto expected = renderAll(highPcm,257);
+        check(expected == renderAll(highPcm,1) && expected == renderAll(highPcm,512),
+              "downsampling PCM scheduling and controls are render-block invariant");
+        MaPlayer replay; check(replay.init(highPcm,8000),"downsampling seek initializes");
+        std::vector<float> first, second; float buf[1024]; int count;
+        while ((count=replay.render(buf,512))>0) first.insert(first.end(),buf,buf+2*count);
+        replay.seekToStart();
+        while ((count=replay.render(buf,512))>0) second.insert(second.end(),buf,buf+2*count);
+        check(first==expected && second==expected,"downsampling seek fully resets sample history");
+    }
+    checkMa5NativeWaves();
+    checkMa7ModulationDepth();
+    checkMa7ChannelPan();
+    checkTimedWaves();
+    checkTimedVoices();
+    checkHold1();
+    checkFmPanAndZeroDrumKey();
     checkPcmModulation();
     checkMa7ExpandedMetadata();
     checkModernTimbres();
+    checkOscillatorCorrections();
+    checkVm35Modulation();
+    checkMa7OscillatorRatios();
     checkMobileRpn();
     checkMa7PitchRange();
     checkMa7ControllerCurve();
@@ -1341,4 +1585,5 @@ int main() {
     check(player.render(buffer,512)==0,"hard cap remains ended");
     check(player.finished(),"finished at hard cap even with active envelopes");
     std::cout << "Audio regression checks passed\n";
+    return 0;
 }

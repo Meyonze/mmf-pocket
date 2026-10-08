@@ -29,6 +29,10 @@ MMF Pocket changes the vendored source in the following ways:
   pitch, bend sensitivity, MA-7 controller curves and expanded envelope-rate
   fields are retained. Authored sampled-voice modulation is applied without
   changing recorded Audio, while missing ROM waves use original approximations.
+- Timed tone/wave definitions and bank/program state retain authored ordering;
+  implemented Mobile channel-mode controls and sample interpolation are tested.
+- ATR recorded Audio retains its declared header/clock and raw sample bytes,
+  with track-local wave identifiers and safe empty-chunk boundary handling.
 
 Modified source files carry a modification notice as required by Apache-2.0.
 

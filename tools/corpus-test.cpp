@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <bit>
 #include <cctype>
 #include <cmath>
 #include <cstdint>
@@ -38,7 +39,9 @@ struct Result {
     float peak = 0.0f;
     std::string tracks;
     bool finished = false;
+    uint64_t floatHash = 14695981039346656037ull;
     MaPlayer::Diagnostics audio;
+    fxchain::smaf::ScoreAudit audit;
 };
 
 std::string pathUtf8(const fs::path& path) {
@@ -90,7 +93,9 @@ Result testOne(const fs::path& path) {
         }
 
         MaPlayer player;
-        if (!player.init(file, kSampleRate)) {
+        const bool initialized = player.init(file, kSampleRate);
+        result.audit = player.scoreAudit();
+        if (!initialized) {
             result.status = "no_playable_track";
             return result;
         }
@@ -108,6 +113,11 @@ Result testOne(const fs::path& path) {
                     return result;
                 }
                 result.peak = std::max(result.peak, std::fabs(buffer[i]));
+                const uint32_t bits = std::bit_cast<uint32_t>(buffer[i]);
+                for (int byte = 0; byte < 4; ++byte) {
+                    result.floatHash ^= (bits >> (8 * byte)) & 255;
+                    result.floatHash *= 1099511628211ull;
+                }
             }
             frames += uint64_t(count);
         }
@@ -166,7 +176,8 @@ int run(const fs::path& root, const fs::path& reportPath) {
     size_t passed = 0;
     double totalSeconds = 0.0;
     *report << "status\tseconds\tprobed_seconds\tpeak\ttracks\tfile\tdetail"
-            << "\tfinished\tfm_notes\tpcm_notes\tfallback_notes\tstolen_fm\tstolen_pcm\ttail_limit\tstolen_held_fm\tstolen_held_pcm\n";
+            << "\tfinished\tfm_notes\tpcm_notes\tfallback_notes\tstolen_fm\tstolen_pcm\ttail_limit\tstolen_held_fm\tstolen_held_pcm\tfloat_hash"
+            << "\tscore_scan_complete\taudit_overflow\taudit_unapplied\taudit_unsupported\taudit_partial\taudit_compatibility\n";
     for (const Result& result : results) {
         if (result.status.rfind("ok", 0) == 0) ++passed;
         totalSeconds += result.seconds;
@@ -180,7 +191,12 @@ int run(const fs::path& root, const fs::path& reportPath) {
                 << '\t' << result.audio.fallbackNotes << '\t' << result.audio.stolenFm
                 << '\t' << result.audio.stolenPcm << '\t' << result.audio.tailLimitReached
                 << '\t' << result.audio.stolenHeldFm
-                << '\t' << result.audio.stolenHeldPcm << '\n';
+                << '\t' << result.audio.stolenHeldPcm << '\t' << std::hex << result.floatHash << std::dec
+                << '\t' << result.audit.scanComplete << '\t' << result.audit.overflowOccurrences
+                << '\t' << result.audit.totals[size_t(fxchain::smaf::ScoreAudit::Status::Unapplied)]
+                << '\t' << result.audit.totals[size_t(fxchain::smaf::ScoreAudit::Status::Unsupported)]
+                << '\t' << result.audit.totals[size_t(fxchain::smaf::ScoreAudit::Status::Partial)]
+                << '\t' << result.audit.totals[size_t(fxchain::smaf::ScoreAudit::Status::Compatibility)] << '\n';
     }
     std::cerr << "SUMMARY total=" << results.size()
               << " passed=" << passed

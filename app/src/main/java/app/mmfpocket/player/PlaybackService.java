@@ -137,7 +137,8 @@ public final class PlaybackService extends MediaSessionService {
                                     return result(SessionResult.RESULT_ERROR_BAD_VALUE);
                                 }
                                 Bundle extras = new Bundle();
-                                extras.putBoolean(MmfPlayer.EXTRA_PHONE_SPEAKER, phoneSound);
+                                extras.putBoolean(MmfPlayer.EXTRA_PHONE_SPEAKER,
+                                        phoneSound && !AudioFileTypes.isWav(name));
                                 MediaMetadata metadata = new MediaMetadata.Builder()
                                         .setTitle(name)
                                         .setDisplayTitle(name)
@@ -146,7 +147,7 @@ public final class PlaybackService extends MediaSessionService {
                                 items.add(new MediaItem.Builder()
                                         .setMediaId(uri)
                                         .setUri(Uri.parse(uri))
-                                        .setMimeType("audio/x-smaf")
+                                        .setMimeType(AudioFileTypes.mimeType(name))
                                         .setMediaMetadata(metadata)
                                         .build());
                             }

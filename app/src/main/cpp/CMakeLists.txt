@@ -16,3 +16,7 @@ add_library(mmfplayer SHARED
 
 target_include_directories(mmfplayer PRIVATE "${SMAF_DIR}/src")
 target_compile_options(mmfplayer PRIVATE -Wall -Wextra -O3)
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    target_compile_definitions(mmfplayer PRIVATE MMF_SCORE_AUDIT_LOG=1)
+    target_link_libraries(mmfplayer PRIVATE log)
+endif()

@@ -161,7 +161,7 @@ void SmafFile::parseWaves_(const uint8_t* p, size_t n, TrackChunk& t) {
         const uint8_t* c = p + pos;
         bool isMwa = id3(c, "Mwa");
         bool isAwa = id3(c, "Awa");
-        if (!isMwa && !isAwa) { ++pos; continue; }
+        if ((!isMwa || t.isAudioTrack) && (!isAwa || !t.isAudioTrack)) { ++pos; continue; }
         uint32_t sz = be32(c + 4);
         size_t body = pos + 8;
         if (sz > n - body) sz = uint32_t(n - body);
@@ -188,28 +188,25 @@ void SmafFile::parseWaves_(const uint8_t* p, size_t n, TrackChunk& t) {
                 pos = body + sz; continue;
             }
             w.data.assign(p + body + 3, p + body + sz);
-        } else if (sz >= 2) {
-            // wave-type: [formatByte][more]. the format byte packs base-fmt +
-            // channels; the sampling rate follows in the next byte(s) in the
-            // full spec. we keep the raw bytes and a best-effort decode.
-            w.formatByte = p[body];
-            uint8_t fmt2 = (sz >= 2) ? p[body + 1] : 0;
-            // low nibble of fmt2 tends to encode the rate class; adpcm = 4-bit.
-            w.adpcm = true;   // MA phone audio is overwhelmingly yamaha adpcm
-            w.bitsPerSample = 4;
-            w.channels = 1;
-            // sampling-rate class table (spec): 0=4k,1=8k,2=11.025k,3=22.05k...
-            switch (fmt2 & 0x0f) {
-                case 0: w.samplingRate = 4000;  break;
-                case 1: w.samplingRate = 8000;  break;
-                case 2: w.samplingRate = 11025; break;
-                case 3: w.samplingRate = 22050; break;
-                case 4: w.samplingRate = 44100; break;
-                default: w.samplingRate = 8000; break;
-            }
-            size_t dataOff = body + 2;
-            if (dataOff < body + sz)
-                w.data.assign(p + dataOff, p + body + sz);
+        } else {
+            // SMAF 3.05 pp47-49,55: WaveType belongs to the SIX-byte ATR
+            // header. Awa is raw codec data, including its very first byte.
+            w.formatByte = t.audioWaveType;
+            w.channels = (w.formatByte & 0x80) ? 2 : 1;
+            const int codec = (w.formatByte >> 4) & 7;
+            const int rateClass = w.formatByte & 15;
+            w.bitsPerSample = 4 * ((t.audioWaveBits >> 4) + 1);
+            w.adpcm = codec == 1;
+            w.signedPcm8 = codec == 0;
+            static constexpr uint32_t rates[] = {4000,8000,11000,22050,44100};
+            const bool supported = w.channels == 1 && rateClass < 5 &&
+                !(t.audioWaveBits & 15) && w.number >= 1 && w.number <= 62 &&
+                ((codec == 1 && w.bitsPerSample == 4) ||
+                 (codec == 0 && w.bitsPerSample == 8));
+            // Do not guess stereo layout, PCM16 byte order, TwinVQ or MP3.
+            if (!supported) { pos = body + sz; continue; }
+            w.samplingRate = rates[rateClass];
+            w.data.assign(p + body, p + body + sz);
         }
         t.waves.push_back(std::move(w));
         pos = body + sz;
@@ -252,22 +249,23 @@ void SmafFile::parseScoreTrack_(const uint8_t* p, size_t n, int trackNo) {
         else if (id3(c, "Mts") && c[3] == 'q') t.sequenceData.assign(p + body, p + body + sz);
         else if (id3(c, "Mts") && c[3] == 'p') parseWaves_(p + body, sz, t);
         pos = body + sz;
-        if (sz == 0) { ++pos; }
+        // Even an empty payload advances by its eight-byte chunk header.
     }
     tracks.push_back(std::move(t));
 }
 
 void SmafFile::parseAudioTrack_(const uint8_t* p, size_t n, int trackNo) {
-    if (n < 4 || tracks.size() >= kMaxTracks) return;
+    if (n < 6 || tracks.size() >= kMaxTracks) return;
     TrackChunk t;
     t.trackNumber  = trackNo;
     t.isAudioTrack = true;
     t.formatType   = p[0];
     t.sequenceType = p[1];
-    // ATR header: fmt, seqType, timebase(?), then wave-type, then Atsq + Awa*.
-    // audio tracks are a secondary path (a score track usually already carries
-    // the song via Mtsp). we harvest waves + sequence for completeness.
-    size_t pos = 4;
+    t.audioWaveType = p[2];
+    t.audioWaveBits = p[3];
+    t.durationTimeBase = p[4];
+    t.gateTimeBase = p[5];
+    size_t pos = 6;
     size_t chunkCount = 0;
     while (pos + 8 <= n && chunkCount++ < kMaxSubChunks) {
         const uint8_t* c = p + pos;
@@ -278,7 +276,6 @@ void SmafFile::parseAudioTrack_(const uint8_t* p, size_t n, int trackNo) {
         if      (id3(c, "Ats") && c[3] == 'q') t.sequenceData.assign(p + body, p + body + sz);
         else if (id3(c, "Awa"))                parseWaves_(c, 8 + size_t(sz), t); // exactly THIS chunk
         pos = body + sz;
-        if (sz == 0) { ++pos; }
     }
     tracks.push_back(std::move(t));
 }
@@ -311,7 +308,7 @@ bool SmafFile::parse(const uint8_t* d, size_t n) {
         // MTSU/MTSP at top-level, MMMD-nested vendor chunks, etc. -> skipped.
 
         pos = body + sz;
-        if (sz == 0) { ++pos; }   // never spin on a zero-size chunk
+        // body is pos+8: a zero-size chunk already makes forward progress.
     }
 
     // a file with at least one track (score or audio) is a successful parse;

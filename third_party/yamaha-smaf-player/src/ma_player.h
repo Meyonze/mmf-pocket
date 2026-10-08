@@ -22,6 +22,7 @@
 #include "smaf_file.h"
 #include "ma_fm_core.h"
 #include "smaf_voice.h"
+#include "score_audit.h"
 
 #include <cstdint>
 #include <vector>
@@ -56,9 +57,13 @@ public:
         uint64_t stolenHeldFm = 0, stolenHeldPcm = 0;
         uint64_t suppressedHpsDuplicates = 0;
         uint64_t audioNotes = 0, missingAudio = 0, stolenAudio = 0;
+        uint64_t limitedFrames = 0; // output-quality diagnostic, not note fidelity
         bool tailLimitReached = false;
     };
     const Diagnostics& diagnostics() const { return diagnostics_; }
+    // Whole decoded score/setup coverage. Immutable until the next init();
+    // neither render() nor seekToStart() mutates it. No private metadata stored.
+    const ScoreAudit& scoreAudit() const { return scoreAudit_; }
 
 private:
     // ── the decoded event stream ────────────────────────────────────────────
@@ -66,7 +71,8 @@ private:
         uint64_t sample;
         enum T : uint8_t { NoteOn, NoteOff, Program, BankMsb, BankLsb,
                            Volume, Pan, Expression, PitchBend, Modulation, PitchBendRange,
-                           WaveOn, RpnMsb, RpnLsb, RpnData, NrpnSelect } type;
+                           WaveOn, RpnMsb, RpnLsb, RpnData, NrpnSelect, Hold, VoiceActivation, WaveActivation,
+                           AllNotesOff, AllSoundOff, ResetControllers } type;
         uint16_t ch;
         int16_t  a;   // note / pc / cc-value / bend / wave number
         int16_t  b;   // velocity
@@ -84,7 +90,12 @@ private:
         float expression = 1.0f;
         bool squaredControllers = false; // MA7 SMAF 40-log volume / expression curve
         bool modernTimbre = false; // Mobile/MA7 trial synthesis, not HandyPhone
+        // Mobile KeyControl OFF uses DrumKey; unspecified/ON use score pitch.
+        // MA7/HandyPhone retain the prior policy pending separate calibration.
+        bool fixedFmDrumPitch = true;
         float pan = 0.0f;             // -1..+1
+        bool hold = false;            // Mobile Hold1, default off; Audio/ATR excluded
+        double vibratoScale = 0.0;    // MA7 CC1 initial0 OFF; legacy paths retain1
         double bend = 0.0;            // in semitones
         int bendRange = 2, rawBend = 0; // MA7 CC15 range, default +/-2 semitones
         int rpnMsb = 127, rpnLsb = 127, bendCents = 0; // Mobile RPN0/0, null by default
@@ -100,7 +111,9 @@ private:
     // ── fm voice pool ────────────────────────────────────────────────────────
     static constexpr int kPoolSize = 32;
     std::array<FmVoice, kPoolSize> pool_{};
-    std::array<float, kPoolSize> poolPan_{};      // captured at note-on
+    std::array<float, kPoolSize> poolPan_{};      // live channel pan unless explicitly locked
+    std::array<float, kPoolSize> poolPanLeft_{}, poolPanRight_{};
+    std::array<bool, kPoolSize> poolPanLocked_{};
     std::array<uint64_t, kPoolSize> poolNoteId_{};
     std::array<double,kPoolSize> poolBaseFreq_{}; // unbent pitch incl. original ROM substitute tuning
     unsigned fmSteal_ = 0, pcmSteal_ = 0;
@@ -119,12 +132,15 @@ private:
     struct PcmVoice {
         const int16_t* pcm = nullptr; size_t len = 0;
         double pos = 0.0, rate = 1.0, baseRate = 1.0;
-        double lfoPhase = 0.0, lfoInc = 0.0, vibDepth = 0.0;
+        double lfoPhase = 0.0, lfoInc = 0.0, vibDepth = 0.0, baseVibDepth = 0.0;
         float amDepth = 0.0f;
         size_t loopStart = 0, loopEnd = 0; bool loop = false;
         bool silentLoop = false; // after loopStart all future source samples are exactly zero
+        bool qualityInterpolation = false;
+        size_t loopTravel = 0; // virtual history distance removed by loop wraps
         FmEnvelope env;
         float pan = 0.0f, vel = 1.0f, gain = 1.0f, noteVelocity = 1.0f;
+        float panLeft = 1.0f, panRight = 1.0f;
         bool panLocked = false, released = false;
         float recentLevel = 0.0f;
         int channel = -1, keyNote = -1;
@@ -137,14 +153,24 @@ private:
     };
     std::vector<PcmSample> waveBank_;
     std::map<int, std::vector<PcmSample>> scoreWaveBanks_; // Mwa IDs local to each MTR
+    std::map<int, std::vector<PcmSample>> audioWaveBanks_; // Awa IDs local to each ATR
     std::array<PcmVoice, 2> audioPool_{}; // Audio hardware has two slots, separate from WT
     // Voice-wave RAM is a different namespace from Mwa/Awa stream samples.
     std::array<PcmSample, 128> voiceWaveBank_{};
+    // Initial setup RAM stays immutable during playback. Inline decoded versions
+    // are immutable too: new notes select the current version, while existing
+    // notes keep their allocated sample memory (not a mid-note hardware RAM model).
+    std::vector<PcmSample> voiceWaveVersions_;
+    std::array<int16_t, 128> activeVoiceWaveVersion_{}; // -1 selects setup RAM
+    size_t voiceWaveVersionBytes_ = 0;
     static constexpr int kPcmPool = 32;
     int pcmLimit_ = 16; // MA-7 has 32 PCM voices; retain the legacy 16-slot policy
     std::array<PcmVoice, kPcmPool> pcmPool_{};
     void buildWaveBank_(const SmafFile& file);
     void addVoiceWave_(const uint8_t* p, size_t n);
+    bool decodeVoiceWave_(const uint8_t* p, size_t n, PcmSample& out,
+                          size_t maxDecodedBytes);
+    void addTimedWave_(const uint8_t* p, size_t n, uint64_t sample);
     int allocatePcmSlot_();
     void startAudio_(int ch, int note, float velocity, uint64_t noteId);
     const ParsedVoice* resolveVoice_(int ch, int note) const;
@@ -159,6 +185,17 @@ private:
     int motionPace_ = 1;
     bool ended_ = false;
     Diagnostics diagnostics_{};
+    ScoreAudit scoreAudit_{};
+    int auditFormat_ = -1, auditTrack_ = -1;
+    void audit_(ScoreAudit::Domain domain, ScoreAudit::Status status, int opcode,
+                int value = 0, uint64_t sample = 0, int channel = -1);
+    uint32_t readScoreLength_(const uint8_t*& p, const uint8_t* end,
+                              bool hps, uint64_t sample, ScoreAudit::Domain domain);
+    bool scoreBytes_(const uint8_t* p, const uint8_t* end, size_t count,
+                     int opcode, uint64_t sample, int channel = -1);
+    void routeController_(uint64_t sample, int channel, int cc, int value, bool ma7);
+    void auditVoice_(const ParsedVoice& voice, uint64_t sample);
+    void auditExclusive_(const uint8_t* p, size_t n, uint64_t sample);
 
     // gentle output low-pass (2-pole), the MA "analog lite" character: warms the
     // FM and tames the top-octave aliasing of the naive waveforms.
@@ -169,11 +206,12 @@ private:
     // ── build helpers ────────────────────────────────────────────────────────
     void collectVoices_(const SmafFile& file);
     void addExclusivesFrom_(const std::vector<uint8_t>& setup, bool mobile);
+    void addTimedVoice_(const uint8_t* p, size_t n, uint64_t sample);
     void decodeTrack_(const TrackChunk& t, int baseChannel);
-    // atrWaveMode: the audio-track sequence reuses the handyphone grammar with
-    // the note nibble carrying a WAVE NUMBER; notes become WaveOn triggers.
+    // atrWaveMode: audio tracks use their own six-bit wave IDs and local bank;
+    // wave messages become WaveOn triggers, never pitched score notes.
     void decodeHandyPhone_(const uint8_t* p, size_t n, int base, double tbDms, double tbGms,
-                           bool atrWaveMode = false);
+                           bool atrWaveMode = false, int atrTrack = -1);
     void decodeMobile_(const uint8_t* p, size_t n, int base, double tbDms, double tbGms);
     // Format 3 / MA-7 SEQU: mobile-style events extended from 16 to 32
     // channels by using status bit 7 as the channel-bank selector.

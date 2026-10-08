@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Modified by MMF Pocket contributors in 2026. See docs/audio-fidelity.md.
 #pragma once
 //
 // smaf_file.h -- yamaha smaf (.mmf) container parser. the file format of the
@@ -61,6 +62,8 @@ struct TrackChunk {
     int  sequenceType  = 0;         // 0x00 stream / 0x01 sub-sequence
     int  durationTimeBase = 0;      // raw byte, use timeBaseMs() to decode
     int  gateTimeBase     = 0;
+    uint8_t audioWaveType = 0;      // ATR header: mono/stereo, codec, rate class
+    uint8_t audioWaveBits = 0;      // ATR header: base-bit depth + reserved nibble
     std::vector<uint8_t> channelStatus; // HandyPhone: 2 B, Mobile: 16 B, MA-7: 32 B
     std::vector<uint8_t> setupData;     // Mtsu payload: voice exclusives
     std::vector<uint8_t> sequenceData;  // Mtsq payload: the event stream

@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.6.2 - 2026-10-08
+
+- Improve parsed MA-3/5 custom FM synthesis while preserving the separate
+  legacy, expanded MA-7 and ROM-free substitute profiles.
+- Improve embedded instrument-wave interpolation and high-pitch downsampling
+  without applying instrument processing to recorded score-Audio playback.
+- Apply timed tone/wave updates and bank/program changes in authored order;
+  keep sample sources separate and reject malformed replacement definitions.
+- Honor implemented Mobile Hold1, All Notes Off, All Sound Off and Reset All
+  Controllers semantics, including held notes and independent channel state.
+- Correct ATR recorded-audio header/rate/clock parsing, retain all raw sample
+  bytes and use track-local six-bit wave IDs. Fix empty container/track chunks
+  that previously hid following sequence or sample data.
+- Add direct WAV playback alongside MMF files, including folder queues,
+  previous/next playback and background/notification controls. Batch conversion
+  remains MMF-only; WAV files are not converted or processed by handset mode.
+- Expand original synthetic audio/security tests and decoder diagnostics.
+  Invalidate old converted audio automatically; retain player UI and Mafu.
+- Fidelity remains partial: device-ROM sounds/effects are approximations,
+  MA-7 AL filters, nonneutral pitch envelopes and calibrated fixed-frequency
+  synthesis remain incomplete, and ATR gate/EOS/control handling is partial.
+
 ## 1.6.1 - 2026-10-02
 
 - Improve MA-3/5 and MA-7 embedded instrument-wave decoding, with separate

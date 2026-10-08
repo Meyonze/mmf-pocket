@@ -266,17 +266,28 @@ void FmEnvelope::configure(const FmOpPatch& p, double sampleRate, int rateOffset
     susLevel_ = std::pow(10.0, -(p.sl == 15 ? 93.0 : 3.0 * p.sl) / 20.0);
     sustaining_ = p.egType;
     xof_ = p.xof;
+    holdEnabled_ = p.holdEnabled;
+    pendingKeyOff_ = false;
     phase_ = Phase::Idle;
     level_ = 0.0;
 }
 
-void FmEnvelope::keyOn() { level_ = 0.0; phase_ = Phase::Attack; }
+void FmEnvelope::keyOn() { pendingKeyOff_ = false; level_ = 0.0; phase_ = Phase::Attack; }
 
-void FmEnvelope::keyOff() {
+void FmEnvelope::keyOff(bool holdOn) {
     // XOF ignores key-off. A non-decaying authored voice is still bounded by
     // the player's song-end backstop, without changing its envelope semantics.
     if (xof_) return;
+    if (holdEnabled_ && holdOn && phase_ != Phase::Idle) {
+        pendingKeyOff_ = true;
+        return;
+    }
+    pendingKeyOff_ = false;
     if (phase_ != Phase::Idle) phase_ = Phase::Release;
+}
+
+void FmEnvelope::setHold(bool on) {
+    if (!on && pendingKeyOff_) keyOff(false);
 }
 
 float FmEnvelope::advance() {
@@ -313,6 +324,7 @@ void FmOperator::configure(const FmOpPatch& p, double sampleRate, int rateOffset
                            bool modernTimbre) {
     patch_ = p;
     sampleRate_ = sampleRate;
+    modernTimbre_ = modernTimbre;
     wave_ = p.wave;
     tlGain_ = tlToGain(p.tl);
     // vibrato depth (DVB 0..3) as a phase-inc factor: ~3.4/6.7/13.4/26.8 cents,
@@ -330,10 +342,20 @@ void FmOperator::configure(const FmOpPatch& p, double sampleRate, int rateOffset
 }
 
 void FmOperator::recalc_() {
-    // MA/YMF825 frequency multiple: value 0 => x0.5, value n(1..15) => x n.
-    // LINEAR, not the OPL {..10,10,12,12,15,15} doubling table (that gave every
-    // high-MULTI voice the wrong operator ratio, a big source of the harshness).
+    // MA-5 Authoring Tool User Manual, FM MULTI table: 11 aliases 10,
+    // 13 aliases 12, 14 aliases 15. Only parsed VM35 tones use this mapping.
+    // MA7's separate selections are confirmed by the manufacturer's editor:
+    // raw11 x1.414, raw13 x1.498, raw14 x0.891. Use the displayed nominal
+    // values, not an unproven exact equal-tempered or hardware phase formula.
+    // VMA and original substitute recipes preserve their previous policy.
     double m = (patch_.multi == 0) ? 0.5 : double(patch_.multi & 15);
+    if (patch_.ma7Multipliers && modernTimbre_) {
+        static constexpr double ratios[16]={0.5,1,2,3,4,5,6,7,8,9,10,1.414,12,1.498,0.891,15};
+        m = ratios[patch_.multi & 15];
+    } else if (patch_.ma35Multipliers && modernTimbre_) {
+        static constexpr double ratios[16]={0.5,1,2,3,4,5,6,7,8,9,10,10,12,12,15,15};
+        m = ratios[patch_.multi & 15];
+    }
     // DT is sign/magnitude, not an offset-binary value. DT=0 and 4 are neutral.
     double detune = 1.0 + ((patch_.dt & 4) ? -1.0 : 1.0) * (patch_.dt & 3) * 0.0006;
     phaseInc_ = (freqHz_ * m * detune) / sampleRate_;
@@ -356,11 +378,12 @@ void FmOperator::noteOn(double freqHz) {
     env_.keyOn();
 }
 
-void FmOperator::noteOff() { env_.keyOff(); }
+void FmOperator::noteOff(bool holdOn) { env_.keyOff(holdOn); }
 
 float FmOperator::waveform_(uint8_t wave, double phase01) {
-    // SD-1/VM35's 29 published operator shapes. Values 15, 23 and 31 are
-    // reserved. Earlier code folded every value onto the eight OPL shapes with
+    // SD-1/VM35's 29 published fixed operator shapes. Values15/23/31 select
+    // user SRAM waves; no such binding is implemented. Earlier code folded
+    // every value onto the eight OPL shapes with
     // `wave & 7`; that made most authored custom voices use the wrong oscillator
     // and was a major source of poor timbre reproduction.
     double x = phase01 - std::floor(phase01);
@@ -397,7 +420,7 @@ float FmOperator::waveform_(uint8_t wave, double phase01) {
         case 12: return float(x < 0.5 ? clipped(std::sin(kTwoPi*2.0*x)) : 0.0);
         case 13: return float(x < 0.5 ? std::fabs(clipped(std::sin(kTwoPi*2.0*x))) : 0.0);
         case 14: return x < 0.5 ? 1.0f : 0.0f;
-        case 15: return 0.0f;                                    // reserved
+        case 15: return 0.0f;                                    // unbound user SRAM wave
 
         case 16: return float(triangle(x));
         case 17: return float(positiveTriangle(x));
@@ -406,7 +429,7 @@ float FmOperator::waveform_(uint8_t wave, double phase01) {
         case 20: return float(x < 0.5 ? triangle(x*2.0) : 0.0);
         case 21: return float(x < 0.5 ? std::fabs(triangle(x*2.0)) : 0.0);
         case 22: { double h = std::fmod(x, 0.5); return h < 0.25 ? 1.0f : 0.0f; }
-        case 23: return 0.0f;                                    // reserved
+        case 23: return 0.0f;                                    // unbound user SRAM wave
 
         case 24: return float(x < 0.5 ? x*2.0 : x*2.0 - 2.0);    // bipolar saw
         case 25: return float(x < 0.5 ? x*2.0 : 0.0);
@@ -415,11 +438,11 @@ float FmOperator::waveform_(uint8_t wave, double phase01) {
         case 28: return float(x < 0.25 ? x*4.0 : x < 0.5 ? x*4.0-2.0 : 0.0);
         case 29: { double q = std::fmod(x, 0.25); return float(x < 0.5 ? q*4.0 : 0.0); }
         case 30: return x < 0.5 ? 1.0f : 0.0f;
-        default: return 0.0f;                                    // reserved (31)
+        default: return 0.0f;                                    // unbound user SRAM wave (31)
     }
 }
 
-float FmOperator::tick(double modCycles, double lfoSin) {
+float FmOperator::tick(double modCycles, double lfoSin, double vibratoScale) {
     // modCycles: phase modulation input in CYCLES (0..1 = one period), added
     // straight to the phase. the caller scales the modulator output into a
     // musical index, so this stays simple. lfoSin drives this operator's own
@@ -427,21 +450,28 @@ float FmOperator::tick(double modCycles, double lfoSin) {
     float envGain = env_.advance();
     if (nyMute_) return 0.0f;      // above fs/2: silent, never alias
     double inc = phaseInc_;
-    if (vibAmt_ != 0.0) inc *= 1.0 + vibAmt_ * lfoSin;
+    if (vibAmt_ != 0.0) inc *= 1.0 + vibAmt_ * lfoSin * vibratoScale;
     phase_ += inc;
     if (phase_ >= 1.0) phase_ -= std::floor(phase_);
-    double out = waveform_(wave_, phase_ + modCycles);
+    const double effectivePhase = phase_ + modCycles;
+    // Related Yamaha waveform chart and independent MA3 model agree that
+    // WS30 is quarter-square, unlike WS14 half-square. Legacy stays exact.
+    double out = modernTimbre_ && wave_ == 30
+        ? ((effectivePhase - std::floor(effectivePhase)) < 0.25 ? 1.0 : 0.0)
+        : waveform_(wave_, effectivePhase);
     float amGain = (amAmt_ != 0.0f) ? 1.0f - amAmt_ * float(0.5 + 0.5 * lfoSin) : 1.0f;
     return float(out * tlGain_ * kslGain_ * envGain * amGain);
 }
 
 // ── FmVoice ──────────────────────────────────────────────────────────────────
 namespace {
-// how deep a modulator drives a carrier's phase. a full-scale modulator (+-1)
-// shifts the carrier by +-kModDepth cycles. the old code used 1.0 (a whole
-// period, index 2*pi) which is why everything screamed; ~0.42 cycles (index
-// ~2.6 rad) is the musical FM range yamaha voices sit in and sounds warm.
-constexpr double kModDepth = 0.42;
+// Phase-modulation edge scales, in cycles per unit operator output.
+// Compatibility patches retain their original heuristic. Parsed VM35 tones
+// in the modern profile use the independent FM reference normalization:
+// 2^13 output * 2^15 phase shift / 2^26 phase period = 4 cycles (SiON).
+// Controlled listening supports this DEV candidate, not hardware-exactness.
+constexpr double kCompatibilityModDepth = 0.42;
+constexpr double kVm35ModDepth = 4.0;
 }
 
 void FmVoice::noteOn(const FmVoicePatch& patch, double freqHz, float velocity) {
@@ -463,6 +493,12 @@ void FmVoice::noteOn(const FmVoicePatch& patch, double freqHz, float velocity) {
     int block = std::clamp(int(std::floor(octave)), 0, 7);
     int high = (octave - std::floor(octave)) >= 0.5 ? 1 : 0;
     int nops = fourOp_ ? 4 : 2;
+    bool vm35 = patch.modernTimbre;
+    for (int i = 0; i < nops; ++i)
+        vm35 = vm35 && patch.ops[i].ma35Multipliers && !patch.ops[i].ma7Multipliers;
+    // Recompute for every allocation/retrigger; never leak a previous family
+    // into fallback, VMA, expanded MA7, or mixed synthetic operator patches.
+    modDepth_ = vm35 ? kVm35ModDepth : kCompatibilityModDepth;
     for (int i = 0; i < nops; ++i) {
         int offset = patch.ops[i].ksr ? block * 2 + high : block / 2;
         ops_[i].configure(patch.ops[i], sampleRate_, offset, patch.modernTimbre);
@@ -470,13 +506,30 @@ void FmVoice::noteOn(const FmVoicePatch& patch, double freqHz, float velocity) {
     }
     active_ = true;
     released_ = false;
+    keyOffRequested_ = false;
+    vibratoScale_ = 1.0;
     recentLevel_ = 0.0f;
 }
 
-void FmVoice::noteOff() {
-    released_ = true;
+void FmVoice::noteOff(bool holdOn) {
+    keyOffRequested_ = true;
     int nops = fourOp_ ? 4 : 2;
-    for (int i = 0; i < nops; ++i) ops_[i].noteOff();
+    for (int i = 0; i < nops; ++i) ops_[i].noteOff(holdOn);
+    updateReleaseState_();
+}
+
+void FmVoice::updateReleaseState_() {
+    static constexpr unsigned carriers[8] = {2, 3, 15, 8, 8, 10, 9, 13};
+    released_ = keyOffRequested_;
+    const int nops = fourOp_ ? 4 : 2;
+    for (int i = 0; i < nops; ++i)
+        if ((carriers[algo_] & (1u << i)) && ops_[i].keyOffDeferred()) released_ = false;
+}
+
+void FmVoice::setHold(bool on) {
+    const int nops = fourOp_ ? 4 : 2;
+    for (int i = 0; i < nops; ++i) ops_[i].setHold(on);
+    updateReleaseState_();
 }
 
 void FmVoice::setPitch(double freqHz) {
@@ -497,7 +550,7 @@ float FmVoice::modOp_(int i, double extModCycles) {
         fbc = avg * (patch_.modernTimbre ? modernFeedback[opFb_[i]&7]
                                       : double(opFb_[i])/24.0);
     }
-    float o = ops_[i].tick(extModCycles + fbc, lfoSin_);
+    float o = ops_[i].tick(extModCycles + fbc, lfoSin_, vibratoScale_);
     fbMem_[i][1] = fbMem_[i][0]; fbMem_[i][0] = o;
     return o;
 }
@@ -508,7 +561,7 @@ float FmVoice::tick() {
     lfoPhase_ += lfoInc_;
     if (lfoPhase_ >= 1.0) lfoPhase_ -= 1.0;
     lfoSin_ = std::sin(2.0 * 3.14159265358979 * lfoPhase_);
-    const double d = kModDepth;
+    const double d = modDepth_;
     double out = 0.0;
 
     // the real MA/YMF825 connection algorithms (enums/voice.go). op indices 0..3
