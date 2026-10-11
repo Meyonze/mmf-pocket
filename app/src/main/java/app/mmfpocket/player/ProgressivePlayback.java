@@ -132,10 +132,14 @@ final class ProgressivePlayback {
 
     long seekTo(long requestedFrame) {
         long clamped = Math.max(0, Math.min(requestedFrame, renderedFrames));
-        lastKnownPosition = clamped;
-        requestedSeek = clamped;
-        playbackComplete = false;
-        AudioTrack track = audioTrack;
+        AudioTrack track;
+        synchronized (lock) {
+            lastKnownPosition = clamped;
+            requestedSeek = clamped;
+            playbackComplete = false;
+            track = audioTrack;
+            lock.notifyAll();
+        }
         if (track != null) {
             try {
                 track.pause();
@@ -180,20 +184,22 @@ final class ProgressivePlayback {
     }
 
     long getPositionFrames() {
-        if (requestedSeek >= 0) {
+        synchronized (lock) {
+            if (requestedSeek >= 0) {
+                return Math.min(lastKnownPosition, getTimelineFrames());
+            }
+            AudioTrack track = audioTrack;
+            if (track != null && ready) {
+                try {
+                    long played = Integer.toUnsignedLong(track.getPlaybackHeadPosition());
+                    long position = Math.min(submittedFrame, trackBaseFrame + played);
+                    lastKnownPosition = Math.max(lastKnownPosition, Math.max(0, position));
+                } catch (IllegalStateException ignored) {
+                    // Use the last sample position while replacing/releasing a track.
+                }
+            }
             return Math.min(lastKnownPosition, getTimelineFrames());
         }
-        AudioTrack track = audioTrack;
-        if (track != null && ready) {
-            try {
-                long played = Integer.toUnsignedLong(track.getPlaybackHeadPosition());
-                long position = Math.min(submittedFrame, trackBaseFrame + played);
-                lastKnownPosition = Math.max(lastKnownPosition, Math.max(0, position));
-            } catch (IllegalStateException ignored) {
-                // Use the last sample position while replacing/releasing a track.
-            }
-        }
-        return Math.min(lastKnownPosition, getTimelineFrames());
     }
 
     private void renderLoop() {
@@ -241,7 +247,7 @@ final class ProgressivePlayback {
                 }
             }
             if (cancelled) return;
-            if (renderedFrames == 0 || peak < 4) {
+            if (renderedFrames == 0 || peak == 0) {
                 fail("音声データを生成できませんでした");
                 return;
             }
@@ -303,23 +309,33 @@ final class ProgressivePlayback {
 
             byte[] bytes = new byte[BLOCK_FRAMES * BYTES_PER_FRAME];
             while (!cancelled && !failed) {
-                long seek = requestedSeek;
+                long seek;
+                synchronized (lock) {
+                    // Claim before slow track recreation so a newer request survives.
+                    seek = requestedSeek;
+                    if (seek >= 0) {
+                        requestedSeek = -1;
+                        audioTrack = null;
+                    }
+                }
                 if (seek >= 0) {
-                    audioTrack = null;
                     releaseTrack(track);
+                    track = null;
                     track = createAudioTrack();
                     cursor = Math.min(seek, renderedFrames);
-                    trackBaseFrame = cursor;
-                    submittedFrame = cursor;
-                    lastKnownPosition = cursor;
-                    audioTrack = track;
-                    requestedSeek = -1;
+                    synchronized (lock) {
+                        trackBaseFrame = cursor;
+                        submittedFrame = cursor;
+                        if (requestedSeek < 0) lastKnownPosition = cursor;
+                        audioTrack = track;
+                    }
                     trackStarted = false;
+                    if (requestedSeek >= 0) continue;
                 }
 
                 if (paused) {
                     synchronized (lock) {
-                        while (paused && !cancelled && requestedSeek < 0) lock.wait();
+                        while (paused && !cancelled && !failed && requestedSeek < 0) lock.wait();
                     }
                     continue;
                 }
@@ -328,8 +344,11 @@ final class ProgressivePlayback {
                 if (available <= 0) {
                     if (renderingComplete) {
                         if (waitForDrain(track, cursor)) {
-                            playbackComplete = true;
-                            lastKnownPosition = finalFrames;
+                            synchronized (lock) {
+                                if (requestedSeek >= 0 || paused || cancelled || failed) continue;
+                                playbackComplete = true;
+                                lastKnownPosition = finalFrames;
+                            }
                             listener.onCompleted();
                             return;
                         }
@@ -352,7 +371,7 @@ final class ProgressivePlayback {
                 input.readFully(bytes, 0, frames * BYTES_PER_FRAME);
                 int offset = 0;
                 int remaining = frames * BYTES_PER_FRAME;
-                while (remaining > 0 && !cancelled && !paused && requestedSeek < 0) {
+                while (remaining > 0 && !cancelled && !failed && !paused && requestedSeek < 0) {
                     int written = track.write(bytes, offset, remaining,
                             AudioTrack.WRITE_NON_BLOCKING);
                     if (written < 0) throw new IOException("AudioTrack write " + written);
@@ -399,14 +418,18 @@ final class ProgressivePlayback {
             if (requestedSeek >= 0) return false;
             if (paused) {
                 synchronized (lock) {
-                    while (paused && !cancelled && requestedSeek < 0) lock.wait();
+                    while (paused && !cancelled && !failed && requestedSeek < 0) lock.wait();
                 }
                 continue;
             }
             long position = trackBaseFrame
                     + Integer.toUnsignedLong(track.getPlaybackHeadPosition());
-            lastKnownPosition = Math.min(endFrame, position);
-            if (position >= endFrame) return true;
+            synchronized (lock) {
+                // A seek may have arrived during the playback-head query.
+                if (requestedSeek >= 0 || cancelled || failed) return false;
+                lastKnownPosition = Math.min(endFrame, position);
+                if (position >= endFrame) return true;
+            }
             Thread.sleep(20);
         }
         return false;

@@ -1,5 +1,1191 @@
 # Audio fidelity work
 
+Current release preparation: stable1.6.3/code69/cache r47 contains the same
+validated audio/playback code as DEV beta.10. It combines the historical
+source-only batches below with progressive-playback coordination repairs.
+See "Consolidated DEV beta.10" at the end for scope and verification limits.
+Earlier "pending" notes describe the state when each batch was completed.
+
+## Pending progressive batch: retain quiet nonzero PCM caches (2026-10-12)
+
+ProgressivePlayback has a separate Java WAV/cache writer. It still rejected
+PCM peak1..3 after JNI had produced valid samples, independent of the native
+WAV writer's earlier quiet-output fix. Change only its final silence predicate
+from peak<4 to peak==0. Empty/all-zero output still rejects; never normalize
+volume or change source samples, timing, threads, seek or AudioTrack behavior.
+
+Unmodified frozen Java renderLoop fails the quiet-cache assertion. Host test
+compiles that actual class with a synthetic PCM producer and compile-only
+Android media stubs; every device operation throws if called. No playbackLoop,
+JNI/MMF decoding, simultaneous threads or Android audio are exercised here.
+Candidate60 PCM cases pass with whole-file independent PCM/RIFF oracle, blocks
+1/31/1024 and phone flag passthrough:30 newly accepted tiny nonzero cases,
+18 ordinary output and12 empty/zero cases. The30 legacy-compatible cases have
+exact old/new statuses, frame counts and complete WAV SHA256. Four session-
+creation/render error, cancellation and actual move-error cleanup cases pass.
+Tests include negative PCM extrema, leading rests and later quiet/loud output.
+
+Actual production Java/NativeMmfRenderer classes also compile against Android
+API35 without host stubs. Existing explicit-close try-resource warning remains
+in both profiles; close-before-move ordering is retained. Not a Gradle/APK/lint
+or device check. Existing native/bridge/helper sources exact; no private corpus
+rerender, sound quality or listening claim. Add host Java regression CI step
+locally only; GitHub CI not run. UI/version/cache unchanged this batch.
+
+Source only alongside four previous pending batches; DEV beta.9 excludes all
+five. Next combined APK beta.10/code68/cache47 needs packaging/device checks.
+No APK build/Git publication. Proprietary/reference-dependent gaps remain.
+
+## Pending output batch: fail safely on WAV storage errors (2026-10-12)
+
+Check initial header and each PCM-block write immediately. Check final seek,
+header rewrite, explicit flush and close before reporting success. A failed
+header rewrite/close could previously report successful conversion; a failed
+block write could wastefully render the rest of the song. Existing Java error
+handling removes the partial file instead of moving it into the WAV cache.
+No synthesis, gain, timing, PCM16, quiet-output or JNI behavior changes.
+
+Extract the actual writer into an ostream helper and wrap its close check,
+allowing bounded host fault injection without filling a disk or adding
+production test flags. The baseline adapter extracts the old writer body
+unchanged; scope reconstruction verifies that exact transformation. Its final
+seek failure reproduces false success. Candidate tests pass for initial
+header, first/second PCM block, final seek/header/flush/close faults, including
+immediate rendering abort, healthy file-byte identity and uncreatable path.
+These are injected host stream failures, not real Android/disk-full tests or
+power-loss durability guarantees; flush is not an fsync guarantee.
+
+Original real-file writer, baseline stream adapter and candidate each render
+70 original synthetic cases: all complete WAVs and statuses are SHA256 exact
+on healthy storage. Prior normal/quiet/nonfinite WAV/JNI tests still pass.
+All12 core files and PCM16 helper exact; Android3ABI normal/audit object
+compilation passes, not linked APK/device validation. No private corpus
+rerender, GitHub CI/sanitizer runtime, timbre or listening improvement claim.
+Existing bridge test expanded locally; Java/UI/version/cache/workflow unchanged.
+
+Source only alongside the three prior pending batches. DEV beta.9 excludes
+all four; next combined APK beta.10/code68/cache47 needs packaging validation.
+No APK build or Git publication. Reference-dependent synthesis gaps remain.
+
+## Pending output batch: preserve representable quiet WAVs (2026-10-12)
+
+The actual WAV writer rejected float peaks below0.0001, although such samples
+can encode to nonzero PCM16 and stream successfully through JNI. Use actual
+emitted nonzero PCM16 instead of that arbitrary amplitude threshold. Keep
+all-zero quantized output/zero-frame failure, and prior nonfinite rejection.
+No gain normalization, sample/timing change, new dither or timbre adjustment.
+
+Frozen old bridge independently fails the quiet-output assertion. Expanded
+host tests cover64 Mobile F2/FM, MA7 F3/FM and ATR PCM8/ADPCM volume/phone cases:
+20 representable below the old threshold,13 quantized-silent,31 ordinary.
+WAV and JNI blocks1/31/1024 match independent PCM oracle exactly. Host callback
+tests, not Java VM/device. Existing normal/nonfinite bridge tests pass too.
+Fresh old/new comparison70 synthetic cases confirms every emitted PCM byte
+and duration unchanged:20 formerly false failures now finalize successfully,
+50 complete output files/statuses SHA256 exact. All12 core/helper files remain
+exact; Android3ABI normal/audit object compilation passes, not a linked APK.
+No private corpus rerender, reference-device listening or perceptual improvement
+claim. Existing CI test expanded locally; GitHub/sanitizer runtime not run.
+
+Source only, alongside muted-tail/PCM16 pending changes. No APK/version/cache/
+Java/UI/workflow change or Git publication. Latest DEV beta.9 excludes them;
+next combined APK needs beta.10/code68/cache47 and packaging validation.
+
+## Pending output batch: nearest PCM16 conversion (2026-10-12)
+
+Use one finite-checked PCM16 helper in both the actual WAV writer and JNI
+streaming output. Preserve the established symmetric32767 scale and clipping;
+round to nearest integer (half away from zero), rather than truncate toward
+zero. No dither, added silence noise, timbre/gain/modulation retuning or core
+renderer changes. Reject NaN/infinity before integer conversion or JNI writes.
+
+Independent numeric oracle covers every half-step's float neighbors, random
+values, signed zero, saturation, subnormal values and host rounding modes.
+Maximum quantization error is half a PCM step; tested changes from the previous
+output are at most one step. Random-test quantization RMS falls from0.575319
+to0.288756 LSB. This is about6dB for that error component ONLY, not a measured
+music SNR or an assertion of a large audible/hardware-fidelity improvement.
+
+Actual bridge host fixtures compare WAV bytes with an independent oracle and
+JNI output with WAV: FM, ATR PCM8/ADPCM, phone mode off/on,1/31/1024-frame blocks,
+odd array capacity, repeated EOF and nonfinite rejection pass. Minimal host JNI
+callbacks are used, not a Java VM or Android device. Original bridge fails the
+nearest-PCM oracle as expected. All12 core files are unchanged from this batch's
+baseline (which already includes the pending muted-tail fix below).
+Android NDK API29 object compilation passes for arm64, armv7 and x86_64, normal
+and audit modes. This does not establish linked APK or device behavior.
+CI sanitizer steps added locally; GitHub CI/sanitizers not run in this batch.
+
+Source only: installed DEV beta.9/code67/cache46 does not contain this or the
+muted-tail change. Next combined APK needs beta.10/code68/cache47 and Android
+packaging validation. No APK build or Git publication in this batch. Physical
+ROM/AL/EG/LFO calibration and unsupported formats remain separate open gaps.
+
+## Pending native batch: provably muted score-end tails (2026-10-12)
+
+Investigated38 previously bounded score-end tails. Every original's full
+stereo-float fingerprint/peak/duration matches the previous beta.8 result.
+Runtime envelope categories explain the retained voices: Hold3files, XOF14,
+exact zero release5, slow nonzero release21 (overlapping categories). All
+surviving FM/WT voices had received keyoff; no recorded Audio/ATR remained.
+These are current renderer states, not calibrated hardware envelope laws.
+
+Four cases have exactly zero remaining voice gain, with no later authored
+events. Add an EOF-only output-gain check: keep ordinary active-voice EOF;
+otherwise require the score/source endpoint, consumed authored events, every
+live FM/WT/Audio/ATR gain exactly zero, and the existing1e-7 filter drain.
+No amplitude/RMS heuristic, early voice retirement, EG retiming, per-song
+rule or change to oscillator, sample, limiter, volume or allocation behavior.
+Future gain/controller events still run and may revive the existing voices;
+nonzero quiet tails retain the usual safety allowance. Still-live muted ATR
+sources retain their estimated source/gate endpoint. Initial broad EOF guard
+failed existing ATR duration regression; endpoint guard added and rerun.
+
+Original synthetic FM/WT Volume/Expression fixtures test audible-before-mute,
+later unmute, quiet nonzero, final rest, seek, block1/1024 and stable EOF.
+ATR fixtures ensure zero gain cannot discard source time or future gain events.
+This is pending native source, NOT installed beta.9; next batched integration
+must beta.10/code68/cache47. No Android build or Git publication in this batch.
+Actual original-output impact and delivery proofs are recorded separately in
+tail-cause-next, not implied by this source-only note.
+Final host impact validation passed:32 full original outputs retain exact
+hash/peak/duration. Four shorter outputs are bit-exact prefixes of fresh old
+outputs; removed samples below1e-7, combined omitted tail34.900sec. This is
+output duration saved, not a CPU-time benchmark or audible timbre improvement.
+Final audio/security/Recorded/ATR host suites pass; Android integration pending.
+
+## DEV integration: 1.6.3-beta.9 - bounded waveform/container reads
+
+Batch two structurally reproduced parser corrections, without synthesis or
+instrument retuning. Within Mtsp, skip MspI/unknown/wrong-family children by
+their bounded chunk length instead of searching their opaque payloads for Mwa
+signatures. Otherwise metadata can manufacture/replace a wave or exhaust the
+8192-child scan budget before the following real wave. Invalid-header byte
+recovery, valid duplicate-wave ordering and existing codec acceptance remain.
+At the outer MMMD boundary, clamp each child to the declared parent region,
+not to the physical input buffer including CRC/unowned suffix. This does not
+add any guessed codec, stereo layout or sample-byte law.
+
+Original independent fixtures reproduce both failures against immutable beta.8
+sources. Candidate boundary, existing audio and security suites pass. Tests
+cover fake nested waves before/after a real wave, large/empty metadata, wrong
+wave family, invalid-prefix recovery, oversized/partial children, parent bounds,
+render blocks and seek. The first test wave mistakenly declared 20-bit instead
+of PCM8; corrected before the successful old-source failure reproduction.
+
+All382 originals' complete parsed file/track/header/clock/setup/sequence/wave
+fields compare directly and exactly, including raw wave bytes and metadata;
+all original SHA256 identities and other11 native source files remain exact.
+This is parsed-input identity with unchanged rendering code, not a new full
+audio render or hardware/listening calibration. No audible quality increase
+is asserted for these unchanged originals. VersionCode67/cache r46; debug-only
+batch, same DEV identity. Android packaging/delivery verified separately.
+
+Remaining-gap review: the one missing-RAM original carries MA7 wave command
+0x23 codec1 for the requested ID0; unsupported encoding, not absent input.
+The one missing-recorded original requests an Mwa absent from its MTR despite
+an equal-numbered instrument-RAM wave; these namespaces must not be aliased.
+No decoder/sample-law inference follows from either observation. Proprietary
+ROM, AL filter, fixed frequency/raw detune, user FM wave and physical envelope
+calibration remain separate source/reference-dependent gaps. Do not invent
+per-song balance/vibrato corrections or call them completed fidelity features.
+
+## DEV integration: 1.6.3-beta.8 (2026-10-11)
+
+Batch the previously verified ATR resampling source change into the Android
+DEV app. No additional FM/WT/recorded-Mwa timbre, balance or modulation tuning.
+VersionCode66/render-cache r45 request fresh conversions. Same orange DEV
+resources, app package and debug certificate; no release signing/publication.
+Prior native source and original-render evidence are retained separately.
+Scheduled-tone inventory remains host-only and does not change app sound.
+User-SRAM transfer candidate still lacks established sample law/endian;
+no guessed decoder, waveform substitution or per-song change is included.
+Offline assembleDebug/lintDebug pass (0errors/4existing warnings), three ABI
+native libraries match fresh stripped outputs and differ from beta.7. Same
+debug signer, orange DEV resources, package/version and compiled cache verified.
+All40Android source/resource files preserve beta.7 except cache; all12native
+sources match the validated ATR batch. Prior ATR/recorded/audio/security host
+binaries rerun successfully; no fresh host compilation/original-corpus renders
+or device listening in this integration. OneDrive APK/source/report copies
+are checked separately. Public stable1.6.2 and Git publication unchanged.
+
+## Scheduled tone-path inventory (2026-10-11, host-only)
+
+Add tools/tone-usage-audit.cpp to distinguish defined-but-unused voices from
+scheduled instrument requests and actual FM/WT/recorded/ATR allocation paths.
+Replay the decoded original event order and timed activations; identity is the
+voice-table element, not merely a bank/program key. Recording routing wins even
+when its wave is absent. Separate ROM/missing-RAM source fallback from generic
+fallback, and intentional EP0 from missing samples. Permanently silent MA7
+notes still fire but do not count as feature use; current channel-volume zero
+is not immutable silence. Count only used operators of two-/four-op voices.
+Reject empty inventories. Original classification fixtures are standalone and
+connected to local sanitizer CI; injected metadata tests are not new protocol
+evidence. No playback/native/Android/version/cache changes in this batch.
+
+382 private originals parse and scan completely, with no events beyond the
+600-second safety bound. Of5577 definition elements,5223 are requested and3838
+bound, across1135883 scheduled NoteOn events (not unique sounding notes).
+255 files request missing ROM PCM voices (190841 fallback NoteOn instances);
+one file requests missing RAM (51), and one has22 missing recording requests.
+Actual bound definitions use AL in58 files/187476 scheduled selections,
+fixed-frequency in10/2153, raw nonzero MA7 DT in38/43745, and user-SRAM waveform
+numbers15/23/31 in3/982. Categories overlap: this is not a fidelity score.
+AL presence, including zero bytes, is not perceived impact; raw DT is partially
+represented/uncalibrated, not proof that every nonzero setting sounds wrong.
+The observer does not render or model lifetime/steals/audibility; artificial
+pool saturation is possible. Rejected definitions outside the voice table are
+outside this inventory; score-audit remains necessary. Never infer that a
+sample is absent from its name or assume all fallback is ROM. These findings
+prioritize source-backed work without arbitrary song-specific retuning.
+All12 frozen production source files remain byte-exact. No new APK or Git
+publication; pending ATR changes remain for next beta.8/code66/cache45.
+
+## Pending native batch: ATR one-shot resampling quality
+
+Source-only after DEV1.6.3-beta.7/code65/cache44. ATR WaveOn now selects the
+existing non-loop16-tap upsampling/32-tap anti-alias resampler, with necessary
+shared-table preparation on allocation. No new numeric kernel, decoding,
+source pitch/position/EOF, authored gain/pan/gates/EOS, voice limits or slot
+allocation law. Unity-rate output exact; no added reconstruction tail. Shared
+output-filter drain, transient overshoot/pre-ringing and limiter peaks may
+change with the waveform. This is renderer quality, not calibrated handset DSP.
+ATR Pitch Bend remains unapplied: a score bend range is not evidence for ATR.
+
+New original standalone tests independently construct direct-double FIR,
+short-source edge extension/EOF, actual ATR signed8 and decoded ADPCM paths,
+pass/stopband, unity, authored gain/pan, reinit/seek/block and slot reuse.
+ADPCM coverage checks interpolation of the decoded ATR signal, not an
+independent ADPCM decoder. An independent50ms/60ms clock plus post-mix LP
+oracle checks hard mute directly, so Gate/EOS cannot pass only by agreeing on
+the same wrong time. Existing nonnative Gate/EOS comparisons now use the same
+complete recording instead of differently truncated inputs with different FIR
+edge taps. WT exclusions hash535ae50ff0d9110d exact frozen/current; earlier
+Mobile/MA7 recorded and HPS tests continue passing. Linear recentLevel remains
+exact, preserving the source-level voice-steal detector.
+
+Frozen ATR suite fails expected quality selection; candidate standalone,
+complete audio regression and security smoke pass. Existing Astra bounded
+design/final review found no major issue; standalone suite is connected to the
+local sanitizer workflow, not pushed/run. PortableLinux x86_64-musl cross-build
+passes, not executed on Linux.32-voice warm-table host microbenchmark16000frames:
+linear/quality17.922/34.766ms at0.5;19.426/85.190ms at2. This uses actual ATR
+voice copies, not an Android runtime/power test or pool-allocation benchmark.
+Recordings can occupy16/32shared PCM slots, unlike Mwa's separate2voice pool.
+Fresh382 originals old/new first10s complete: only the one ATR-bearing file
+changes waveform hash/peak; other381 complete reports exact. All382 whole-score
+events/clocks/origin provenance exact. That original's full42.993s render ends
+naturally in both versions, with identical duration/diagnostics/peak0.609 and
+only waveform hash changed. Six previous problem originals full reports exact;
+all5 HPS originals full reports preserve every field except that same ATR file's
+waveform. Full groups overlap, not12unique inputs. Others not fully rendered.
+OneDrive source/report delivery records are in atr-resample-next/HANDOFF.md
+and separate manifest/verification files. No new APK/version/cache or
+Git commit/push/tag/release; next batched DEV must beta.8/code66/cache45.
+
+## DEV integration: 1.6.3-beta.7 (2026-10-11)
+
+Batch the HPS zero-gate recovery, nominal feedback regression tests/comment,
+and recorded Mwa Audio resampling source changes below. No new timbre/gain/
+vibrato retuning is introduced during packaging. VersionCode65 and render
+cache r44 force fresh conversion instead of reusing beta.6/cache43 results.
+Offline assembleDebug and lintDebug pass (0 errors,4 existing warnings).
+All three packaged ABI libraries match the fresh build and differ from beta.6.
+Compiled cache prefix, package/version, orange DEV resources and unchanged
+debug certificate are verified against beta.6. No release key used; public
+stable1.6.2 unchanged. No new hardware listening/timing or sanitizer CI run.
+Source and earlier regression evidence are backed up separately from the APK.
+Git commit/push/tag/public release are not part of this DEV delivery.
+
+## Pending native batch: recorded Mwa Audio resampling quality
+
+Source-only after DEV1.6.3-beta.6/code64/cache43. Mobile1/2 and MA7 recorded
+Mwa Audio now opt into the existing16-tap upsampling/32-tap rate-dependent
+anti-alias kernels. These are renderer-quality choices, not calibrated handset
+DSP. Originating note grammar, not shared channel setup, selects the profile:
+HPS notes remain linear even with stale modern channel state. ATR explicitly
+remains linear; WT uses exactly its previous quality policy. Unity-rate output
+is exact. Necessary shared tables are prepared when the Audio voice starts.
+Source data, source pitch/advance, gates/2ms gate fade, velocity/pan/gain,
+two-slot oldest-first allocation, decoding and event timing are unchanged.
+No guessed instrument retuning, per-song gain or blanket accompaniment change.
+Symmetric FIR may pre-ring or overshoot; no added FIR playback tail/delay or
+independent clipping. Changed samples can affect the shared limiter and mixed
+output peaks: unchanged authored gain is not a claim of identical mix amplitude.
+
+Original independent direct-double FIR fixtures cover source lengths1/2/3/7/
+16/32/79, exact phase/cutoff rows, edge extension, native EOF and gate fade.
+Separate synthetic pass/stop-band tests exercise ratios1.5/2/4/6; the0.45-cycle/
+source stop-band tone loses more than20dB energy relative to linear in these
+fixtures, not at every frequency near the finite filter transition. The initial
+0.375-cycle test at1.5 fell in that transition and failed; retained initial log,
+threshold not relaxed. At0.5 upsampling, sine RMS error is0.0000583431 versus
+0.0349011 linear. These are test-signal measures, not per-song perceptual claims.
+Integration covers compressed/uncompressed Mobile and MA7, actual HPS decoded
+origin flags, stale channel state, unity, source rates4000..48000, block/seek,
+reinitialization. Actual ATR triggering and WT allocation/render outputs retain
+the frozen float hash746fc64f20bee869. The original short WT exclusion fixture
+ended before512 frames at high source rate; its input was lengthened, without
+production changes. The old simple-decimation Audio equality assertion was
+replaced; independent band tests now guard the intended conversion behavior.
+Dedicated candidate/full audio/security pass; frozen dedicated quality fails
+as expected. Existing Astra design/final reviews found no blocker. Portable
+Linux main cross-build passes; sanitizer CI is connected locally but NOT run.
+
+Fresh382 originals: all first10s render reports pass;23 waveform hashes and9
+reported peaks change only in recorded-Audio-bearing files. All remaining
+fields, whole-score musical/NOP/EOS clocks and origin provenance are exact.
+Routing inventory identifies28 recorded-Audio-bearing originals; all28 full
+renders pass and change waveform hashes,8 reported peaks. Every other field,
+including actual rendered duration, diagnostics and endpoint, stays exact.
+Natural endings24/28 unchanged; the same4 pre-existing safety-tail endings
+remain unresolved. Previously reported6 problem originals and5 HPS originals
+have complete full-render reports exact and natural endings; groups overlap,
+not39 unique originals. No new device listening or reference-accuracy claim.
+All12 native files pass exact reverse-patch scope verification: quality opt-in,
+startAudio argument, shared tick exclusion removal and one interpolation comment
+only. Underlying FM/WT/interpolation numeric code and decoder fields unchanged.
+
+Host-only warm-table microbenchmark for4s/two recorded voices: linear/quality
+8.636/18.493ms at0.5,7.298/42.507ms at2. This excludes kernel creation and is
+not Android CPU/power/conversion latency. OneDrive source/report destination
+MMF Player/recorded-resample-next; no private media/vendorPDF/ROM/keys/binaries
+included in source archive. No APK/version/cache/commit/push/tag/release;
+next batchedDEV must increment beta.7/code65/cache44.
+
+## Native validation batch: MA5 nominal FM feedback evidence
+
+Tests/documentation only after HPS zero-gate recovery. Existing playback
+numerics, profiles, waveforms, envelopes, gains and scheduling are unchanged;
+no new APK/cache/version or publication. PDF skill extraction and full visual
+inspection of MA5 UserManual1.33 pp62-63 corroborate the nominal feedback
+amounts directly:0,pi/16,pi/8,pi/4,pi/2,pi,2pi,4pi radians correspond to the
+existing modern cycles0,1/32,1/16,1/8,1/4,1/2,1,2. Two-sample averaging and
+physical signal normalization remain uncalibrated. Legacy/MA7/fallback profile
+policies are not upgraded to hardware fidelity from this MA5 table.
+
+The diagrams retain direct-output feedback in additive algorithms. A blanket
+output-carrier exclusion would wrongly remove those loops. Arbitrary nonzero
+FB fields on other operators remain unverified; no new eligibility mask is
+imposed. New original fixtures independently assemble FmOperator instances,
+feedback history and all8 routes, deriving nominal cycles from radians rather
+than sharing FmVoice's table.8algorithms x8FBsettings x4existing profiles x3
+rates=768fixtures,2048samples each, checked sample-exactly. Carrier-mask
+counterexamples and retrigger/history/profile reset are also covered. This
+checks current numeric implementation, not independently emulated chip DSP.
+An initially insensitive alg1/FB3 reuse fixture was strengthened to alg0/FB5
+and explicitly observed profile/depth differences following Astra review.
+
+Only one native comment changes; stripping that exact comment makes all12
+native files match the frozen baseline. No new real-corpus render, audible
+improvement or hardware recording is claimed. Repeating382 unchanged-source
+audio renders would add cost without testing a new synthesis path. Dedicated
+baseline/current and full audio/security suites pass instead. Source/test
+records destination OneDrive/MMF Player/fm-feedback-proof-next; no private
+music,manufacturer PDF/ROM,binaries/APK/signing keys are included.
+
+## Pending native batch: HPS zero-gate recovery
+
+Source-only after batched DEV1.6.3-beta.6/code64/cache43; no new APK or Git
+publication. Next batched APK must increment all three. SMAF3.05 pp29-31
+were fully extracted/visually checked using PDF skill: HPS EOS is four literal
+zeros, not permission to extrapolate MA7 timed EOS to delayed HPS triple-zero
+compatibility. That existing EOS policy is unchanged. HPS score GateTime0 is
+prohibited. For a normally encoded zero gate, only non-ATR HPS scores record
+Reserved0x106 and retain Duration as inert ScoreNop. No new voice, retrigger,
+note identity or generated gate-off. Reader-malformed lengths stop first,
+without a fabricated clock or second diagnostic. Known-width recovery keeps
+scanComplete true; gate0 takes diagnostic precedence over a reserved key.
+Valid notes, ATR, Mobile/MA7 zero-gate remembered velocity, DSP/timbre/gain/
+balance/vibrato remain unchanged. No per-song correction or hardware-match claim.
+
+Original fixtures cover all254 note bytes excluding00/FF x3 voice types,
+prefix/suffix and independent tracks, zero/multibyte/late clocks, silent-only
+tracks,600s cap,400000-event bound and later-track budget, malformed lengths,
+seek/block, modern/ATR exclusions. Parsed XOF and an actual tail-limit hit
+verify the safety-fade oracle against independently authored FF00 NOP. A late
+clock can move an existing held-voice safety fade, not merely add silence.
+Frozen clock probe fails as expected; unchanged exclusions pass. Dedicated,
+full audio and security regression tests pass. Existing Astra bounded design/
+final source reviews found no serious issue; comparison success/complete
+requirements were strengthened following review. No new delegation.
+
+Frozen parser plus aggregate callback scans382 actual originals:5 HPS files,
+6468 nonzero gates,0 zero gates. Observer independence and12 frozen native
+files verified; only production ma_player.cpp differs. Fresh382 first10s
+complete waveform/runtime/audit reports are exact, including estimated bounds.
+Whole-score musical fields/sourceTrack/handyPhoneNote/NOP/Mobile+MA7 EOS clocks,
+endpoints and provenance are exact. All5 HPS and6 previous problem originals
+fully rendered: every report field/hash exact, natural endings. The groups
+overlap; not11 unique originals. Strict comparisons require all expected inputs
+and success/completeness, without field exemptions. Other corpus inputs were
+not full rendered. No actual-corpus audible improvement is claimed: the bug is
+reproduced in synthetic data and absent from this private corpus. Source/reports
+destination OneDrive/MMF Player/hps-zero-gate-next. No private media,manufacturer
+PDF/ROM,APK,binaries or signing keys packaged; no Android/device test this batch.
+
+## DEV beta.6 batch: accepted MA7 terminal clock
+
+After hps-note-data-next, only the already accepted MA7 FF2F00 success branch
+adds a timed inert ScoreNop(a0x2f,b3). The distinct marker keeps existing Mobile
+EOS inventories separate. MA7 guideline1.60 p34 (8.6.4 Track End Point) was
+extracted and fully visually inspected using PDF skill. Existing compact SEQU
+already validates this terminator and reads its preceding Duration, but did
+not preserve that time in the event horizon. Do not import new wire syntax.
+Missing/nonzero terminators gain no clock; suffix rejection and audit remain.
+Natural gates/releases/ATR and600s safety policy remain; this is not immediate
+sequence hard mute. No DSP/timbre/gain/balance/vibrato/per-song adjustments.
+CC121 remains Unsupported: authoring SMF reset Table8 on p32 does not prove
+the compact converter's transport behaviour. Existing Astra bounded design
+and final source reviews found no blocker for clock-only scope.
+
+Original tests cover GM/customFM/WT,low/high channel banks,zero/multibyte/late
+clocks,independent MTR,gate beyond EOS,recorded Audio,ATR,XOF safety,terminal-
+only silence,600s cap,exact event-resource bound,seek/block and all malformed
+terminators. Frozen clock FAIL expected,exclusions PASS. Candidate dedicated,
+full audio and security PASS. Old score-NOP/length/muted-note assertions assumed
+MA7 EOS was untimed; replace their expected endpoint with authored timing,
+preserving waveform,gate and malformed assertions. Initial exclusion grouping
+also called these new-policy tests; isolate unchanged VLQ compatibility checks.
+All intermediate failed reports are preserved, not omitted.
+
+Fresh382 first10s actual samples,lengths,diagnostics and ending flags unchanged;
+one estimated-seconds report changes. All existing musical event fields,
+including sourceTrack and handyPhoneNote,regularNOP and MobileEOS clocks exact.
+61 accepted MA7 clocks extend6 precise endpoints. Whole-score provenance valid
+(6468HPS/331466MA7 notes,hostEv32bytes). All61 MA7 originals fully rendered old/
+new: only3 waveform hashes/frame lengths change,all diagnostics/peaks unchanged.
+One authored ending adds1.06s;two other endings add one sample each. Natural
+endings remain50/61;the same11 existing safety-limited endings remain. Six prior
+problem originals have all complete waveform reports unchanged,natural endings.
+
+FINAL INDEPENDENT ORACLE CHECK PASS: all61 full outputs match every compared
+field of the frozen renderer with only accepted-boundary observation,
+replacing FF2F00 by authored same-Duration FF00+EOF in memory. No new EOS
+scheduling branch is used by the oracle. The six prior problem originals also
+match the oracle; observer-only marker counts are independently checked.
+Observer/source independence was checked; all12 frozen files retained,only
+production ma_player.cpp differs. Source cpp SHA256
+B441F6CA9C6DF322EE084E4997CB8C5518BB94D05EB4B8D58A636B60737E73B7.
+
+User approved a single batched DEV APK containing all pending native repairs.
+Source1.6.3-beta.6/code64/cache43; assembleDebug and lintDebug PASS. APK identity,
+fresh r43 cache literal,three native ABI libraries and beta.5 debug-certificate
+compatibility verified. Release signing disabled; no commit/push/tag/release.
+OneDrive destination: MMF Player/MMF-Pocket-1.6.3-beta.6-debug.apk, with source
+and reports under MMF Player/ma7-eos-clock-next. No Android runtime/device listening
+claim,private media/vendorPDF/ROM/binaries/keys in source package. Late authored
+endpoints can extend a rest or move the existing XOF safety fade; independent
+NOP oracle validates semantics,not perceptual/hardware-equivalent timbre.
+
+## Pending native batch: HPS NoteNumber validation
+
+Source-only after HPS reserved FF boundaries. No APK/publication; installable
+remains1.6.3-beta.5/code63/cache42. Increment all3 before the next batched APK.
+PDF skill extraction and full-page visual inspection of SMAF3.05 p31 confirms
+HPS NoteNumber0/13/14/15 are prohibited;1..12 are legal, C uses12 in the preceding
+octave. Existing decoder mapped prohibited values into pitches. Only this HPS
+branch now records Reserved0x105 and a timed ScoreNop after consuming the known-
+width gate; no voice/retrigger/generated gate-off. Preserve Duration, resume
+valid following events and preserve independent tracks. ATR six-bit WaveIDs
+are excluded before this check. Existing zero-gate skip and00/FF grammars are
+unchanged; this is not complete zero-gate spec validation. No DSP/timbre/gain/
+balance/vibrato/controller/voice allocation retuning or per-song correction.
+
+Original synthetic tests cover62 prohibited bytes excluding00/FF x4 gates x3
+voice types (GM/customFM/WT), silent reserved-only timelines, independent HPS
+tracks, seek/block invariance, all192 legal key encodings x3 voices, ATR WaveID
+exclusions and previous HPS-meta exclusions. The old score-NOP fixture used
+prohibited0x20 for C60; replace with legal0x1c, preserving exactly MIDI60.
+Frozen rejected probe fails as expected and unchanged probe passes after this
+fixture correction. Candidate dedicated/full audio/security tests pass. All12
+native baseline files retained; only ma_player.cpp differs. Host aggregate
+trace is the frozen parser plus callback only, no renderer/DSP changes.
+
+Raw aggregate scan of382 originals:5 HPS files,6468 sounding HPS notes,0
+prohibited values. This does not audit gate-zero notes or raw complete syntax.
+Fresh382 whole-score event fingerprints/sourceTrack/clocks/bounds match the
+frozen baseline; all provenance valid (6468HPS/331466MA7 notes,hostEv32bytes).
+All5 affected-grammar HPS originals and6 prior problem originals fully rendered:
+every report field and stereo-float hash matches; all finish naturally. There
+is no field whitelist. No fresh382-file audio render this batch; prior batch's
+382 first10s results are historical, not claimed as new waveform verification.
+No real-corpus audible improvement or hardware timbre claim. This fixes invalid
+note robustness, not the accepted valid sound or proprietary instrument laws.
+Source/reports saved to OneDrive/MMF Player/hps-note-data-next; no private music,
+manufacturer PDF, binaries, APK or signing keys included. Main6.1sol handled
+this bounded parser work without new delegation.
+
+## Pending native batch: HPS reserved FF boundaries
+
+Source-only after Mobile EOS clocks; no APK/publication. Installable remains
+1.6.3-beta.5/code63/cache42; increment all3 before next batched APK.
+PDF skill extraction and full visual inspection of SMAF3.05 p38 confirms HPS
+defines only FF00 NOP and FFF0 exclusive, with other FF subtypes Reserved and
+no specified payload length. Remove the guessed one-byte MIDI-meta framing:
+record Reserved/incomplete and stop only that HPS stream, preserving earlier
+gates/releases and independent tracks. Missing subtype is still genuine
+truncation; exact-end reserved subtype does not invent a missing length byte.
+Defined HPS messages/EOS, ATR, Mobile1/2 and MA7 rules unchanged. No DSP/gain/
+timbre/balance/vibrato/controller/note/voice-allocation retuning or per-song rule.
+This does not implement unknown vendor meta or recommended sequence EOS mute.
+
+Original synthetic hps-meta-regression covers all254 reserved subtypes, GM/
+customFM/WT, fake note/volume suffixes, reserved-only false initialization,
+single-byte/VLQ-looking payloads, exact-end/missing-subtype audits, independent
+HPS/modern streams and seek/block invariance. Defined HPS NOP/exclusive/EOS and
+existing Mobile/MA7/ATR exclusion tests pass. Frozen source fails suffix/audit
+oracles and passes exclusions. An old ATR exclusion fixture incorrectly used
+HPS FF2F00 MIDI-meta framing; its marker now uses defined FF00 NOP while
+retaining the resume/timing assertion. The254 reserved cases are covered by
+the new prefix/stop oracle, not removed. Final dedicated/full audio/security
+tests pass. Only native ma_player.cpp differs from the saved baseline; no new
+ABI/event layout or per-frame allocation change. Main6.1sol handled this bounded
+parser work without new delegation.
+
+All382 first10s complete reports exact, including every stereo-float hash,
+estimated/probed duration, diagnostics and audit counts. Entire-score event
+counts/fingerprints/sourceTrack/NOP/EOS clocks/bounds/coverage/reset counts
+exact. All source provenance valid,6468HPS/331466MA7notes,hostEv32bytes. Prior16
+full confirmation inputs and all5 HPS scores fully rendered: complete reports
+and entire-score inventories exact. Groups can overlap; not21 unique songs.
+All six strict datasets pass with no report-field whitelist. Other corpus not
+fully rendered; no real-corpus audible or reference-chip timbre gain claimed.
+Source/reports destination OneDrive/MMF Player/hps-meta-next, no private media,
+manufacturer PDF, binaries or signing keys. Compatibility risk: undocumented
+vendor HPS FF now stops its stream instead of interpreting a guessed suffix;
+the supplied real corpus has no affected outputs/inventories.
+
+## Pending native batch: Mobile EOS clock preservation
+
+Source-only after HPS note-local FM allocation; no APK or publication.
+Installable stays1.6.3-beta.5/code63/cache42; increment all3 before batching APK.
+Manufacturer SMAF3.05 p45 was extracted and visually inspected using the PDF
+skill: Mobile Standard EOS FF2F00 is a timed event, unlike HPS. The old parser
+validated its terminator but discarded its Duration from the scheduled score.
+Only valid Mobile format1/2 EOS now schedules an inert ScoreNop with marker
+a0x2f. Missing/nonzero terminators still preserve their prefix without adding
+a clock or accepting a fake suffix. HPS/MA7, gates, source ownership, FM/WT/
+Audio/ATR releases and all DSP/timbre/gain/balance/vibrato policies unchanged.
+No per-song corrections. This retains EOS time, NOT recommended sequence mute;
+late gates may still define the ending. Held/XOF safety horizon uses the same
+existing endpoint+10s and600s cap as an explicitly authored NOP.
+
+Dedicated synthetic regression covers GM/customFM/WT, multi-byte/zero/late EOS,
+packed Mobile, independent tracks, gate after EOS, held/XOF, suffix rejection,
+seek/block, EOS-only delay/cap and all255 nonzero/missing terminators. Frozen
+source fails the clock oracle and passes malformed/HPS/MA7 exclusions. Full
+audio regression and security smoke pass. Astra bounded design review supports
+the clock-only scope; final additional review could not run due usage limits.
+Main6.1sol completed differential source and test review.
+
+All382 first10s actual samples/lengths/diagnostics unchanged. Musical event
+order/values/source/reset/audit data exact.316 accepted EOS clocks;46 whole-score
+endpoints/precise total bounds grow, only12 rounded estimated-time reports
+change.34 endpoint changes are one sample, not600s-cap exclusions. Previous16
+problem/reset originals fully rendered: all hashes/lengths unchanged, natural
+endings. Additional46 endpoint-changing originals fully rendered: eleven exact
+frame counts/hashes change, nine rounded rendered-time reports change;41->42
+natural endings and four remaining safety endings. The initial old-prefix
+guard correctly failed at a moved safety fade; its partial report is preserved.
+An independent frozen renderer with only host EOS tracing converts accepted
+EOS to same-Duration explicit FF00 NOP+EOF in private in-memory copies. All46
+full outputs match that reference bit exactly, including natural/safety flags;
+an independent rerender also matches. All six strict report/event/provenance
+datasets pass, hostEv remains32bytes. Other corpus not fully rendered.
+
+Risk/next device check: authored late EOS can extend silent rest, release or
+held safety tails by tens of seconds in some files. This is not an audible
+timbre improvement or a guarantee of unchanged continuous-play end latency.
+Recommended per-sequence EOS mute remains pending origin-safe voice ownership;
+channel-wide mute would harm independent tracks. No guessed per-song gap trim.
+Source/reports destination OneDrive/MMF Player/mobile-eos-clock-next; private
+music, manufacturer PDF, binaries and signing keys are not packaged.
+
+## Pending native batch: HPS note-local FM allocation
+
+Source-only after MA7 recorded-Audio source ownership; no APK or publication.
+Installable stays1.6.3-beta.5/code63/cache42; increment all3 before batching APK.
+An inert HPS MTR could set Chan::monophonic on shared Mobile/MA7 channels,
+forcing overlapping modern FM notes to replace each other. A trailing default-
+false Ev::handyPhoneNote is set only on HPS score NoteOn. The existing mono FM
+slot reuse now follows this note flag, not a global channel initialization flag.
+HPS retrigger still reuses any active same-channel FM slot, including foreign
+format voices. WT/Audio pools, ATR WaveOn, NoteOff, controllers/patch tables,
+DSP/timbre/gain/balance/vibrato/gates/UI unchanged; no per-song corrections and
+no claim of full mixed-format channel namespace or hardware isolation.
+
+Distinct MTR1(HPS)/MTR0(modern) synthetic overlapping notes on channels4..7
+cover GM/custom FM, same/different keys, both storage orders, packed Mobile,
+seek/blocks, one sounding note and WT exclusions. Frozen renderer fails audible
+polyphony oracle and passes exclusions; final dedicated/full audio/security
+tests pass. HPS48 retrigger and modern18 standalone outputs at8/44.1/48kHz
+are bit exact versus frozen. Android NDK armv7a/aarch64/x86_64 syntax-only
+assertions confirm Ev32bytes before/after: bool fits existing padding. No APK
+build/device test. Existing Astra read-only bounded review no serious issue.
+
+All382 first10s complete reports exact, including estimates/diagnostics/audits;
+entire-score pre-existing event fields including sourceTrack, non-NOP hashes,
+NOP clocks/endpoints/reset counts exact. New bool excluded from fingerprint;
+separate tag consistency and HPS-only complete-tagging checks pass382 inventories,
+6468 HPS and331466 MA7 source notes. Previous6 problem originals+ATR harvest/
+Stab+8 reset-bearing originals fully rendered:16 exact reports/inventories,
+16 natural endings. All5 dataset strict comparisons pass without whitelist.
+Other corpus files NOT full rendered. This guards a synthetic reproduced audio-
+loss condition; no real-corpus audible timbre improvement is claimed.
+Source/reports destination OneDrive/MMF Player/hps-note-policy-next.
+
+## Pending native batch: MA7 recorded-Audio originating MTR
+
+Source-only after Mobile unknown-meta boundaries. Installable DEV remains
+1.6.3-beta.5/code63/cache42; increment all3 before the next batched APK.
+The parser and wave bank already store Mwa samples per originating MTR, while
+MA7 channel state is shared. A later MTR's initialization overwrote the source
+channel marker and earlier MTR notes could select that later MTR's same-ID
+recording. Each decoded MA7 NoteOn now retains its own sourceTrack. Recorded
+Audio uses that event marker for wave lookup and its existing native-pan
+namespace. Missing own-source wave remains missing, not a cross-MTR fallback.
+Legacy Audio keeps Chan::streamTrack. Controllers, FM/WT patch selection,
+voice allocation, DSP/timbre/gain/balance and timing/gate policies unchanged.
+Shared MA7 channel/controller/voice-table isolation is NOT implemented here;
+this is not proof of fully hardware-faithful multi-MTR playback.
+
+Manufacturer SMAF3.05 pp46/122/123 were extracted and visually inspected in
+full using the PDF skill. Their score/stream-wave nesting supports preserving
+parsed ownership; they do not define MA7 native channel-sharing laws. No
+proprietary ROM/PDF is packaged. PEG/KSR/KSL/fixed-frequency extraction was
+also explored, but supplied no new calibration law; DSP is not guessed.
+
+New original synthetic two-MTR fixtures use same Wave ID but distinct samples,
+against an independently authored single-MTR/two-distinct-ID oracle. Cover
+same/different channels, both compact channel banks, track IDs0/1/201/255,
+reversed storage order, missing own wave, future/live native pan, seek/blocks,
+and live pan after a slot was stolen by another MTR. Old pan fixture's explicit
+last-MTR-wins assumption was replaced by its proper source-scoped expectation.
+Final dedicated/full audio/security tests pass; frozen source independently
+fails source/missing/pan probes and passes single-source/exclusion suites.
+Bounded Astra review found no serious issue. Trailing event int can increase
+host event size24 to32 bytes; about3.2MB per400000 logical entries, excluding
+vector spare capacity. The event cap remains and no per-frame allocation was
+added. Host provenance inventory confirms event32 bytes. All382 first10s
+complete reports are exact, including estimates/audits; existing entire-score
+event fingerprints/counts/NOP clocks/endpoints/coverage/reset counts are exact.
+The fingerprint deliberately covers pre-existing fields, not the new source
+tag; source tags are independently inventoried. All382 provenance reports
+valid,331466 MA7 notes correctly tagged. Their61 MA7 files each have one MTR;
+none has multiple MA7 MTRs, so synthetic fixtures demonstrate the repaired bug,
+not a real-corpus audible improvement. Previous6 problem originals, ATR harvest,
+Stab and8 reset-bearing originals full-rendered:16 complete reports/inventories
+exact,16 natural endings. Full-target provenance confirms8151 MA7 note tags;
+other full-original groups have no MA7 notes. Strict5-dataset comparisons pass
+every existing report field without whitelist; all provenance checks pass.
+Other corpus files NOT full rendered. Source/reports ready for separately
+verified OneDrive delivery. No Android build or Git publication.
+
+## Pending native batch: Mobile unknown FF subtype boundaries
+
+Source-only after remembered-velocity reset; no APK or Git publication.
+Installable DEV remains1.6.3-beta.5/code63/cache r42; increment all3 together
+before the next batched APK. SMAF3.05 pp42/45 were extracted and visually
+checked in full: Mobile Standard specifies FF00 NOP and FF2F00 EOS, not
+generic MIDI meta length framing. An unknown FF subtype now emits one
+Unsupported sequence diagnostic, marks coverage incomplete and stops only
+that stream. It no longer guesses a byte-length payload and resumes at an
+invented boundary. Prefix notes, gates, live voice decay and independent
+tracks are retained. FF00/FF2F00, MA7 VLQ meta compatibility, HPS and ATR are
+unchanged; no DSP/timbre/gain/balance or per-song rules were changed.
+
+Original synthetic fixtures cover all254 unknown subtype values, exact-end
+subtypes versus truly truncated FF, fake byte/VLQ lengths and note/controller
+suffixes, GM/custom FM/WT prefixes, packed Mobile, seek/block invariance and
+independent tracks. Valid NOP/EOS/reserved statuses and other-format suites
+remain included. The truncation audit fixture now uses missing FF2F final00,
+a known-width command, rather than guessing unknown FF01 payload shape.
+Dedicated candidate tests pass; frozen source fails the separate audible
+suffix and unsupported-inventory probes, and passes valid/exclusion tests.
+Bounded Astra read-only review found no serious issue or mandatory new test.
+Dedicated/full native audio and security tests pass. All382 first10s complete
+reports are exact, including estimated bounds/audits. Their whole-score event
+counts/fingerprints/NOP clocks/coverage and reset counts are exact. Six previous
+problem originals, ATR harvest, Stab and8 reset-bearing originals were fully
+rendered: all16 complete reports and whole-score inventories are exact; all16
+end naturally. Strict comparison passes every field without a whitelist.
+Other corpus files were not full rendered. No audible/reference-chip fidelity
+gain is claimed: the synthetic tests prove a formerly unsafe boundary, while
+real-file regression checks demonstrate preservation. No new APK. Source and
+verification reports are ready for separate OneDrive copy/hash verification.
+
+## Pending native batch: Mobile remembered velocity after Reset All Controllers
+
+Source-only after Mobile7-bit validation, no APK. Installable DEV stays
+1.6.3-beta.5/code63/cache r42; increment all3 before the batched APK.
+Manufacturer SMAF3.05 p43 was extracted and fully visually checked: Mobile
+remembers explicit9n velocity per channel for later8n notes, and Reset All
+Controllers clears that memory back to default64. The decoder previously
+retained the old value. Only valid Mobile CC121/0 now assigns that channel's
+decode-local runVel=64. No dispatcher/voice/DSP/gain/timbre/balance change;
+existing sounding-note velocities, channel/track isolation, HPS/ATR and MA7
+grammar untouched. Explicit later velocity, including gate0, can overwrite64
+normally. Invalid CC121 values remain rejected and cannot reset this memory.
+
+The old reset-test oracle used ordinary controller writes, which do not reset
+decode-local velocity. Its one subsequent8n note now uses independent explicit
+velocity64 instead. New original fixtures cover GM/custom FM/WT, all16 channels,
+previous velocity0/1/32/55/100/127, gate0 remembered mute becoming64, repeated
+reset, same-tick before/after ordering, later explicit gate0 override, other
+channel/track, packed/seek/blocks, invalid CC121 and both MA7 banks unchanged.
+Dedicated/full audio/security suites pass; frozen Mobile-data source separately
+fails reset/ordering probes and passes the exclusion/unchanged suite. Bounded
+Astra review found no serious issue. This is an authored-control correction,
+not per-song gain compensation or a new hardware velocity curve.
+
+382 first10s complete audio/runtime/audit/estimated-bound reports exact;
+whole-score event fingerprints/counts/clocks/NOPs/coverage match for382 plus
+the previous8 full originals. The corpus has8 inputs with62 routed resets;
+their decoded events already remain identical under this corrected rule. They
+are additionally full-rendered as reset targets: complete audio/runtime/audit
+reports and whole-score inventories are exact, all8 end naturally.
+The previous8 full originals have0 routed resets and retain exact complete
+reports/natural endings. Unchanged corpus reports do not demonstrate a heard
+improvement; synthetic tests directly prove the previously failing condition.
+All16 full originals (previous8 plus8 reset-bearing files) end naturally and
+retain exact complete reports/inventories; no changed-field whitelist. Other
+corpus inputs are not full rendered. Source/test/license snapshot and reports
+saved locally to OneDrive; no Android build or Git publication.
+
+## Pending native batch: Mobile7-bit field validation
+
+Source-only work after unknown-width status recovery, no APK. Installable DEV
+remains1.6.3-beta.5/code63/cache r42; increment all3 before a batched APK.
+Previous pending source repairs retained, no song-specific or DSP retuning.
+
+Mobile note number/velocity, program and pitch-bend bytes must be7-bit data.
+Both callers of shared routeController_ (Mobile/MA7 only) require7-bit CC
+number/value as well. Previously Mobile fields were masked or partially routed,
+which could invent another note, replace an instrument, alter live gain/pan/
+pitch or poison the velocity reused by later notes. Invalid fields now audit
+Malformed with incomplete coverage, consume their known full widths and
+schedule an inert timed ScoreNop; preserve previous live state and other tracks.
+Notes first validate their variable gate: an invalid gate retains existing
+stop-current-stream behavior, without inserting a rest or committing velocity.
+Successfully delimited invalid notes cannot update running velocity, even with
+gate0; valid gate0 still updates velocity. Terminal invalid gate0 data is also
+audited, not silently accepted. Normal data, source gates/releases/ending law,
+FM/WT/mixer/balance/vibrato/filter, HPS/ATR and MA7 grammar stay unchanged.
+Manufacturer SMAF3.05 pp43/44 extracted and visually checked to choose scope.
+Running-velocity reset for CC121 remains separate compatibility work.
+
+New original fixtures cover every invalid byte128..255 with GM/custom FM/WT,
+channels0/15, audible state/time oracles, remembered velocity, zero/terminal
+gates, packed transport, independent tracks, seek/blocks, broken/truncated
+gates/fields, channel-mode/RPN/NRPN and all valid key/velocity boundaries.
+Existing CC120/121/123 audits now distinguish valid0, semantic invalid1
+(Unapplied) and malformed128 (Malformed/incomplete); no high-bit semantic
+reinterpretation. Dedicated/full audio/security pass. Frozen previous source
+fails controls/notes probes and passes valid grammar. Bounded Astra review
+found no serious issue. No hardware/YouTube fidelity improvement claim.
+
+Eight full originals retain exact complete reports and natural endings.
+Whole-score event inventories for382 corpus inputs plus8 originals are exact
+(non-NOP numeric FNV64 fingerprints/counts, NOPs, clocks/bounds, init/complete).
+All382 first10s COMPLETE audio/runtime/audit/estimated-bound reports are exact,
+with no changed-field whitelist. Native source/test/license snapshot and
+reports saved locally to OneDrive; no Android build or Git publication.
+
+## Pending native batch: unknown-width Mobile status fail-safe
+
+Source-only work after explicit NOP/EOS repairs, no APK. Installable DEV stays
+1.6.3-beta.5/code63/cache r42; increment all three before the batched APK.
+All previous pending bank/pan/length/NOP work is retained.
+
+Mobile Standard status bytes below0x80 are malformed. Reserved F1..FE have
+no validated payload width. Previously the decoder tried the following bytes
+as another duration/status, which could fabricate suffix notes/controllers.
+Stop just that stream after the existing malformed/unsupported audit. Preserve
+all previously generated notes, gates, natural release and independent tracks.
+No synthetic mute, NOP, horizon change, DSP/timbre/gain/balance or song patch.
+A0/D0 have specified widths and retain exact-payload skip/continue behavior.
+MA7 has a different low-status/channel-bank grammar and is NOT changed; HPS,
+ATR, Mobile F0 and existing FF meta handling are also untouched. Manufacturer
+SMAF3.05 p42 was extracted and visually checked before selecting this scope.
+
+Original tests cover all128 invalid low-status bytes and all14 unknown-width
+F1..FE values with FM/WT prefix sound, valid-looking false-note/controller
+suffixes, terminal status, seek/block replay, representative packed transport
+and independent tracks. Valid A0/D0 exact widths across all16 channels and
+both MA7 channel banks across32 channels retain their behavior. Dedicated,
+full audio and security tests pass. Frozen previous source separately fails
+low/reserved false-suffix probes and passes the valid-grammar suite. Bounded
+Astra review found no serious issue. Broken files that relied on guessed
+resynchronization may lose their suffix; this is intentional fail-safe behavior,
+not a claim that every unknown command or broken file is now supported.
+
+382 first10s COMPLETE audio/runtime/audit/estimated-bound reports are exact.
+All whole-score event inventories also match (non-NOP ordered numeric FNV64
+fingerprints/counts, every exported NOP, endpoint, bound and scan completion).
+Six prior problem originals plus ATR harvest and Stab retain identical FULL
+reports, event inventories and natural endings. The other corpus songs are
+NOT full rendered. Event fingerprints are not reference-chip fidelity scores
+or whole-corpus listening comparisons. No perceptual sound-quality gain is
+claimed from these unchanged files. Source/test/license snapshot and reports
+saved locally to OneDrive; no Android build or Git publication.
+
+## Pending native batch: explicit score NOP time and EOS shape
+
+Source-only work after the length-overflow repair; no APK. Installable DEV
+remains1.6.3-beta.5/code63/cache r42. Before the next batched APK increment
+all three identifiers; previous pending bank/pan/length work remains included.
+
+HPS score, Mobile (packed/unpacked) and existing MA7 FF00 NOP grammars now
+schedule the existing inert ScoreNop at their authored time. Previously the
+byte grammar advanced the decode clock but retained no terminal event, so
+late rests could vanish from the event horizon or a held/XOF source could
+hit the ten-second safety tail before that authored time. NOP does not change
+voices, gates, controls, filters or stable same-tick ordering. ATR keeps its
+existing source-specific NOP/trigger policy; no double insertion.
+
+Mobile/MA7 FF2F00 requires the final byte to exist and equal zero. Missing
+or nonzero bytes are malformed/incomplete and terminate only that stream,
+without decoding any suffix as new notes or muting valid prefix sound. Normal
+EOS remains the previous compatibility policy: this batch does NOT schedule
+EOS time, introduce a score EOS mute or shorten/retune natural release.
+Manufacturer SMAF3.05 pp38,45 were extracted and visually checked; exact NOP
+and EOS shapes inform this bounded scope, not an invented handset sound law.
+
+Original synthetic fixtures cover three score formats, an independent unchanged
+pan-control timeline oracle, late rests after natural WT decay, held/XOF safety
+horizon, split durations, simultaneous notes/gates, following note time, seek,
+block invariance and packed transport. NOP-only inputs follow the existing
+control-only policy, including zero-time empty output and600-second hard cap.
+400001 NOPs hit the decoded-event ceiling with an audit; EOS byte1..255 and
+missing bytes preserve prefix/other tracks and reject false suffix notes.
+Valid EOS and existing HPS/ATR ending policies remain covered. Dedicated/full
+audio/security tests pass; frozen length-repair source fails timeline/eos/limits
+negative probes. Bounded Astra review found no serious issue.
+
+382 first10s audio fingerprints, runtime counters and audit fields are exact.
+102 ESTIMATED upper bounds extend; the other280 complete reports are exact.
+Private whole-score inventory independently fingerprints every non-ScoreNop
+event, verifies previous inert events survive in order and permits only added
+inert NOPs. Per-file exact frame bounds must equal max(previous score endpoint,
+latest added NOP)+the existing10s safety allowance, capped at600s. Rounded
+report seconds must agree with those frame bounds. This is not a blanket
+duration whitelist. Six prior problem originals plus ATR harvest and Stab
+retain identical full audio/runtime/audit reports and natural endings; four
+of their estimated bounds change by the same validated NOP-only rule.
+
+The corpus was not rendered in full beyond those eight originals; held-source
+tails may intentionally last longer when a late NOP extends their old safety
+horizon. Unchanged first10s fingerprints do not prove whole-song perceptual
+identity. No timbre, mixer, vibrato, filter, UI/mascot or song-specific tuning
+changes; no reference-device listening comparison. Native source/test/license
+snapshot and reports saved locally to OneDrive. No Android build or git publish.
+
+## Pending native batch: representable score lengths after MA7-pan work
+
+Source-only work, no APK. Installable DEV remains1.6.3-beta.5/code63/cache r42;
+the preceding silent-bank/recorded-Audio pan changes are also still unbuilt.
+Increment all three identifiers before the next batched DEV APK.
+
+The five-group VLQ reader formerly accumulated35 possible data bits directly
+in uint32_t. Terminal values above UINT32_MAX wrapped into small gates,
+durations or payload sizes, allowing bogus notes or definitions to be decoded.
+Accumulate in uint64_t; narrow only after termination and representability
+checks in the shared score-length reader. Unrepresentable lengths follow the
+existing malformed/incomplete-coverage, stop-current-stream path BEFORE any
+duration addition, note allocation or payload boundary use. Preserve normal
+prefix events, previous setup definitions and independent other tracks.
+
+This is a bounded-reader compatibility repair, not a new claim about the
+manufacturer's maximum VLQ byte count. All previously accepted32-bit values,
+including UINT32_MAX and leading-zero five-byte forms, remain accepted. HPS
+uses its existing separate one/two-byte grammar. Normal FM/WT synthesis,
+balance, vibrato, filters, UI and score ending/decay policies are unchanged.
+
+Original fixtures cover first-group values16..127 and low wrapped0/1/10/127,
+32/35-bit boundaries, Mobile/MA7/packed Mobile, duration/gate/Exclusive/MA7
+meta/setup lengths, prior definitions, prefix and other-track recovery, reinit,
+seek/block invariance. Legal huge clocks are compared with independent10ms
+tick arithmetic at8kHz using only bounded audio prefixes, not long renders.
+Frozen post-beta.5 MA7-pan source fails overflow/recovery probes; the same
+valid-boundary suite passes before and after the repair. Bounded Astra review
+found no serious issue. No private media or proprietary synthesis data added.
+
+Final dedicated/full audio/security suites pass.382 first10s COMPLETE reports
+and eight full original reports are exactly unchanged from frozen MA7-pan
+source, across every field with no whitelist. The eight originals finish
+naturally. This corpus has no audio affected by the repaired overflow path;
+no listening or perceptual improvement is inferred from unchanged hashes.
+Verified native source/test/license snapshot and reports are saved locally
+in OneDrive. No Android build/lint/ABI check or git publication in this batch.
+
+## Pending native batch after beta.5: MA7 silent bank and recorded-Audio pan
+
+Source changes only; no new APK or Android lint/ABI result in this batch.
+Installable DEV remains1.6.3-beta.5/code63/cache r42. Before the next APK,
+increment the DEV version, versionCode and conversion cache revision together.
+Public1.6.2 and all previous local repairs remain unchanged.
+
+Manufacturer MA7 guideline1.60 pp22 and40 were extracted and visually checked.
+SP-MIDI bank MSB121/LSB6 is silent for MA7 notes, including embedded FM/WT
+and substitutes. Preserve the existing allocation/gate policy; later gain
+changes cannot revive these notes, and switching bank cannot silence an
+already-held ordinary note. Legacy source events keep their previous behavior.
+
+Exact native Exclusive body `43 79 08 7F 0B ID CL Data` controls recorded
+MA7 Audio, not WT instruments, FM, ATR or legacy recorded Audio. ID0..31 maps
+to Mwa1..32 within the source MTR. CL0 applies constant-power pan0..127; CL1
+clears ALL previous wave overrides in that MTR and restores current channel
+pan; CL2 disables pan for the selected wave, giving unity L/R, not a centered
+-3dB position. Setup, future notes, live voices and seek are covered. Slots
+stolen by legacy sources cannot retain the native-source marker. Rendering
+uses preallocated state and performs no new map insertion. Malformed known
+messages preserve prior state with a timed inert event; event limits remain
+bounded. Do not infer extended payloads or other native wire opcodes.
+
+Original synthetic fixtures cover all32 IDs, all128 pan values, exact endpoints,
+unity Panoff, CL1 all-clear, live channel-pan interaction, source scope, same-tick
+order, seek/reinit/block invariance, invalid fields/lengths,400001-command
+resource flood and legacy slot reuse. Frozen beta.5 fails bank/pan/live/invalid
+negative probes. Dedicated/full audio/security suites pass.382 first10s complete
+reports and eight complete originals are exact against frozen beta.5; all
+eight finish naturally. No perceptual gain is inferred for unaffected files.
+
+Known limitation: multiple MA7 MTRs still share the existing global channel
+association (last decoded MTR wins). This batch does not fix that pre-existing
+association or claim hardware-faithful multi-MTR playback. Native0x20/0x22
+remain unsupported: static converter inspection did not prove their wire
+semantics. No proprietary ROM/DLL contents, guessed PEG/KSR/KSL laws,
+song-specific balance, timbre, vibrato, mixer, filter or UI changes are added.
+Verified source and reports are saved locally in OneDrive; no git publication.
+
+## Local DEV 1.6.3-beta.5: MA7 mute, invalid data and truncated VLQs
+
+Local candidate only: code63/cache r42; public1.6.2 unchanged. Batch these
+generic decoding repairs before one APK build. Manufacturer MA7 guideline1.60
+pp22,24-27,33 were extracted and fully visually inspected; no ROM content is
+bundled and no guessed timbre, KSR/KSL/PEG or fixed-frequency law is introduced.
+
+- MA7 Velocity1 is exact mute, for explicit and remembered velocity. Tag the
+  decoded event itself, not the channel: overlapping legacy tracks keep their
+  prior squared Velocity1 gain. FM, embedded WT and missing-ROM/FM substitutes
+  retain base velocity0, so later live Volume/Expression cannot revive them.
+  Retaining the existing allocation/gate policy is a compatibility choice,
+  not a claim about hardware resource allocation. Velocity0 handling and the
+  ordinary2..127 curve are unchanged; no SMF NoteOff grammar is inferred.
+- MA7 known 7-bit note/velocity/program/bend/controller fields128..255 are
+  malformed, not wrapped valid values. Consume their validated fixed width,
+  audit the raw data, schedule inert timed NOP, preserve prior live state and
+  remembered velocity, and continue with following valid events. Invalid gate
+  length stops the track before any note/running-state mutation. Keys115..127
+  keep compatibility; the authoring tool's normal-key114 ceiling is not guessed
+  to be a compact runtime restriction. Legacy controller decoding is unchanged.
+- Unterminated Mobile/MA7 Duration/Gate/Exclusive/meta/setup VLQs stop their
+  current stream and expose incomplete coverage, rather than synthesizing a
+  false note from a partial gate or feeding an empty fabricated Exclusive.
+  Preserve preceding normal events and other tracks. Accepted terminal
+  five-byte VLQs (including leading zeros) retain their previous meaning.
+
+Original fixtures cover both MA7 channel banks, FM/WT/ROM-fallback mute and
+live gain, allocation/gates, legacy/mixed scope, all128 high data bytes for
+known fields, inert timing and prior running velocity, audible patch oracle,
+partial fields, valid key boundaries, truncated1/5-byte lengths and valid
+five-byte equivalents, prefix/other-track recovery, seek and block invariance.
+Frozenbeta.4 fails new velocity/data/VLQ modes independently. Dedicated/full
+audio/security suites pass. All382 first10s complete reports are exactly
+unchanged, including5 HandyPhone,316 Mobile,61 MA7; six prior problem originals
+and the ATR and HPS modulation originals retain exact full reports and natural
+endings. This corpus has no output affected by these corner cases; no listening
+or perceptual gain is inferred from unchanged hashes. Normal playback UI,
+mascot and FM core remain unchanged. One offline lint/assembleDebug build;
+zero errors/four existing warnings,3ABIs and existing debug v2 signer verified.
+Local OneDrive DEV delivery only; no git publish.
+
+## Local DEV 1.6.3-beta.4: HandyPhone reserved controls and known modulation
+
+Local candidate only: code62/cache r41; public1.6.2 unchanged. One APK build
+after a bundle of controller repairs and independent synthetic/corpus checks.
+Manufacturer SMAF3.05 pp32-37 were extracted and fully visually inspected.
+
+- Standard Program/Bend/Volume/Pan/Expression128..255 are reserved, not masked
+  low7-bit values or extended bends. Keep prior settings; do not wrap to mute,
+  another patch, another stereo position or out-of-range pitch. Bank retains
+  its full byte, including the valid bit7 drum-bank marker.
+- Octave Shift0,1..4,0x81..0x84 remain absolute valid shifts; all other values
+  retain the previous shift, not an invented reset to zero. Explicit0 still
+  resets, repeated valid commands do not add octaves. Pitch base+36 unchanged.
+- Short Expression/Bend/Modulation0/15 are reserved. Channel0 short-expression
+  zero shares the existing extended/EOS grammar and stays in that path. Valid
+  short Expression1..14 and Bend1..14 keep their existing specification tables.
+- Known standard HPS Modulation is parsed but physically unapplied, not an
+  unsupported byte grammar. Schedule inert ScoreNop to retain its authored time.
+  Reserved fixed-width commands retain time the same way. Short Modulation
+  also uses this inert event, never MA7's different wheel law on a deliberately
+  colliding mixed-format channel. No guessed HPS vibrato curve is introduced.
+
+Original binary score fixtures test every reserved standard byte, every invalid
+octave with all8 nonzero valid prior shifts, all256 Bank bytes, all channels /
+reserved short values, all14 Expression/Bend table entries, explicit/repeated
+octave reset, live commands, EOS ambiguity, source-free notes, block invariance
+and seek. Independent terminal-timeline oracle uses a synthetic fast-release
+WT ending before a1000ms control; the silent endpoint is retained. Mixed FM/WT
+fixtures prove their intrinsic vibrato actually responds to a real MA7 wheel,
+then assert that HPS modulation cannot trigger it. Test fixtures themselves use
+legal HPS two-byte lengths; no private song/ROM data is included.
+
+Frozenbeta.3 fails new long/octave/short/modulation modes independently. Final
+dedicated/full audio/security suites pass. Fresh382 first10s fingerprints,
+duration, peaks and all runtime note/fallback/steal/tail metrics are exact.
+381 reports are exact across every field. The only differences are two counters
+on one HPS score: three standard Modulation instructions move from unsupported
+to unapplied. Independent whole-score group audit verifies the same raw values,
+times, tracks/channels/counts, with no coverage loss. This is diagnostic clarity,
+not proof that their physical vibrato is now emulated. That original's full
+audio/timing/note report is also exact and it finishes naturally.
+
+Six prior problem originals and the ATR-bearing original retain exact full
+reports/natural endings. No manufacturer listening comparison or perceptual
+improvement is claimed for these unchanged files. FM core, UI, mascot and main
+playback control hashes remain unchanged; no song-specific gain/vibrato patch,
+new mixer law, filter, limiter, pitch range or timbre retuning. Android offline
+lint/assembleDebug pass, zero errors/four existing warnings,3ABIs and verified
+existing debug v2 signer. Local OneDrive DEV delivery only; no git publish.
+
+## Local DEV 1.6.3-beta.3: ATR Pan and strict HPS lengths
+
+Local candidate only: code61/cache r40; public1.6.2 remains unchanged. Batch
+three fixes and their independent regressions before one DEV APK build.
+Manufacturer SMAF3.05 pp29,31,51,53,55 were read and visually checked.
+
+- Explicit ATR Pan0..127 uses the recommended constant-power cosine/sine law
+  (p53), with exact opposite-side silence at endpoints. Track/local-channel
+  coefficients affect both live and future ATR voices, not score/FM/WT or Mwa.
+  Pan and the existing Volume/Expression product are independent; repeated
+  commands do not compound gain. Reserved128..255 retain the prior Pan.
+  Unspecified Pan keeps the prior unity L/R compatibility default, rather than
+  silently recalibrating existing recordings. An explicit center value uses
+  the documented law without makeup gain, so it differs from that default.
+- HPS Duration/GateTime/Exclusive length requires a one-byte value or exactly
+  two bytes with the second MSB zero (p29). Missing/invalid continuation stops
+  that track and records malformed/incomplete coverage. No guessed Duration,
+  GateTime or fake NoteOn; previously valid events and other tracks remain.
+  Valid127/128/16511 boundaries and all Mobile decoding are unchanged.
+- Only FF00 and FFF0 have defined ATR widths (p55). Other FF subopcodes are
+  reserved: record incomplete coverage and stop that sequence, rather than
+  guessing a MIDI-meta payload size. This is not EOS; valid prior sources keep
+  their authored gates/natural ends. Retain existing HPS score meta compatibility.
+
+Original fixtures cover every Pan value/reserved byte at8/44.1/48kHz, exact
+endpoints, quiet independent stereo gain oracles (1e-7 roundoff/bounded filter
+drain), live movement and Volume/Expression interaction, repeated commands,
+track/channel/WT-slot isolation, block invariance and seek/reinit. Binary ATR
+and HPS score fixtures cover wide-length boundaries, malformed gate/duration/
+exclusive/setup, valid-prefix preservation and other-track continuation.
+Unknown-FF fixtures verify no fake later trigger and no automatic EOS mute.
+The frozen beta.2 engine fails each of the three new test modes; the candidate
+dedicated/full audio/security suites pass. No private music is embedded.
+
+No timbre, DSP/filter/limiter, FM core, UI, mascot, per-song balance or vibrato
+retuning. This remains partial ATR support: pitch bend, modulation, device
+effects, other codecs and unverified manufacturer synthesis are not claimed.
+
+Fresh same-compiler44100Hz first10s probes:382/382 pass, all382 reports exact
+across every field (HPS5/Mobile316/MA7 61), including stereo float fingerprints.
+The six prior reported originals also retain exact full reports and all end
+naturally. The ATR-bearing original retains its exact full report (42.993s,
+peak0.609, hash4c22f2729a6a72d0). These private files do not exercise a newly
+audible Pan change; independent fixtures demonstrate that fix. No listening
+comparison or manufacturer-bit-exact sound is claimed.
+
+Offline Android lint/assembleDebug pass: zero errors/four existing warnings,
+three ABIs and verified existing debug v2 signer. Normal UI/orange DEV identity
+retained. Local OneDrive DEV delivery only, no public source/release mutation.
+
+## Local DEV 1.6.3-beta.2: batched ATR stream/control improvements
+
+Local candidate only: code60/cache r39; public1.6.2 remains unchanged. At the
+user's request, batch changes and validation before a single DEV APK build.
+
+- Explicit ATR EOS now mutes that source track at sequence time, as recommended
+  (not mandated) by SMAF3.05 p51. It stops all of that track's overlapping local
+  channels, not other ATR tracks, score WT/FM, or recorded Mwa Audio. Keep shared
+  output filter history. Stop decoding after EOS; absent EOS retains GateTime /
+  natural-end policy, not an invented automatic EOF mute. Early EOS also bounds
+  that track's safety contribution when an unrelated held voice remains.
+- Timed ATR NOPs after a valid trigger retain their authored timeline, even when
+  samples end earlier. A stream containing only NOPs/controllers/EOS, or only
+  missing wave references, cannot manufacture successful playback.
+- Authored ATR Volume and standard/short Expression update both live and future
+  voices using the recommended squared gain `(value/127)^2` (pp53-54). Separate
+  track/local-channel state prevents control leakage into score channels120-123.
+  Recompute the product of gains; repeat commands do not accumulate attenuation.
+  Short Expression1 means mute;2-14 map to31,39,...127. Reserved short0/15 and
+  standard128-255 retain the previous gain. Initial unity gain remains the prior
+  compatibility policy; do not infer an undocumented initial Volume calibration.
+- Unsupported ATR pitch/pan/modulation and reserved score-only commands do not
+  mutate score state. Audit them accurately and retain time when appropriate.
+  ATR exclusive messages are device parameters, not MTR instrument definitions;
+  they cannot activate/replace score voices. Device-specific effects remain
+  unapplied. No new pan law, pitch range, timbre, mixer/EQ or song-specific patch.
+
+Original stream tests cover exact truncated-source EOS at8/44.1/48kHz, timeline /
+track / slot isolation, simultaneous events, later EOS suffix, seek/init reset,
+NOP silence, long-source/held-WT horizon, and missing-source rejection. Quiet
+sample-domain gain oracles allow only1e-7 floating roundoff and bounded filter
+drain; live mute retains exact filter history. Test all short Expression values,
+reserved controls, new/repeated/live gains and deliberate score channel120
+collision. ATR exclusive isolation uses an independently parsed valid WT patch.
+Old header/controller/container fixtures that appended immediate EOS but expected
+an audible one-shot now omit explicit EOS; their original functional assertions
+are retained. Dedicated tests replace that incorrect EOS-ignoring assumption.
+
+All bundled synthetic/audio/security tests pass. In382 private first10s probes,
+every audio fingerprint/probed duration is unchanged and all381 non-ATR reports
+are exact. Six prior reported songs have exact full reports/natural endings.
+The one ATR-bearing song also has exact full audio (42.993s); its upper-bound
+duration estimate changes from52.972s to52.980s because of retained NOP timing,
+not added audible output. Those private files do not demonstrate the new gain /
+EOS cutoff behavior; the independent original fixtures do. No human listening
+or manufacturer-exact synthesis is claimed.
+
+## Local DEV 1.6.3-beta.1: ATR authored GateTime
+
+Local candidate only: code59/cache r38; public1.6.2 is unchanged. ATR stream
+Wave messages now stop at GateTime * the track's own G clock (SMAF3.05 p51).
+Previously the value was read but discarded, so recordings always ran to EOF.
+Each trigger has a separate ATR gate identity: overlapping identical wave IDs,
+different ATR banks, stolen/reused slots and score CC120/121/123 cannot stop
+the wrong source. Score key-off identity remains separate from ATR identity.
+
+Stop the source at its gate, retaining the existing shared filter/limiter tail;
+do not invent a release envelope, tune an instrument, or change song balance.
+ATR natural EOF can still finish first. Only a suffix consisting entirely of
+generated ATR gates may be ignored once ALL voices and filter history drain.
+Later authored triggers/controllers are never skipped. The safety horizon uses
+the lesser of gate and decoded source length for ATR, not a distant orphan gate
+that could extend an unrelated held FM/WT voice to the600s global ceiling.
+The estimated endpoint can still exceed actual playback after slot stealing.
+
+Original synthetic tests use independently truncated recordings as exact
+oracles at8/44.1/48kHz, including distinct D/G clocks, two-byte HPS gate lengths,
+same-channel overlap, track-local banks, ATR/WT slot reuse, seek, block sizes,
+zero/reserved gates, orphan gates with later events, mixed held WT safety and
+genuine12s recordings. Old controller-isolation fixtures now explicitly hold
+their ATR recording for2s through the controller, rather than relying on an
+ignored1ms gate; functional assertions are unchanged.
+
+Candidate gate/audio/security tests and Android lint pass (0 errors/4 warnings).
+Compared with frozen public1.6.2, all382 first10s reports are exact, and the six
+previously reported songs plus the one ATR-bearing song have exact full-render
+reports and natural endings. The existing ATR source uses gates that do not
+truncate its samples; the newly corrected cutoff is demonstrated by original
+synthetic fixtures, not a claimed audible improvement of those private songs.
+
+FM/WT timbre, pitch, gain, modulation, EQ and player UI are unchanged. This is
+not full ATR emulation: EOS muting, ATR-specific controller semantics and other
+unsupported codecs remain separate work. No manufacturer-exact listening or
+subjective improvement for every song is claimed.
+
 ## Public 1.6.2 scope
 
 Version1.6.2 packages the accumulated1.6.2 development corrections through the
@@ -1270,3 +2456,27 @@ audible output, seek and block invariance are checked. The beta21 engine fails
 the new oracle; dedicated/audio/security tests pass after repair. Fresh382-file
 first10sec fingerprints remain exact to beta21 (HPS5/Mobile316/MA7 61). The six
 previously reported originals also render fully/exact and end naturally.
+### Consolidated DEV beta.10: output fidelity and progressive coordination
+
+DEV code68/cache r47 integrates the previously source-only muted-end-tail,
+nearest-PCM16, native/progressive representable-quiet-output and native WAV I/O
+failure batches. No per-song retuning, gain normalization or dither is added.
+The PCM16 quantization improvement is bounded at the output conversion stage;
+it is not a claim of audible improvement or manufacturer-exact instruments.
+
+Progressive playback now exits paused/drain/zero-write waits after a producer
+failure. Seek requests are claimed under the same lock that publishes them,
+before slow track recreation, preserving newer and identical-destination
+requests. Position snapshots and replacement publication use that lock; pending
+seeks also veto drain completion before completion is committed. Tracks are
+released once when replacement construction fails. Restarting after an already
+committed completion is outside this patch's coverage. No samples, decoder,
+effects, timelines or playback UI are changed by the coordination patch.
+
+Actual Java control flow runs against host-only deterministic I/O doubles, not
+an Android device: old source fails the paused, drain, zero-write, replacement
+seek and drain-head-query assertions; candidate passes these plus whole-PCM
+ordinary/partial-write/pause-resume/paused-seek tests. The separate render-only
+60-case WAV oracle and four cleanup tests remain valid. Device audio behavior,
+latency, vendor ROM timbres and perceptual quality require separate validation.
+Both kinds of doubles live only under tools, excluded from Android source sets.

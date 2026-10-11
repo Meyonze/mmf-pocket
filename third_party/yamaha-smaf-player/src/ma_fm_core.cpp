@@ -544,8 +544,11 @@ float FmVoice::modOp_(int i, double extModCycles) {
         // feedback in cycles, averaged over the last two outputs (OPL trick to
         // damp the self-oscillation), scaled gently by the 0..7 amount.
         double avg = (fbMem_[i][0] + fbMem_[i][1]) * 0.5;
-        // Related YMF825 reference uses exponential feedback. MA hardware
-        // calibration is unverified; only modern trial voices opt into it.
+        // MA5 manual1.33 p63 nominal radians converted to cycles:
+        // 0,pi/16,pi/8,pi/4,pi/2,pi,2pi,4pi. This corroborates the modern
+        // table, not this two-sample averaging or physical output calibration.
+        // Keep the existing legacy/modern profile scope; no carrier exclusion:
+        // p62's additive diagrams retain direct-output feedback operators.
         static constexpr double modernFeedback[8]={0,1.0/32,1.0/16,1.0/8,1.0/4,1.0/2,1,2};
         fbc = avg * (patch_.modernTimbre ? modernFeedback[opFb_[i]&7]
                                       : double(opFb_[i])/24.0);

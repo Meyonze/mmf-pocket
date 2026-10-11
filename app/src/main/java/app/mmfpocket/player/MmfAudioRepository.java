@@ -22,7 +22,7 @@ final class MmfAudioRepository {
     // Bump whenever synthesis, timing or post-processing changes so an older
     // WAV cannot hide a renderer fix behind a valid content hash.
     // 1.6.2: faithful event/source handling and bounded chunk recovery.
-    private static final String RENDER_CACHE_VERSION = "r37";
+    private static final String RENDER_CACHE_VERSION = "r47";
     private static final int MAX_MMF_BYTES = 16 * 1024 * 1024;
     private static final long MAX_CACHE_BYTES = 512L * 1024 * 1024;
     private static final long STALE_PARTIAL_AGE_MS = 24L * 60 * 60 * 1000;

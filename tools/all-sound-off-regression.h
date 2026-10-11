@@ -97,7 +97,9 @@ void testAtrAndAudit() {
     control.sequenceData={20,0xb8,120,0,100,0xb8,10,64,0,0xff,0x2f,0};
     file.tracks.push_back(control);
     TrackChunk atr;atr.isAudioTrack=true;atr.trackNumber=0;atr.formatType=0;
-    atr.durationTimeBase=0x10;atr.sequenceData={0,1,1,120,0,0,0};
+    // Source remains alive at CC120; a1ms gate would no longer test isolation.
+    atr.durationTimeBase=atr.gateTimeBase=0x10;
+    atr.sequenceData={0,1,0x80,72}; // source-isolation fixture, no early EOS
     WaveData wave;wave.number=1;wave.adpcm=false;wave.bitsPerSample=8;wave.samplingRate=8000;
     for(int i=0;i<16000;++i)wave.data.push_back(uint8_t(128+60*std::sin(i*0.1)));
     atr.waves.push_back(wave);file.tracks.push_back(atr);
@@ -109,12 +111,14 @@ void testAtrAndAudit() {
     auto audit=fixture();audit.tracks[0].sequenceData={0,0xb0,120,0,0,0xb0,120,1,0,0xb0,120,128,0,0xff,0x2f,0};
     check(player.init(audit,8000),"CC120 audit initializes");
     using D=ScoreAudit::Domain;using S=ScoreAudit::Status;
-    bool routed=false,rejected=false;
+    bool routed=false,rejected=false,malformed=false;
     for(const auto& g:player.scoreAudit().groups)if(g.domain==D::Controller && g.opcode==120) {
         if(g.status==S::Routed)routed=g.count==1 && g.minValue==0 && g.maxValue==0;
-        if(g.status==S::Unapplied)rejected=g.count==2 && g.minValue==1 && g.maxValue==128;
+        if(g.status==S::Unapplied)rejected=g.count==1 && g.minValue==1 && g.maxValue==1;
+        if(g.status==S::Malformed)malformed=g.count==1 && g.minValue==128 && g.maxValue==128;
     }
-    check(routed && rejected,"CC120 audit distinguishes valid commands from rejected values");
+    check(routed && rejected && malformed && !player.scoreAudit().scanComplete,
+          "CC120 audit distinguishes valid stop, semantic nonzero and malformed7bit values");
 }
 }
 void checkAllSoundOff() {

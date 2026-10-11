@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.6.3 - 2026-10-12
+
+- Improve recorded score-Audio and ATR sample-rate conversion with interpolation
+  and anti-alias filtering; preserve authored pitch, gain and event timing.
+- Honor supported ATR gates, explicit end-of-sequence, volume, expression and
+  pan with track-local state, without leaking controls into score instruments.
+- Correct HandyPhone note retriggering, pitch/control field validation and
+  malformed/zero-gate recovery; preserve valid following notes and prior state.
+- Correct MA-7 silent velocity/bank handling and recorded-Audio origin/pan;
+  preserve score rests, terminal event clocks and Mobile running velocity.
+- Bound waveform/container reads and stop safely on unsupported-width or
+  truncated events instead of guessing following notes or sample definitions.
+- Improve PCM16 output rounding; retain representable quiet audio and detect
+  WAV storage failures. Finish provably muted end tails without cutting off
+  live sources or later authored events.
+- Fix progressive playback failure cleanup and overlapping seek requests,
+  including seeks during track replacement and playback-end draining.
+- Expand original synthetic regression and sanitizer CI coverage. Refresh
+  converted audio automatically; retain the player UI, Mafu and privacy policy.
+- Hardware ROM timbres, device effects and several MA-7 synthesis/codec features
+  remain incomplete. No per-song balance correction or exact emulation claim.
+
 ## 1.6.2 - 2026-10-08
 
 - Improve parsed MA-3/5 custom FM synthesis while preserving the separate

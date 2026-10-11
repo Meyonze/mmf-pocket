@@ -57,7 +57,7 @@ void checkScoreAudit() {
           p.scoreAudit().scanComplete,"reserved widths are intentional skips, not failures");
     for(const auto& tail:std::vector<std::vector<uint8_t>>{
             {0,0xb0,7},{0,0x90,60},{0,0xe0,0},{0,0xf0,10,0x43},
-            {0,0xff,1,10,0},{0x80},{0,0x90,60,100,0x80},
+            {0,0xff,0x2f},{0x80},{0,0x90,60,100,0x80},
             {0x80,0x80,0x80,0x80,0x80}}) {
         auto broken=fixture();broken.tracks[0].sequenceData=tail;
         p.init(broken,8000);
@@ -82,8 +82,8 @@ void checkScoreAudit() {
                                         {0,0xb0,77,64,0,0xb0,1,64});
     check(renderAll(original)==renderAll(ignored),"inventory does not apply previously ignored controls");
     auto hps=fixture(0);hps.tracks[0].sequenceData={0,0,0x23,0,0,0x33,10,0,0x21,10,0,0,0,0};
-    check(p.init(hps,8000) && p.scoreAudit().totals[size_t(S::Unapplied)]==1 &&
-          p.scoreAudit().totals[size_t(S::Unsupported)]==1,"HPS short and long modulation gaps are explicit");
+    check(p.init(hps,8000) && p.scoreAudit().totals[size_t(S::Unapplied)]==2 &&
+          p.scoreAudit().totals[size_t(S::Unsupported)]==0,"HPS short and long modulation gaps are parsed but explicitly unapplied");
 
     // The dormant fixed block/FNUM must not be confused with enabled fixed-F.
     std::vector<uint8_t> voice{0x43,0x79,8,0x7f,0x21,124,1,2,0,127,0,0,1,0};

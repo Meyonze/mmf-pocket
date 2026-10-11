@@ -45,6 +45,7 @@ public:
     void  seekToStart();
     // Upper bound including release safety allowance, not exact WAV duration.
     uint64_t totalSamples() const { return endSample_; }
+    // Estimated event/ATR-source endpoint; slot stealing may finish earlier.
     uint64_t scoreEndSamples() const { return scoreEndSample_; }
     // Coarse note-on activity used only for the UI mascot: 0 slow, 1 normal, 2 fast.
     int motionPace() const { return motionPace_; }
@@ -69,17 +70,22 @@ private:
     // ── the decoded event stream ────────────────────────────────────────────
     struct Ev {
         uint64_t sample;
-        enum T : uint8_t { NoteOn, NoteOff, Program, BankMsb, BankLsb,
+        enum T : uint8_t { NoteOn, Ma7NoteOn, NoteOff, Program, BankMsb, BankLsb,
                            Volume, Pan, Expression, PitchBend, Modulation, PitchBendRange,
-                           WaveOn, RpnMsb, RpnLsb, RpnData, NrpnSelect, Hold, VoiceActivation, WaveActivation,
-                           AllNotesOff, AllSoundOff, ResetControllers } type;
+                           WaveOn, WaveOff, AtrEnd, AtrNop, AtrVolume, AtrExpression, AtrPan, ScoreNop,
+                           RpnMsb, RpnLsb, RpnData, NrpnSelect, Hold, VoiceActivation, WaveActivation,
+                           AllNotesOff, AllSoundOff, ResetControllers, Ma7AudioPan } type;
         uint16_t ch;
         int16_t  a;   // note / pc / cc-value / bend / wave number
         int16_t  b;   // velocity
         uint64_t noteId = 0; // paired gate identity, not pitch or pool slot
+        int sourceTrack = -1; // MA7 note's originating MTR, not channel state
+        bool handyPhoneNote = false; // HPS FM retrigger policy belongs to a note
     };
     std::vector<Ev> events_;
     size_t nextEvent_ = 0;
+    size_t nonAtrGateEventEnd_ = 0; // only generated ATR gates may follow this index
+    uint64_t atrPlaybackEndSample_ = 0; // bounded by both gate and source length
     uint64_t nextNoteId_ = 1;
 
     // ── voice table + per-channel runtime state ─────────────────────────────
@@ -107,6 +113,14 @@ private:
         int   lastVel = 64;
     };
     std::array<Chan, 128> chans_{};
+    struct AtrChan {
+        float volume = 1.0f, expression = 1.0f;
+        // Compatibility default until an explicit, valid ATR Pan command.
+        float panLeft = 1.0f, panRight = 1.0f;
+    };
+    // Independent of score channels120..123. Initial unity gain is retained;
+    // only the documented authored Volume/Expression curve is applied.
+    std::map<int, std::array<AtrChan, 4>> atrChans_;
 
     // ── fm voice pool ────────────────────────────────────────────────────────
     static constexpr int kPoolSize = 32;
@@ -118,6 +132,7 @@ private:
     std::array<double,kPoolSize> poolBaseFreq_{}; // unbent pitch incl. original ROM substitute tuning
     unsigned fmSteal_ = 0, pcmSteal_ = 0;
     int activeVoices_() const;
+    bool hasOutputVoices_() const;
 
     // ── pcm (sampled) voice pool + the decoded wave bank ──────────────────────
     // drum kits and sampled instruments play these instead of fm. the bank holds
@@ -145,6 +160,9 @@ private:
         float recentLevel = 0.0f;
         int channel = -1, keyNote = -1;
         uint64_t noteId = 0;
+        uint64_t atrGateId = 0; // independent of score NoteOff/AllNotesOff identity
+        int atrTrack = -1;
+        int audioSourceTrack = -1; // MA7 recorded Audio only, never WT/ATR/legacy
         bool active = false;
         bool streamAudio = false;
         uint64_t startedAt = 0;
@@ -154,6 +172,12 @@ private:
     std::vector<PcmSample> waveBank_;
     std::map<int, std::vector<PcmSample>> scoreWaveBanks_; // Mwa IDs local to each MTR
     std::map<int, std::vector<PcmSample>> audioWaveBanks_; // Awa IDs local to each ATR
+    struct AudioPanState {
+        uint8_t mode = 1; //1 channel pan,0 per-wave pan,2 unity L/R (Panoff)
+        uint8_t value = 64;
+    };
+    std::map<int, std::array<AudioPanState,32>> ma7AudioPan_; // Mwa source namespace
+    void applyAudioPan_(PcmVoice& voice, const AudioPanState& state);
     std::array<PcmVoice, 2> audioPool_{}; // Audio hardware has two slots, separate from WT
     // Voice-wave RAM is a different namespace from Mwa/Awa stream samples.
     std::array<PcmSample, 128> voiceWaveBank_{};
@@ -172,7 +196,8 @@ private:
                           size_t maxDecodedBytes);
     void addTimedWave_(const uint8_t* p, size_t n, uint64_t sample);
     int allocatePcmSlot_();
-    void startAudio_(int ch, int note, float velocity, uint64_t noteId);
+    void startAudio_(int ch, int note, float velocity, uint64_t noteId, bool ma7,
+                     bool modern, int sourceTrack);
     const ParsedVoice* resolveVoice_(int ch, int note) const;
     bool startPcm_(int ch, int rawNote, int soundingNote, const ParsedVoice& v,
                    const Chan& c, float noteVelocity, uint64_t noteId);
@@ -207,6 +232,7 @@ private:
     void collectVoices_(const SmafFile& file);
     void addExclusivesFrom_(const std::vector<uint8_t>& setup, bool mobile);
     void addTimedVoice_(const uint8_t* p, size_t n, uint64_t sample);
+    bool routeMa7Exclusive_(const uint8_t* p, size_t n, uint64_t sample, bool setup = false);
     void decodeTrack_(const TrackChunk& t, int baseChannel);
     // atrWaveMode: audio tracks use their own six-bit wave IDs and local bank;
     // wave messages become WaveOn triggers, never pitched score notes.

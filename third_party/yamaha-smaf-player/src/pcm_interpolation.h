@@ -140,7 +140,7 @@ inline float interpolatePcm(const int16_t* pcm, size_t end, size_t index,
     const float s1 = pcm[next] * (1.0f / 32768.0f);
     const float linear = s0 + (s1 - s0) * fraction;
     if (linearOutput) *linearOutput = linear;
-    // Legacy/recorded-audio profiles and the existing <=1 path remain exact.
+    // Profiles not opting in remain exactly linear; unity is exact too.
     if (!modern || !std::isfinite(advance)) return linear;
     if (advance > 1.0) return downsamplePcm(pcm, end, index, fraction,
         loop, loopStart, loopTravel, advance, linear);

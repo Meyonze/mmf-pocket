@@ -54,6 +54,36 @@ jobs:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - name: Set up JDK 17 for JNI bridge host tests
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Build and run PCM16 output oracle
+        run: |
+          c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer tools/pcm16-output-test.cpp -o pcm16-output-test
+          ./pcm16-output-test
+
+      - name: Build and run actual WAV and JNI bridge host tests
+        run: |
+          mkdir -p build/pcm16-bridge-synthetic
+          c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -I"$JAVA_HOME/include" -I"$JAVA_HOME/include/linux" -Ithird_party/yamaha-smaf-player/src tools/pcm16-bridge-test.cpp third_party/yamaha-smaf-player/src/smaf_file.cpp third_party/yamaha-smaf-player/src/ma_fm_core.cpp third_party/yamaha-smaf-player/src/smaf_voice.cpp third_party/yamaha-smaf-player/src/ma_player.cpp -o pcm16-bridge-test
+          ./pcm16-bridge-test build/pcm16-bridge-synthetic
+
+      - name: Build and run progressive render-cache host tests
+        run: |
+          mkdir -p build/progressive-render-host
+          javac -encoding UTF-8 --release 17 -Xlint:all -d build/progressive-render-host app/src/main/java/app/mmfpocket/player/ProgressivePlayback.java tools/ProgressiveRenderTest.java tools/progressive-render-stubs/android/media/*.java tools/progressive-render-stubs/app/mmfpocket/player/NativeMmfRenderer.java
+          java -cp build/progressive-render-host app.mmfpocket.player.ProgressiveRenderTest build/progressive-render-synthetic
+
+      # Host doubles exercise coordination only, not Android audio behavior.
+      - name: Build and run progressive playback coordination host tests
+        run: |
+          mkdir -p build/progressive-playback-host
+          javac -encoding UTF-8 --release 17 -Xlint:all -d build/progressive-playback-host app/src/main/java/app/mmfpocket/player/ProgressivePlayback.java tools/ProgressivePlaybackTest.java tools/progressive-playback-stubs/android/media/*.java tools/progressive-playback-stubs/app/mmfpocket/player/NativeMmfRenderer.java
+          java -cp build/progressive-playback-host app.mmfpocket.player.ProgressivePlaybackTest build/progressive-playback-synthetic
+
       - name: Build sanitizer smoke test
         run: >-
           c++ -std=c++20 -O1 -g -fsanitize=address,undefined
@@ -73,3 +103,18 @@ jobs:
         run: |
           c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Ithird_party/yamaha-smaf-player/src tools/audio-regression.cpp third_party/yamaha-smaf-player/src/smaf_file.cpp third_party/yamaha-smaf-player/src/ma_fm_core.cpp third_party/yamaha-smaf-player/src/smaf_voice.cpp third_party/yamaha-smaf-player/src/ma_player.cpp -o audio-regression
           ./audio-regression
+
+      - name: Build and run recorded Audio resampling tests
+        run: |
+          c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Ithird_party/yamaha-smaf-player/src tools/recorded-resample-test.cpp third_party/yamaha-smaf-player/src/smaf_file.cpp third_party/yamaha-smaf-player/src/ma_fm_core.cpp third_party/yamaha-smaf-player/src/smaf_voice.cpp third_party/yamaha-smaf-player/src/ma_player.cpp -o recorded-resample-test
+          ./recorded-resample-test
+
+      - name: Build and run ATR resampling tests
+        run: |
+          c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Ithird_party/yamaha-smaf-player/src tools/atr-resample-test.cpp third_party/yamaha-smaf-player/src/smaf_file.cpp third_party/yamaha-smaf-player/src/ma_fm_core.cpp third_party/yamaha-smaf-player/src/smaf_voice.cpp third_party/yamaha-smaf-player/src/ma_player.cpp -o atr-resample-test
+          ./atr-resample-test
+
+      - name: Build and run scheduled tone inventory tests
+        run: |
+          c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Ithird_party/yamaha-smaf-player/src tools/tone-usage-audit.cpp third_party/yamaha-smaf-player/src/smaf_file.cpp third_party/yamaha-smaf-player/src/ma_fm_core.cpp third_party/yamaha-smaf-player/src/smaf_voice.cpp third_party/yamaha-smaf-player/src/ma_player.cpp -o tone-usage-audit
+          ./tone-usage-audit --self-test

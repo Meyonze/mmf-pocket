@@ -6,7 +6,7 @@ using namespace atrFormatRegression;
 
 Bytes audioBody() {
     Bytes body{0,0,1,0x10,0,0};
-    append(body,chunk("Atsq",{0,1,100,0,0,0,0}));
+    append(body,chunk("Atsq",{0,1,100})); // EOF, not an immediate EOS mute
     append(body,chunk("Awa0",source(),1));
     return body;
 }
@@ -70,7 +70,7 @@ void testTrackChunks() {
         assertEquivalent(chunk(track,changed),reference,"empty chunk at track end is bounded and harmless");
         if(audio) {
             changed=Bytes(original.begin(),original.begin()+header);
-            append(changed,chunk("Atsq",{0,1,100,0,0,0,0}));
+            append(changed,chunk("Atsq",{0,1,100}));
             append(changed,chunk("Awa0",{},2));
             append(changed,chunk("Awa0",source(),1));
             // Empty wave2 remains represented, but must not swallow wave1.

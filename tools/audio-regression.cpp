@@ -93,11 +93,16 @@ void addPcmFixture(SmafFile& file, int waveId = 1, uint8_t rr = 9) {
 // Transport-equivalence fixtures predate channel-pan calibration. The MA7
 // centered reference now has the explicit documented cosine/sine gains.
 // Only quiet independent-channel fixtures use this linear reference; not songs
-// with limiting. Sub-threshold natural filter-drain length may differ slightly.
+// with limiting. Authored endpoint rests and profile-dependent releases
+// may leave different silence lengths. Extra samples must stay below the
+// existing output-filter drain floor, not hide a delayed sounding note.
 bool matchesMa7Center(const std::vector<float>& actual, const std::vector<float>& legacy) {
     const double angle=1.5707963267948966*64.0/127.0;
     const float gains[2]={float(std::cos(angle)),float(std::sin(angle))};
-    if(actual.size()>legacy.size()+128 || legacy.size()>actual.size()+128)return false;
+    for(size_t i=std::min(actual.size(),legacy.size());i<std::max(actual.size(),legacy.size());++i) {
+        const float extra=i<actual.size()?actual[i]:legacy[i];
+        if(std::fabs(extra)>1e-7f)return false;
+    }
     const size_t count=std::max(actual.size(),legacy.size());
     for(size_t i=0;i<count;++i) {
         const float a=i<actual.size()?actual[i]:0;
@@ -722,7 +727,12 @@ void checkAudioStreams() {
     native.tracks[0].waves[0].data.clear();
     for(size_t i=0;i<base.tracks[0].waves[0].data.size();i+=2)
         native.tracks[0].waves[0].data.push_back(base.tracks[0].waves[0].data[i]);
-    check(samples==renderAll(native), "Audio native Fs resampling, not assumed 8kHz");
+    // A simple 2:1 source decimation is not an anti-alias oracle. Low-pass
+    // reconstruction now intentionally differs; independent pass/stop-band
+    // and native-rate tests live in recorded-resample-test.cpp.
+    const auto nativeSamples=renderAll(native);
+    check(samples!=nativeSamples && nativeSamples.size()==samples.size() &&
+          firstBlockPeak(native)>0.01f, "Audio native Fs conversion remains audible with unchanged gate timing");
     check(samples.size()<2000*2,"Audio gate cuts recorded sample before its natural end");
     // Neither volume, expression nor pitch bend changes the recorded Audio.
     auto controls=base;
@@ -1347,15 +1357,59 @@ void checkVoiceStealing() {
 #include "all-sound-off-regression.h"
 #include "reset-controllers-regression.h"
 #include "atr-format-regression.h"
+#include "atr-gate-regression.h"
+#include "atr-stream-regression.h"
+#include "atr-pan-regression.h"
+#include "hps-controls-regression.h"
 #include "empty-chunk-regression.h"
+#include "ma7-data-regression.h"
+#include "ma7-pan-regression-next.h"
+#include "score-length-regression.h"
+#include "score-nop-regression.h"
+#include "mobile-boundary-regression.h"
+#include "mobile-data-regression.h"
+#include "mobile-velocity-reset-regression.h"
+#include "mobile-meta-regression.h"
+#include "ma7-audio-source-regression.h"
+#include "hps-note-policy-regression.h"
+#include "mobile-eos-clock-regression.h"
+#include "hps-meta-regression.h"
+#include "hps-note-data-regression.h"
+#include "ma7-eos-clock-regression.h"
+#include "hps-zero-gate-regression.h"
+#include "fm-feedback-regression.h"
+#include "wave-boundary-regression.h"
+#include "muted-tail-regression.h"
 
 int main() {
+    mutedTailRegression::test();
+    checkWaveBoundaries();
+    checkFmFeedback();
+    checkHpsZeroGate();
+    checkMa7EosClock();
+    checkHpsNoteData();
+    checkHpsMeta();
+    checkMobileMeta();
+    checkMa7AudioSources();
+    checkHpsNotePolicy();
+    checkMobileEosClock();
+    checkMobileVelocityReset();
+    checkMobileData();
+    checkMobileBoundaries();
+    checkScoreNops();
+    checkScoreLengths();
+    checkMa7PanNext();
+    checkMa7Data();
     checkProtocolSequencing();
     checkPcmDefinitionValidation();
     checkChannelMode();
     checkAllSoundOff();
     checkResetControllers();
     checkAtrFormat();
+    checkAtrGates();
+    checkAtrStream();
+    checkAtrPan();
+    checkHpsControls();
     checkEmptyChunks();
     checkFmDcBlocker();
     checkScoreAudit();

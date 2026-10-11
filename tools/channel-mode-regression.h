@@ -114,12 +114,14 @@ void testAudit() {
     file.tracks[0].sequenceData={0,0xb0,123,0,0,0xb0,123,1,0,0xb0,123,128,0,0xff,0x2f,0};
     MaPlayer player;check(player.init(file,8000),"CC123 audit initializes");
     using D=ScoreAudit::Domain;using S=ScoreAudit::Status;
-    bool routed=false,invalid=false;
+    bool routed=false,invalid=false,malformed=false;
     for(const auto& g:player.scoreAudit().groups)if(g.domain==D::Controller && g.opcode==123) {
         if(g.status==S::Routed)routed=g.count==1 && g.minValue==0 && g.maxValue==0;
-        if(g.status==S::Unapplied)invalid=g.count==2 && g.minValue==1 && g.maxValue==128;
+        if(g.status==S::Unapplied)invalid=g.count==1 && g.minValue==1 && g.maxValue==1;
+        if(g.status==S::Malformed)malformed=g.count==1 && g.minValue==128 && g.maxValue==128;
     }
-    check(routed && invalid,"CC123 audit distinguishes scheduled zero from rejected values");
+    check(routed && invalid && malformed && !player.scoreAudit().scanComplete,
+          "CC123 audit distinguishes valid zero, semantic nonzero and malformed7bit values");
 }
 void testAtr() {
     auto file=fixture();
@@ -128,7 +130,9 @@ void testAtr() {
     control.sequenceData={20,0xb8,123,0,100,0xb8,10,64,0,0xff,0x2f,0};
     file.tracks.push_back(control);
     TrackChunk atr;atr.isAudioTrack=true;atr.trackNumber=0;atr.formatType=0;
-    atr.durationTimeBase=0x10;atr.sequenceData={0,1,1,120,0,0,0};
+    // Keep ATR sounding through the controller test using its authored gate.
+    atr.durationTimeBase=atr.gateTimeBase=0x10;
+    atr.sequenceData={0,1,0x80,72}; // no explicit early EOS mute
     WaveData wave;wave.number=1;wave.adpcm=false;wave.bitsPerSample=8;wave.samplingRate=8000;
     for(int i=0;i<16000;++i)wave.data.push_back(uint8_t(128+60*std::sin(i*0.1)));
     atr.waves.push_back(wave);file.tracks.push_back(atr);

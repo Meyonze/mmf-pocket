@@ -34,8 +34,10 @@ SmafFile stateFixture(bool pcm,int behavior,bool oracle) {
     reset(s,20,0,oracle);
     // Null selection must ignore Data Entry, preserving existing sensitivity.
     cc(s,0,0,6,2);cc(s,0,0,38,0);bend(s,5,0,96);
-    // Running velocity belongs to score decoding, not reset controller state.
-    s.insert(s.end(),{0,0x80,72,30});
+    // Independent explicit-velocity oracle for Mobile's p43 default64 reset.
+    // Ordinary controller writes alone do not reset remembered score velocity.
+    if(oracle)note(s,0,0,72,64,30);
+    else s.insert(s.end(),{0,0x80,72,30});
     // Reselect RPN0 without writing it; bend still uses 12 semitones+50cents.
     cc(s,5,0,101,0);cc(s,0,0,100,0);bend(s,0,0,80);
     cc(s,50,1,64,0);finish(s);
@@ -130,7 +132,10 @@ void testAudioAndAtr() {
     control.sequenceData={20,0xb8,121,0,100,0xb8,77,0,0,0xff,0x2f,0};
     file=fixture();file.tracks[0].sequenceData={0,0xff,0x2f,0};file.tracks.push_back(control);
     TrackChunk atr;atr.isAudioTrack=true;atr.trackNumber=0;atr.formatType=0;
-    atr.durationTimeBase=0x10;atr.sequenceData={0,1,1,120,0,0,0};atr.waves.push_back(wave);
+    // Keep this controller-isolation source alive across both timed controls:
+    // GateTime200 *10ms=2s (HPS encoding), rather than relying on ignored gates.
+    atr.durationTimeBase=atr.gateTimeBase=0x10;
+    atr.sequenceData={0,1,0x80,72};atr.waves.push_back(wave);
     file.tracks.push_back(atr);ref=file;ref.tracks[1].sequenceData[2]=77;
     check(renderAll(file)==renderAll(ref),"CC121 leaves independent ATR sources unchanged");
     MaPlayer player;check(player.init(file,8000),"CC121 ATR initializes");
@@ -141,12 +146,14 @@ void testAudit() {
     auto file=fixture();file.tracks[0].sequenceData={0,0xb0,121,0,0,0xb0,121,1,0,0xb0,121,128,0,0xff,0x2f,0};
     MaPlayer player;check(player.init(file,8000),"CC121 audit initializes");
     using D=ScoreAudit::Domain;using S=ScoreAudit::Status;
-    bool routed=false,rejected=false;
+    bool routed=false,rejected=false,malformed=false;
     for(const auto& g:player.scoreAudit().groups)if(g.domain==D::Controller && g.opcode==121) {
         if(g.status==S::Routed)routed=g.count==1 && g.minValue==0 && g.maxValue==0;
-        if(g.status==S::Unapplied)rejected=g.count==2 && g.minValue==1 && g.maxValue==128;
+        if(g.status==S::Unapplied)rejected=g.count==1 && g.minValue==1 && g.maxValue==1;
+        if(g.status==S::Malformed)malformed=g.count==1 && g.minValue==128 && g.maxValue==128;
     }
-    check(routed && rejected,"CC121 audit distinguishes implemented reset from invalid values");
+    check(routed && rejected && malformed && !player.scoreAudit().scanComplete,
+          "CC121 audit distinguishes valid reset, semantic nonzero and malformed7bit values");
 }
 }
 void checkResetControllers() {

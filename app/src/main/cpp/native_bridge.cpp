@@ -7,6 +7,7 @@
 
 #include "ma_player.h"
 #include "smaf_file.h"
+#include "pcm16_output.h"
 
 #include <algorithm>
 #include <array>
@@ -148,6 +149,60 @@ void writeHeader(std::ostream& stream, uint32_t dataBytes) {
     write32(stream, dataBytes);
 }
 
+std::string renderWavToStream(fxchain::smaf::MaPlayer& player,
+                              std::ostream& output, bool phoneSpeakerMode) {
+    writeHeader(output, 0);
+    if (!output.good()) return "一時音声ファイルの書き込みに失敗しました";
+
+    float samples[kBlockFrames * 2];
+    std::array<char, kBlockFrames * 4> pcmBytes{};
+    PhoneSpeakerFilter phoneSpeaker;
+    uint64_t framesWritten = 0;
+    bool hasPcmOutput = false;
+    while (true) {
+        int count = player.render(samples, kBlockFrames);
+        if (count <= 0) break;
+        if (phoneSpeakerMode) phoneSpeaker.process(samples, count);
+        for (int i = 0; i < count * 2; ++i) {
+            int16_t value;
+            if (!mmfpocket::audio::encodePcm16(samples[i], value))
+                return "非有限の音声データが生成されました";
+            hasPcmOutput = hasPcmOutput || value != 0;
+            uint16_t encoded = static_cast<uint16_t>(value);
+            pcmBytes[i * 2] = static_cast<char>(encoded & 0xff);
+            pcmBytes[i * 2 + 1] = static_cast<char>((encoded >> 8) & 0xff);
+        }
+        // One write per render block avoids millions of two-byte stream calls
+        // on long songs while preserving the exact little-endian PCM bytes.
+        output.write(pcmBytes.data(), static_cast<std::streamsize>(count) * 4);
+        if (!output.good()) return "一時音声ファイルの書き込みに失敗しました";
+        framesWritten += static_cast<uint64_t>(count);
+    }
+
+    if (!output.good()) return "一時音声ファイルの書き込みに失敗しました";
+    // Silence is a property of the emitted PCM, not an arbitrary float peak.
+    // Keep quiet authored output exactly as rendered; never normalize it.
+    if (framesWritten == 0 || !hasPcmOutput) return "音声データを生成できませんでした";
+    if (framesWritten > UINT32_MAX / 4) return "曲が長すぎます";
+
+    output.seekp(0, std::ios::beg);
+    if (!output.good()) return "一時音声ファイルの書き込みに失敗しました";
+    writeHeader(output, static_cast<uint32_t>(framesWritten * 4));
+    output.flush();
+    if (!output.good()) return "一時音声ファイルの書き込みに失敗しました";
+    return {};
+}
+
+template <typename Output>
+std::string renderAndCloseWav(fxchain::smaf::MaPlayer& player, Output& output,
+                              bool phoneSpeakerMode) {
+    std::string result = renderWavToStream(player, output, phoneSpeakerMode);
+    if (!result.empty()) return result;
+    output.close();
+    if (!output.good()) return "一時音声ファイルの書き込みに失敗しました";
+    return {};
+}
+
 std::string render(const uint8_t* bytes, size_t size, const char* outputPath,
                    bool phoneSpeakerMode) {
     fxchain::smaf::MaPlayer player;
@@ -156,39 +211,7 @@ std::string render(const uint8_t* bytes, size_t size, const char* outputPath,
 
     std::fstream output(outputPath, std::ios::binary | std::ios::out | std::ios::trunc);
     if (!output) return "一時音声ファイルを作成できません";
-    writeHeader(output, 0);
-
-    float samples[kBlockFrames * 2];
-    std::array<char, kBlockFrames * 4> pcmBytes{};
-    PhoneSpeakerFilter phoneSpeaker;
-    uint64_t framesWritten = 0;
-    float peak = 0.0f;
-    while (true) {
-        int count = player.render(samples, kBlockFrames);
-        if (count <= 0) break;
-        if (phoneSpeakerMode) phoneSpeaker.process(samples, count);
-        for (int i = 0; i < count * 2; ++i) {
-            float sample = std::clamp(samples[i], -1.0f, 1.0f);
-            peak = std::max(peak, sample < 0.0f ? -sample : sample);
-            int value = static_cast<int>(sample * 32767.0f);
-            uint16_t encoded = static_cast<uint16_t>(static_cast<int16_t>(value));
-            pcmBytes[i * 2] = static_cast<char>(encoded & 0xff);
-            pcmBytes[i * 2 + 1] = static_cast<char>((encoded >> 8) & 0xff);
-        }
-        // One write per render block avoids millions of two-byte stream calls
-        // on long songs while preserving the exact little-endian PCM bytes.
-        output.write(pcmBytes.data(), static_cast<std::streamsize>(count) * 4);
-        framesWritten += static_cast<uint64_t>(count);
-    }
-
-    if (!output.good()) return "一時音声ファイルの書き込みに失敗しました";
-    if (framesWritten == 0 || peak < 0.0001f) return "音声データを生成できませんでした";
-    if (framesWritten > UINT32_MAX / 4) return "曲が長すぎます";
-
-    output.seekp(0, std::ios::beg);
-    writeHeader(output, static_cast<uint32_t>(framesWritten * 4));
-    output.close();
-    return {};
+    return renderAndCloseWav(player, output, phoneSpeakerMode);
 }
 
 jstring toJavaString(JNIEnv* env, const std::string& text) {
@@ -347,8 +370,9 @@ Java_app_mmfpocket_player_NativeMmfRenderer_renderSession(
         if (count <= 0) return 0;
         if (session->phoneSpeakerMode) session->phoneSpeaker.process(samples.data(), count);
         for (int i = 0; i < count * 2; ++i) {
-            const float sample = std::clamp(samples[i], -1.0f, 1.0f);
-            pcm[i] = static_cast<jshort>(static_cast<int>(sample * 32767.0f));
+            int16_t value;
+            if (!mmfpocket::audio::encodePcm16(samples[i], value)) return -1;
+            pcm[i] = static_cast<jshort>(value);
         }
         env->SetShortArrayRegion(stereoPcm, 0, count * 2, pcm.data());
         if (env->ExceptionCheck()) {

@@ -161,7 +161,17 @@ void SmafFile::parseWaves_(const uint8_t* p, size_t n, TrackChunk& t) {
         const uint8_t* c = p + pos;
         bool isMwa = id3(c, "Mwa");
         bool isAwa = id3(c, "Awa");
-        if ((!isMwa || t.isAudioTrack) && (!isAwa || !t.isAudioTrack)) { ++pos; continue; }
+        if ((!isMwa || t.isAudioTrack) && (!isAwa || !t.isAudioTrack)) {
+            // MspI and unknown children are opaque chunks, not byte regions
+            // to search for wave signatures. Otherwise their metadata can
+            // manufacture a wave or exhaust the child budget before a real
+            // following Mwa. Keep byte recovery only for invalid headers.
+            if (idLooksSane(c)) {
+                const size_t body = pos + 8;
+                pos = body + std::min<size_t>(be32(c + 4), n - body);
+            } else ++pos;
+            continue;
+        }
         uint32_t sz = be32(c + 4);
         size_t body = pos + 8;
         if (sz > n - body) sz = uint32_t(n - body);
@@ -299,7 +309,9 @@ bool SmafFile::parse(const uint8_t* d, size_t n) {
         if (!idLooksSane(c)) { ++pos; continue; }
         uint32_t sz = be32(c + 4);
         size_t body = pos + 8;
-        if (sz > n - body) sz = uint32_t(n - body);   // clamp to real bytes
+        // A child is bounded by its declared parent, not merely by the
+        // physical input buffer (which can include CRC or unrelated suffix).
+        if (sz > end - body) sz = uint32_t(end - body);
 
         if      (id3(c, "CNT")) parseCnti_(d + body, sz);
         else if (id3(c, "OPD")) parseOpda_(d + body, sz);

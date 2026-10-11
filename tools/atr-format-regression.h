@@ -43,7 +43,7 @@ SmafFile handBuilt(int track,int wave,int fs,int tbD,int tbG,const Bytes& payloa
 void testHeaders() {
     const auto data=source();
     for(int code=0;code<5;++code)for(bool adpcm:{false,true}) {
-        const Bytes seq{3,1,100,0,0,0,0};
+        const Bytes seq{3,1,100}; // EOF, not an immediate explicit mute
         auto file=parse(atr(0,1,(adpcm?0x10:0)|code,adpcm?0:0x10,0,2,data,seq));
         const auto& t=file.tracks[0];check(t.waves.size()==1,"supported mono ATR has its raw wave");
         const auto& w=t.waves[0];
@@ -58,7 +58,7 @@ void testHeaders() {
         check(renderAll(file,1)==renderAll(file,1024),"ATR binary fixture is block invariant");
     }
     // A single ADPCM byte remains usable (old Awa path required at least2).
-    auto shortWave=parse(atr(0,1,0x11,0,0,0,{0x17},{0,1,100,0,0,0,0}));
+    auto shortWave=parse(atr(0,1,0x11,0,0,0,{0x17},{0,1,100}));
     check(shortWave.tracks[0].waves.size()==1 && shortWave.tracks[0].waves[0].data==Bytes{0x17},"one-byte ADPCM payload is not mistaken for a missing header");
     for(int length=0;length<6;++length) {
         auto bytes=chunk("MMMD",chunk("ATR0",Bytes(size_t(length),0)));
@@ -78,7 +78,7 @@ void testHeaders() {
     }
 }
 void testPureAndClock() {
-    const auto data=source();const Bytes seq{10,1,100,0,0,0,0};
+    const auto data=source();const Bytes seq{10,1,100};
     auto only=parse(atr(0,1,1,0x10,0,2,data,seq));
     auto mixed=only;mixed.tracks.push_back(fixture().tracks[0]);
     mixed.tracks.back().durationTimeBase=mixed.tracks.back().gateTimeBase=0x13;
@@ -93,16 +93,16 @@ void testPureAndClock() {
     player.seekToStart();std::vector<float> replay;int n;
     while((n=player.render(block,257))>0)replay.insert(replay.end(),block,block+2*n);
     check(replay==expected,"ATR seek restarts its own timeline exactly");
-    auto replacement=handBuilt(0,1,8000,0,0,Bytes(80,0),{0,1,100,0,0,0,0});
+    auto replacement=handBuilt(0,1,8000,0,0,Bytes(80,0),{0,1,100});
     check(player.init(replacement,8000),"ATR new-song init resets banks");
     while((n=player.render(block,257))>0)for(int i=0;i<n*2;++i)check(block[i]==0,"previous ATR bank/sample never leaks into new song");
 }
 void testWaveIdsAndBanks() {
     const auto data=source();
-    auto reference=parse(atr(0,1,1,0x10,0,0,data,{0,1,100,0,0,0,0}));
+    auto reference=parse(atr(0,1,1,0x10,0,0,data,{0,1,100}));
     const auto expected=renderAll(reference);
     for(int id:{1,15,16,31,32,48,62}) {
-        auto file=parse(atr(0,id,1,0x10,0,0,data,{0,uint8_t(id),100,0,0,0,0},true));
+        auto file=parse(atr(0,id,1,0x10,0,0,data,{0,uint8_t(id),100},true));
         check(renderAll(file)==expected,"ATR uses all six wave-ID bits, independent of chunk order");
     }
     for(int id:{0,63,64,255}) {
@@ -113,8 +113,8 @@ void testWaveIdsAndBanks() {
     MaPlayer invalidPlayer;
     check(!invalidPlayer.init(invalidMessage,8000),"reserved wave message63 cannot trigger another sample");
     // Track1's silent wave with the same ID may not replace track0's wave.
-    Bytes body;append(body,atr(0,1,1,0x10,0,0,data,{0,1,100,0,0,0,0}));
-    append(body,atr(1,1,1,0x10,0,0,Bytes(80,0),{0,1,100,0,0,0,0}));
+    Bytes body;append(body,atr(0,1,1,0x10,0,0,data,{0,1,100}));
+    append(body,atr(1,1,1,0x10,0,0,Bytes(80,0),{0,1,100}));
     auto two=parse(body);
     check(renderAll(two)==expected,"Awa IDs belong to each ATR track, not a global wave bank");
     // Score Mwa1 must not override Awa1 or vice versa. Both container orders.
@@ -124,7 +124,7 @@ void testWaveIdsAndBanks() {
     append(mtr,chunk("Mtsp",chunk("Mwa0",mwa,1)));
     for(bool first:{false,true}) {
         body.clear();if(first)append(body,chunk("MTR0",mtr));
-        append(body,atr(0,1,1,0x10,0,0,data,{0,1,100,0,0,0,0}));
+        append(body,atr(0,1,1,0x10,0,0,data,{0,1,100}));
         if(!first)append(body,chunk("MTR0",mtr));
         check(renderAll(parse(body))==expected,"Mwa/Awa ID collision cannot substitute another source");
     }
@@ -137,7 +137,7 @@ void testWaveIdsAndBanks() {
     check(audible,"reverse collision fixture actually sounds recorded Mwa");
     for(bool first:{false,true}) {
         body.clear();if(first)append(body,chunk("MTR0",mtr));
-        append(body,atr(0,1,1,0x10,0,0,Bytes(80,0),{0,1,100,0,0,0,0}));
+        append(body,atr(0,1,1,0x10,0,0,Bytes(80,0),{0,1,100}));
         if(!first)append(body,chunk("MTR0",mtr));
         check(renderAll(parse(body))==scoreExpected,"Awa cannot override sounding Mwa with the same ID");
     }

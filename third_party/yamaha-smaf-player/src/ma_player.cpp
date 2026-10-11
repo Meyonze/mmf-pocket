@@ -20,6 +20,7 @@
 #include <cmath>
 #include <cstring>
 #include <functional>
+#include <limits>
 
 namespace fxchain::smaf {
 
@@ -66,8 +67,11 @@ inline uint32_t readVarHps(const uint8_t*& p, const uint8_t* end) {
 }
 
 // mobile / midi variable length quantity: 7 bits per byte, msb = continue.
-inline uint32_t readVlq(const uint8_t*& p, const uint8_t* end) {
-    uint32_t v = 0; int guard = 0;
+inline uint64_t readVlq(const uint8_t*& p, const uint8_t* end) {
+    // Five groups contain up to35 bits. Keep the entire value until the
+    // shared reader validates its representability; never wrap a gate or
+    // payload length into a small, apparently valid32-bit value.
+    uint64_t v = 0; int guard = 0;
     while (p < end && guard++ < 5) {
         uint8_t b = *p++;
         v = (v << 7) | (b & 0x7f);
@@ -86,13 +90,20 @@ void MaPlayer::audit_(ScoreAudit::Domain domain, ScoreAudit::Status status,
 uint32_t MaPlayer::readScoreLength_(const uint8_t*& p, const uint8_t* end,
                                    bool hps, uint64_t sample, ScoreAudit::Domain domain) {
     const uint8_t* start = p;
-    // Use the existing reader and preserve its recovery/output exactly.
-    uint32_t result = hps ? readVarHps(p, end) : readVlq(p, end);
+    // HPS lengths have exactly one or two bytes; the second byte's MSB
+    // must be zero (SMAF3.05 p29). Never turn a broken gate into a note or
+    // reinterpret its remaining bytes as another event. Mobile/MA7 VLQs must
+    // terminate within the existing five-byte reader too.
+    const uint64_t result = hps ? readVarHps(p, end) : readVlq(p, end);
     bool valid = p > start;
-    if (valid && hps) valid = *start < 0x80 || p - start == 2;
-    if (valid && !hps) valid = (p[-1] & 0x80) == 0;
-    if (!valid) audit_(domain, ScoreAudit::Status::Malformed, 0x100, int(p - start), sample);
-    return result;
+    if (valid && hps) valid = *start < 0x80 || (p - start == 2 && p[-1] < 0x80);
+    if (valid && !hps) valid = (p[-1] & 0x80) == 0 &&
+        result <= std::numeric_limits<uint32_t>::max();
+    if (!valid) {
+        audit_(domain, ScoreAudit::Status::Malformed, 0x100, int(p - start), sample);
+        scoreAudit_.scanComplete = false; p = end; return 0;
+    }
+    return uint32_t(result);
 }
 
 bool MaPlayer::scoreBytes_(const uint8_t* p, const uint8_t* end, size_t count,
@@ -105,6 +116,13 @@ bool MaPlayer::scoreBytes_(const uint8_t* p, const uint8_t* end, size_t count,
 
 void MaPlayer::routeController_(uint64_t at, int ch, int cc, int val, bool ma7) {
     using S = ScoreAudit::Status;
+    // Only Mobile/MA7 score grammars route here; both carry 7-bit CC fields.
+    // Never mask malformed data into a different valid controller/value.
+    if (cc > 127 || val > 127) {
+        audit_(ScoreAudit::Domain::Controller, S::Malformed, cc, val, at, ch);
+        events_.push_back({at, Ev::ScoreNop, uint16_t(ch), 0, 0});
+        return;
+    }
     S status = S::Routed;
     Ev::T type = Ev::Volume;
     int b = 0, routedValue = val;
@@ -173,8 +191,6 @@ void MaPlayer::routeController_(uint64_t at, int ch, int cc, int val, bool ma7) 
             break;
         default: route = false; status = S::Unsupported; break;
     }
-    if ((cc == 7 || cc == 10 || cc == 11 || cc == 32) && val > 127)
-        status = S::Partial; // legacy masking, not a validated high-bit value
     audit_(ScoreAudit::Domain::Controller, status, cc, val, at, ch);
     if (route) events_.push_back({at, type, uint16_t(ch), int16_t(routedValue), int16_t(b)});
 }
@@ -282,7 +298,8 @@ bool MaPlayer::init(const SmafFile& file, uint32_t sampleRate,
                     bool suppressHpsSlapbackDuplicates) {
     rate_ = sampleRate ? sampleRate : 48000;
     events_.clear(); voiceTable_.clear();
-    nextEvent_ = 0; cursor_ = 0; endSample_ = 0;
+    nextEvent_ = 0; nonAtrGateEventEnd_ = 0; atrPlaybackEndSample_ = 0;
+    cursor_ = 0; endSample_ = 0;
     nextNoteId_ = 1;
     fmSteal_ = pcmSteal_ = 0;
     pcmLimit_ = std::any_of(file.tracks.begin(), file.tracks.end(),
@@ -293,6 +310,10 @@ bool MaPlayer::init(const SmafFile& file, uint32_t sampleRate,
     voiceWaveVersions_.clear(); voiceWaveVersionBytes_ = 0;
     activeVoiceWaveVersion_.fill(-1);
     for (auto& c : chans_) c = Chan{};
+    atrChans_.clear();
+    ma7AudioPan_.clear();
+    for (const auto& t : file.tracks)
+        if (!t.isAudioTrack && t.formatType == 3) ma7AudioPan_.try_emplace(t.trackNumber);
     for (auto& v : pool_) { v = FmVoice{}; v.setSampleRate(double(rate_)); }
     for (auto& pv : pcmPool_) pv.active = false;
     for (auto& pv : audioPool_) pv.active = false;
@@ -365,11 +386,16 @@ bool MaPlayer::init(const SmafFile& file, uint32_t sampleRate,
 
     if (suppressHpsSlapbackDuplicates) suppressHpsSlapbackDuplicates_();
     calculateMotionPace_();
+    nonAtrGateEventEnd_ = events_.size();
+    while (nonAtrGateEventEnd_ > 0 && events_[nonAtrGateEventEnd_ - 1].type == Ev::WaveOff)
+        --nonAtrGateEventEnd_;
 
     // Let real envelopes finish, rather than cutting every song at +1 s.
     // Ten seconds is only a safety ceiling for held/very slow envelopes;
     // render() normally ends earlier and fades the safety boundary if reached.
-    scoreEndSample_ = events_.back().sample;
+    // Orphan ATR gates must not extend unrelated held FM/WT voices to the
+    // global600s ceiling. A real long recording still needs its playback time.
+    scoreEndSample_ = std::max(events_[nonAtrGateEventEnd_ - 1].sample, atrPlaybackEndSample_);
     endSample_ = scoreEndSample_ + uint64_t(rate_) * 10;
     uint64_t cap = uint64_t(kSafetySeconds * rate_);
     if (endSample_ > cap) endSample_ = cap;
@@ -385,7 +411,7 @@ void MaPlayer::calculateMotionPace_() {
     std::array<bool, 128> hasOnset{};
     std::vector<uint32_t> gapsMs;
     for (const Ev& event : events_) {
-        if (event.type != Ev::NoteOn && event.type != Ev::WaveOn) continue;
+        if (event.type != Ev::NoteOn && event.type != Ev::Ma7NoteOn && event.type != Ev::WaveOn) continue;
         const size_t channel = size_t(event.ch & 127);
         if (!hasOnset[channel]) {
             hasOnset[channel] = true;
@@ -438,7 +464,7 @@ void MaPlayer::suppressHpsSlapbackDuplicates_() {
             continue;
         }
 
-        if (event.type == Ev::NoteOn && program[channel] == 81 &&
+        if ((event.type == Ev::NoteOn || (event.type == Ev::Ma7NoteOn && event.b != 1)) && program[channel] == 81 &&
             event.a >= 0 && event.a < int(recent.size())) {
             RecentNote& previous = recent[size_t(event.a)];
             const uint64_t delay = previous.valid && event.sample >= previous.sample
@@ -635,6 +661,7 @@ void MaPlayer::addExclusivesFrom_(const std::vector<uint8_t>& buf, bool mobile) 
         // payload includes the trailing F7; parse from the maker id up to it.
         size_t plen = len;
         if (plen && p[plen - 1] == 0xF7) --plen;
+        if (routeMa7Exclusive_(p, plen, 0, true)) { p += len; continue; }
         addVoiceWave_(p, plen);
         ParsedVoice v = parseVoiceExclusive(p, plen);
         // isPcm identifies a decoded family, not a complete usable image.
@@ -710,6 +737,9 @@ void MaPlayer::decodeHandyPhone_(const uint8_t* p, size_t n, int base, double tb
     double curMs = 0.0;
     auto msToSample = [&](double ms) { return uint64_t(ms * rate_ / 1000.0); };
     int guard = 0;
+    const size_t atrFirstEvent = events_.size();
+    bool atrHasTrigger = false;
+    uint64_t atrTrackPlaybackEnd = 0;
     while (p < end && guard++ < 2000000 && events_.size() < kMaxEvents) {
         uint32_t dur = readScoreLength_(p, end, true, msToSample(curMs), ScoreAudit::Domain::Sequence);
         curMs += dur * tbDms;
@@ -718,22 +748,44 @@ void MaPlayer::decodeHandyPhone_(const uint8_t* p, size_t n, int base, double tb
         if (e1 == 0xFF) {
             if (!scoreBytes_(p, end, 1, 0xff, msToSample(curMs))) break;
             uint8_t e2 = *p++;
-            if (e2 == 0x00) continue;                 // NOP
+            if (e2 == 0x00) {
+                if (atrWaveMode && atrHasTrigger)
+                    events_.push_back({msToSample(curMs), Ev::AtrNop, 120, 0, int16_t(atrTrack)});
+                else if (!atrWaveMode)
+                    events_.push_back({msToSample(curMs), Ev::ScoreNop, uint16_t(base), 0, 0});
+                continue;
+            }
             if (e2 == 0xF0) {                         // exclusive (voice)
                 uint32_t len = readScoreLength_(p, end, true, msToSample(curMs), ScoreAudit::Domain::Sequence);
+                if (p == end && len == 0) break; // malformed length
                 if (!scoreBytes_(p, end, len, 0xf0, msToSample(curMs))) break;
                 size_t plen = len; if (plen && p[plen-1]==0xF7) --plen;
-                addTimedVoice_(p, plen, msToSample(curMs));
+                if (atrWaveMode) {
+                    // ATR exclusive configures devices; it is not an MTR
+                    // instrument definition and must not mutate score voices.
+                    audit_(ScoreAudit::Domain::Sequence, ScoreAudit::Status::Unapplied,
+                           0xf0, 0, msToSample(curMs));
+                    if (atrHasTrigger) events_.push_back({msToSample(curMs), Ev::AtrNop,
+                                                         120, 0, int16_t(atrTrack)});
+                } else addTimedVoice_(p, plen, msToSample(curMs));
                 p += len;
                 continue;
             }
-            // 0x2F/0x51/0x58 style meta: read a length byte + skip.
-            if (!scoreBytes_(p, end, 1, 0xff, msToSample(curMs))) break;
-            uint8_t l = *p++;
-            scoreBytes_(p, end, l, 0xff, msToSample(curMs));
+            if (atrWaveMode) {
+                // Only FF00 and FFF0 have defined ATR widths (p55). Do not
+                // guess a MIDI-meta payload or mute an already valid gate.
+                audit_(ScoreAudit::Domain::Sequence, ScoreAudit::Status::Reserved,
+                       0xff, e2, msToSample(curMs));
+                scoreAudit_.scanComplete = false;
+                break;
+            }
+            // HPS defines only FF00 NOP and FFF0 exclusive (SMAF3.05 p38).
+            // Reserved subtypes have no specified payload length. Guessing
+            // MIDI-meta framing can turn a suffix into notes/controllers.
+            // Stop only this stream, retaining earlier gates and other tracks.
             audit_(ScoreAudit::Domain::Sequence, ScoreAudit::Status::Reserved, 0xff, e2, msToSample(curMs));
-            p += (size_t(end - p) >= l) ? l : size_t(end - p);
-            continue;
+            scoreAudit_.scanComplete = false;
+            break;
         }
         if (e1 == 0x00) {
             if (!scoreBytes_(p, end, 1, 0, msToSample(curMs))) break;
@@ -741,7 +793,14 @@ void MaPlayer::decodeHandyPhone_(const uint8_t* p, size_t n, int base, double tb
             if (e2 == 0x00) {                         // extended / EOS
                 if (!scoreBytes_(p, end, 1, 0, msToSample(curMs))) break;
                 uint8_t e3 = *p++;
-                if (e3 == 0x00) break;                // End Of Sequence
+                if (e3 == 0x00) {
+                    if (atrWaveMode && atrHasTrigger) {
+                        // SMAF3.05 p51 recommends muting at explicit EOS.
+                        events_.push_back({msToSample(curMs), Ev::AtrEnd, 120, 0, int16_t(atrTrack)});
+                        atrTrackPlaybackEnd = std::min(atrTrackPlaybackEnd, msToSample(curMs));
+                    }
+                    break;
+                }
                 audit_(ScoreAudit::Domain::Sequence, ScoreAudit::Status::Unsupported, 0x200, e3, msToSample(curMs));
                 continue;
             }
@@ -749,11 +808,61 @@ void MaPlayer::decodeHandyPhone_(const uint8_t* p, size_t n, int base, double tb
             int cls = (e2 >> 4) & 3;
             int data = e2 & 0x0f;
             uint64_t s = msToSample(curMs);
+            if (atrWaveMode) {
+                // Preserve time, but never apply ATR controls to score channels.
+                const auto domain = cls == 3 ? ScoreAudit::Domain::HpsLong : ScoreAudit::Domain::HpsShort;
+                auto type = Ev::AtrNop;
+                auto status = ScoreAudit::Status::Unapplied;
+                int value = data;
+                if (cls == 3) {
+                    if (!scoreBytes_(p, end, 1, data, s, ch)) break;
+                    value = *p++;
+                    if (data == 7 || data == 11) {
+                        if (value <= 127) {
+                            type = data == 7 ? Ev::AtrVolume : Ev::AtrExpression;
+                            status = ScoreAudit::Status::Routed;
+                        } else status = ScoreAudit::Status::Reserved;
+                    } else if (data == 10 && value <= 127) {
+                        type = Ev::AtrPan; status = ScoreAudit::Status::Routed;
+                    } else if (data != 4 && data != 10) status = ScoreAudit::Status::Reserved;
+                    else if (value > 127) status = ScoreAudit::Status::Reserved;
+                } else if (cls == 0) {
+                    if (data >= 1 && data <= 14) {
+                        value = data == 1 ? 0 : data * 8 + 15;
+                        type = Ev::AtrExpression; status = ScoreAudit::Status::Routed;
+                    } else status = ScoreAudit::Status::Reserved;
+                } else if (cls == 1 && (data == 0 || data == 15)) status = ScoreAudit::Status::Reserved;
+                else if (cls == 2) status = ScoreAudit::Status::Unsupported;
+                audit_(domain, status, cls == 3 ? data : cls, value, s, ch);
+                if (type != Ev::AtrNop || atrHasTrigger)
+                    events_.push_back({s, type, uint16_t(ch), int16_t(value), int16_t(atrTrack)});
+                continue;
+            }
             if (cls == 3) {                           // long event: value byte
                 if (!scoreBytes_(p, end, 1, data, s, ch)) break;
                 uint8_t v = *p++;
                 const bool supported = data == 0 || data == 1 || data == 2 ||
                     data == 4 || data == 7 || data == 10 || data == 11;
+                // SMAF3.05 pp32-37: reserved values have no controller meaning.
+                // Bank is deliberately full-byte (bit7 denotes drums), unlike
+                // Program/Volume/Pan/Expression/Bend. Invalid octave shifts
+                // must not reset a previously authored absolute shift to zero.
+                const bool reserved = data == 2 ?
+                    !(v <= 4 || (v >= 0x81 && v <= 0x84)) :
+                    (supported && data != 1 && v > 127) || (data == 3 && v > 127);
+                if (reserved) {
+                    audit_(ScoreAudit::Domain::HpsLong, ScoreAudit::Status::Reserved, data, v, s, ch);
+                    events_.push_back({s, Ev::ScoreNop, uint16_t(ch), 0, 0});
+                    continue;
+                }
+                if (data == 3) {
+                    // Modulation's transport is defined, but its physical
+                    // HPS depth curve is not calibrated. Preserve authored
+                    // time without borrowing MA7's distinct wheel law.
+                    audit_(ScoreAudit::Domain::HpsLong, ScoreAudit::Status::Unapplied, data, v, s, ch);
+                    events_.push_back({s, Ev::ScoreNop, uint16_t(ch), 0, 0});
+                    continue;
+                }
                 audit_(ScoreAudit::Domain::HpsLong, supported ? ScoreAudit::Status::Routed :
                     ScoreAudit::Status::Unsupported, data, v, s, ch);
                 switch (data) {
@@ -774,22 +883,39 @@ void MaPlayer::decodeHandyPhone_(const uint8_t* p, size_t n, int base, double tb
                     default: break;                    // consume + ignore
                 }
             } else if (cls == 0) {
+                if (data == 0 || data == 15) {
+                    audit_(ScoreAudit::Domain::HpsShort, ScoreAudit::Status::Reserved, cls, data, s, ch);
+                    events_.push_back({s, Ev::ScoreNop, uint16_t(ch), 0, 0});
+                    continue;
+                }
                 audit_(ScoreAudit::Domain::HpsShort, ScoreAudit::Status::Routed, cls, data, s, ch);
                 // expression SHORT: value = data==1 ? 0 : data*8+15 (spec table).
                 int v = (data <= 1) ? (data == 0 ? 0 : 0) : (data * 8 + 15);
                 if (v > 0x7f) v = 0x7f;
                 events_.push_back({s, Ev::Expression, uint16_t(ch), int16_t(v), 0});
             } else if (cls == 1) {
+                if (data == 0 || data == 15) {
+                    audit_(ScoreAudit::Domain::HpsShort, ScoreAudit::Status::Reserved, cls, data, s, ch);
+                    events_.push_back({s, Ev::ScoreNop, uint16_t(ch), 0, 0});
+                    continue;
+                }
                 audit_(ScoreAudit::Domain::HpsShort, ScoreAudit::Status::Routed, cls, data, s, ch);
                 // pitch-bend SHORT: msb = data*8, centre at data==8.
                 int v14 = (data * 8) << 7;
                 events_.push_back({s, Ev::PitchBend, uint16_t(ch), int16_t(v14 - 8192), 0});
             } else {   // cls == 2
+                if (data == 0 || data == 15) {
+                    audit_(ScoreAudit::Domain::HpsShort, ScoreAudit::Status::Reserved, cls, data, s, ch);
+                    events_.push_back({s, Ev::ScoreNop, uint16_t(ch), 0, 0});
+                    continue;
+                }
                 audit_(ScoreAudit::Domain::HpsShort, ScoreAudit::Status::Unapplied, cls, data, s, ch);
                 // modulation SHORT: spec table, index 1..14.
                 static const uint8_t modTab[16] = { 0,0x00,0x08,0x10,0x18,0x20,0x28,0x30,
                                                     0x38,0x40,0x48,0x50,0x60,0x70,0x7f,0x7f };
-                events_.push_back({s, Ev::Modulation, uint16_t(ch), int16_t(modTab[data & 15]), 0});
+                // HPS modulation is unapplied even in a mixed-format file.
+                // Retain time, not a MA7 modulation event on a shared channel.
+                events_.push_back({s, Ev::ScoreNop, uint16_t(ch), int16_t(modTab[data & 15]), 0});
             }
             continue;
         }
@@ -797,8 +923,20 @@ void MaPlayer::decodeHandyPhone_(const uint8_t* p, size_t n, int base, double tb
         int ch = base + ((e1 >> 6) & 3);
         int octave = (e1 >> 4) & 3;
         int note = e1 & 0x0f;
+        const auto gateErrors = scoreAudit_.totals[size_t(ScoreAudit::Status::Malformed)];
         uint32_t gate = readScoreLength_(p, end, true, msToSample(curMs), ScoreAudit::Domain::Sequence);
-        if (gate == 0) continue;                       // spec: skip zero-gate
+        if (scoreAudit_.totals[size_t(ScoreAudit::Status::Malformed)] != gateErrors) break;
+        if (gate == 0) {
+            if (!atrWaveMode) {
+                // SMAF3.05 p31 prohibits zero HPS score gates. Its known
+                // field width still permits recovery: keep Duration, but no
+                // voice, retrigger or fabricated NoteOff. ATR remains separate.
+                audit_(ScoreAudit::Domain::Sequence, ScoreAudit::Status::Reserved,
+                       0x106, 0, msToSample(curMs), ch);
+                events_.push_back({msToSample(curMs), Ev::ScoreNop, uint16_t(ch), 0, 0});
+            }
+            continue;
+        }
         if (atrWaveMode) {
             const int wave = e1 & 0x3f;
             if (wave == 0 || wave == 63) {
@@ -806,12 +944,43 @@ void MaPlayer::decodeHandyPhone_(const uint8_t* p, size_t n, int base, double tb
                        wave, 0, msToSample(curMs), ch);
                 continue;
             }
-            // One-shot policy unchanged; e.b binds the source ATR, not velocity.
-            events_.push_back({msToSample(curMs), Ev::WaveOn, uint16_t(ch),
-                               int16_t(wave), int16_t(atrTrack)});
+            // GateTime is the authored playback duration (SMAF3.05 p51),
+            // independent of source length and Duration's clock. Bind a unique
+            // trigger so overlapping waves and reused slots cannot share a gate.
+            const uint64_t on = msToSample(curMs);
+            const uint64_t off = on + msToSample(gate * tbGms);
+            const uint64_t id = nextNoteId_++;
+            events_.push_back({on, Ev::WaveOn, uint16_t(ch),
+                               int16_t(wave), int16_t(atrTrack), id});
+            events_.push_back({off, Ev::WaveOff,
+                               uint16_t(ch), int16_t(wave), int16_t(atrTrack), id});
+            const auto bank = audioWaveBanks_.find(atrTrack);
+            if (bank != audioWaveBanks_.end() && size_t(wave) < bank->second.size()) {
+                const auto& source = bank->second[wave];
+                if (!source.pcm.empty() && source.fs > 0) {
+                    // One extra output frame covers EOF detection after the
+                    // last source sample; this changes no source/gate timing.
+                    const uint64_t naturalEnd = on + uint64_t(std::ceil(
+                        double(source.pcm.size()) * double(rate_) / double(source.fs))) + 1;
+                    atrHasTrigger = true;
+                    atrTrackPlaybackEnd = std::max(atrTrackPlaybackEnd, std::min(off, naturalEnd));
+                }
+            }
             continue;
         }
-        // (oct 0, note 0) = MIDI 36, per vavi-sound MidiContext.retrievePitch
+        // SMAF3.05 p31: only NoteNumber1..12 is legal (C is12, not0).
+        // The gate width is known and already consumed, so preserve Duration
+        // and resume normally, without a voice or a fabricated gate-off.
+        // ATR six-bit WaveIDs are handled above and must not use this rule.
+        if (note == 0 || note > 12) {
+            audit_(ScoreAudit::Domain::Sequence, ScoreAudit::Status::Reserved,
+                   0x105, note, msToSample(curMs), ch);
+            events_.push_back({msToSample(curMs), Ev::ScoreNop, uint16_t(ch), 0, 0});
+            continue;
+        }
+        // Pitch offset36 follows the HPS table: octave2/note9 = A440(MIDI69).
+        // C uses note12 in the preceding octave, never the prohibited note0.
+        // The same offset is used by vavi-sound MidiContext.retrievePitch
         // ("pitch += 36"); files then place themselves with the score's own
         // octave-shift event (+-1..4 octaves). a +60 base derived from go-smaf's
         // Note.Freq (whose Name()/Freq() disagree by 2 octaves) played every
@@ -821,11 +990,15 @@ void MaPlayer::decodeHandyPhone_(const uint8_t* p, size_t n, int base, double tb
         uint64_t on = msToSample(curMs);
         uint64_t off = on + msToSample(gate * tbGms);
         const uint64_t id = nextNoteId_++;
-        events_.push_back({on,  Ev::NoteOn,  uint16_t(ch), int16_t(midi), 127, id});
+        events_.push_back({on,  Ev::NoteOn,  uint16_t(ch), int16_t(midi), 127, id, -1, true});
         events_.push_back({off, Ev::NoteOff, uint16_t(ch), int16_t(midi), 0, id});
     }
     if (p < end && (guard >= 2000000 || events_.size() >= kMaxEvents))
         audit_(ScoreAudit::Domain::Sequence, ScoreAudit::Status::ResourceLimit, 0x104, 0, msToSample(curMs));
+    if (atrWaveMode) {
+        if (!atrHasTrigger) events_.resize(atrFirstEvent); // no controller-only fake success
+        else atrPlaybackEndSample_ = std::max(atrPlaybackEndSample_, atrTrackPlaybackEnd);
+    }
 }
 
 // ── mobile standard event stream ────────────────────────────────────────────
@@ -845,7 +1018,11 @@ void MaPlayer::decodeMobile_(const uint8_t* p, size_t n, int base, double tbDms,
         uint8_t s = *p++;
         if (s < 0x80) {
             audit_(ScoreAudit::Domain::Sequence, ScoreAudit::Status::Malformed, s, 0, msToSample(curMs));
-            continue;
+            // Mobile status must have MSB=1 (SMAF3.05 p42). There is no
+            // score running-status grammar here and no known payload width:
+            // guessing a next duration can turn the suffix into false notes.
+            p = end;
+            break;
         }
         int ch = base + (s & 0x0f);
         uint64_t at = msToSample(curMs);
@@ -857,16 +1034,26 @@ void MaPlayer::decodeMobile_(const uint8_t* p, size_t n, int base, double tbDms,
                 if ((s & 0xf0) == 0x90) {
                     if (!scoreBytes_(p, end, 1, s, at, ch)) break;
                     vel = *p++;
-                    runVel[s & 0x0f] = uint8_t(vel & 0x7f);   // remember
                 } else {
                     vel = runVel[s & 0x0f];                    // reuse remembered
                 }
+                // Consume the validated gate before fixed-width recovery or
+                // remembered-velocity commit; a broken gate stops the stream.
+                const auto gateErrors = scoreAudit_.totals[size_t(ScoreAudit::Status::Malformed)];
                 uint32_t gate = readScoreLength_(p, end, false, at, ScoreAudit::Domain::Sequence);
+                if (scoreAudit_.totals[size_t(ScoreAudit::Status::Malformed)] != gateErrors) break;
+                if (note > 127 || vel > 127) {
+                    audit_(ScoreAudit::Domain::Sequence, ScoreAudit::Status::Malformed,
+                           s, note > 127 ? note : vel, at, ch);
+                    events_.push_back({at, Ev::ScoreNop, uint16_t(ch), 0, 0});
+                    break;
+                }
+                if ((s & 0xf0) == 0x90) runVel[s & 0x0f] = uint8_t(vel);
                 if (gate == 0) break;
                 uint64_t off = at + msToSample(gate * tbGms);
                 const uint64_t id = nextNoteId_++;
-                events_.push_back({at,  Ev::NoteOn,  uint16_t(ch), int16_t(note & 0x7f), int16_t(vel & 0x7f), id});
-                events_.push_back({off, Ev::NoteOff, uint16_t(ch), int16_t(note & 0x7f), 0, id});
+                events_.push_back({at,  Ev::NoteOn,  uint16_t(ch), int16_t(note), int16_t(vel), id});
+                events_.push_back({off, Ev::NoteOff, uint16_t(ch), int16_t(note), 0, id});
             } break;
             case 0xA0:
                 scoreBytes_(p, end, 2, s, at, ch);
@@ -876,9 +1063,16 @@ void MaPlayer::decodeMobile_(const uint8_t* p, size_t n, int base, double tbDms,
                 if (!scoreBytes_(p, end, 2, s, at, ch)) { p = end; break; }
                 int cc = *p++, val = *p++;
                 routeController_(at, ch, cc, val, false);
+                // SMAF3.05 p43: Reset All Controllers also clears remembered
+                // note velocity to64. This changes subsequent 8n notes only,
+                // not currently sounding voices or MA7's separate grammar.
+                if (cc == 121 && val == 0) runVel[s & 0x0f] = 64;
             } break;
             case 0xC0: { if (!scoreBytes_(p, end, 1, s, at, ch)) break; int pc = *p++;
-                events_.push_back({at, Ev::Program, uint16_t(ch), int16_t(pc & 0x7f), 0}); } break;
+                if (pc > 127) {
+                    audit_(ScoreAudit::Domain::Sequence, ScoreAudit::Status::Malformed, s, pc, at, ch);
+                    events_.push_back({at, Ev::ScoreNop, uint16_t(ch), 0, 0});
+                } else events_.push_back({at, Ev::Program, uint16_t(ch), int16_t(pc), 0}); } break;
             case 0xD0:
                 scoreBytes_(p, end, 1, s, at, ch);
                 audit_(ScoreAudit::Domain::Sequence, ScoreAudit::Status::Reserved, 0xd0, 0, at, ch);
@@ -886,12 +1080,19 @@ void MaPlayer::decodeMobile_(const uint8_t* p, size_t n, int base, double tbDms,
             case 0xE0: {                                 // pitch bend lsb,msb
                 if (!scoreBytes_(p, end, 2, s, at, ch)) { p = end; break; }
                 int lsb = *p++, msb = *p++;
-                int v14 = ((msb & 0x7f) << 7) | (lsb & 0x7f);
+                if (lsb > 127 || msb > 127) {
+                    audit_(ScoreAudit::Domain::Sequence, ScoreAudit::Status::Malformed,
+                           s, lsb > 127 ? lsb : msb, at, ch);
+                    events_.push_back({at, Ev::ScoreNop, uint16_t(ch), 0, 0});
+                    break;
+                }
+                int v14 = (msb << 7) | lsb;
                 events_.push_back({at, Ev::PitchBend, uint16_t(ch), int16_t(v14 - 8192), 0});
             } break;
             case 0xF0: {
                 if (s == 0xF0) {                         // exclusive
                     uint32_t len = readScoreLength_(p, end, false, at, ScoreAudit::Domain::Sequence);
+                    if (p == end && len == 0) break;
                     if (!scoreBytes_(p, end, len, s, at)) { p = end; break; }
                     size_t plen = len; if (plen && p[plen-1]==0xF7) --plen;
                     addTimedWave_(p, plen, at);
@@ -900,17 +1101,44 @@ void MaPlayer::decodeMobile_(const uint8_t* p, size_t n, int base, double tbDms,
                 } else if (s == 0xFF) {                  // meta
                     if (!scoreBytes_(p, end, 1, s, at, ch)) break;
                     uint8_t m = *p++;
-                    if (m == 0x00) break;                // NOP
-                    if (m == 0x2F) { p = end; }          // EOS
-                    else if (p < end) {
-                        uint8_t l = *p++;
-                        scoreBytes_(p, end, l, s, at);
-                        audit_(ScoreAudit::Domain::Sequence, ScoreAudit::Status::Reserved, 0xff, m, at);
-                        p += (end - p >= l ? l : (end - p));   // clamp, never past end
-                    } else scoreBytes_(p, end, 1, s, at);
+                    if (m == 0x00) {                    // NOP retains authored time
+                        events_.push_back({at, Ev::ScoreNop, uint16_t(ch), 0, 0});
+                        break;
+                    }
+                    if (m == 0x2F) {
+                        // EOS is exactly FF2F00. Preserve prior sound/decay,
+                        // but never accept a missing/nonzero final byte or
+                        // reinterpret any bytes after a broken terminator.
+                        if (scoreBytes_(p, end, 1, s, at, ch)) {
+                            if (*p != 0)
+                                audit_(ScoreAudit::Domain::Sequence, ScoreAudit::Status::Malformed,
+                                       0x2f, *p, at, ch);
+                            else {
+                                // Mobile EOS is a timed event (SMAF3.05 p45).
+                                // Preserve its clock, without introducing a
+                                // channel-wide mute or changing pending gates.
+                                events_.push_back({at, Ev::ScoreNop, uint16_t(ch), 0x2f, 0});
+                            }
+                        }
+                        p = end;
+                    }
+                    else {
+                        // Mobile Standard specifies only FF00/FF2F00 (p45),
+                        // not generic MIDI meta framing. An unknown subtype
+                        // has no established payload width: don't guess a
+                        // length and reinterpret its suffix as notes/controls.
+                        audit_(ScoreAudit::Domain::Sequence, ScoreAudit::Status::Unsupported,
+                               0xff, m, at, ch);
+                        scoreAudit_.scanComplete = false;
+                        p = end; // retain prefix gates/decay and other streams
+                    }
                 } else {
                     audit_(ScoreAudit::Domain::Sequence, ScoreAudit::Status::Unsupported, s, 0, at);
                     scoreAudit_.scanComplete = false;
+                    // F1..FE are reserved without a specified width (p42).
+                    // Stop only this stream; retain prior events and gates.
+                    // A0/D0 have validated widths and still resume normally.
+                    p = end;
                 }
             } break;
             default: break;
@@ -935,6 +1163,26 @@ void MaPlayer::addTimedVoice_(const uint8_t* p, size_t n, uint64_t sample) {
     v.activationSample = sample;
     events_.push_back({sample, Ev::VoiceActivation, 0, int16_t(voiceTable_.size()), 0});
     voiceTable_.push_back(v);
+}
+
+bool MaPlayer::routeMa7Exclusive_(const uint8_t* p, size_t n, uint64_t sample, bool setup) {
+    if (auditFormat_ != 3 || n < 5 || p[0] != 0x43 || p[1] != 0x79 ||
+        p[2] != 8 || p[3] != 0x7f || p[4] != 0x0b) return false;
+    const auto domain = setup ? ScoreAudit::Domain::Setup : ScoreAudit::Domain::Sequence;
+    if (events_.size() >= kMaxEvents) {
+        audit_(domain, ScoreAudit::Status::ResourceLimit, 0x080b, int(n), sample);
+        return true;
+    }
+    // Guideline8.9.1: exact8-byte body (9 includingF7), no guessed variant.
+    if (n != 8 || p[5] > 31 || p[6] > 2 || p[7] > 127) {
+        audit_(domain, ScoreAudit::Status::Malformed, 0x080b, int(n), sample);
+        events_.push_back({sample, Ev::ScoreNop, 0, 0, 0});
+    } else {
+        audit_(domain, ScoreAudit::Status::Routed, 0x080b, (p[6] << 8) | p[7], sample, p[5]);
+        events_.push_back({sample, Ev::Ma7AudioPan, uint16_t(auditTrack_),
+                          int16_t(p[5]), int16_t((p[6] << 8) | p[7])});
+    }
+    return true;
 }
 
 const FmVoicePatch& MaPlayer::patchFor_(int ch, int note, bool& isPcmOut) const {
@@ -1002,9 +1250,11 @@ void MaPlayer::decodeMa7_(const uint8_t* p, size_t n, int base,
 
         if (status == 0xF0) {
             uint32_t len = readScoreLength_(p, end, false, at, ScoreAudit::Domain::Sequence);
+            if (p == end && len == 0) break;
             if (!scoreBytes_(p, end, len, status, at)) break;
             size_t plen = len;
             if (plen && p[plen - 1] == 0xF7) --plen;
+            if (routeMa7Exclusive_(p, plen, at)) { p += len; continue; }
             addTimedWave_(p, plen, at);
             addTimedVoice_(p, plen, at);
             p += len;
@@ -1013,13 +1263,28 @@ void MaPlayer::decodeMa7_(const uint8_t* p, size_t n, int base,
         if (status == 0xFF) {
             if (!scoreBytes_(p, end, 1, status, at)) break;
             uint8_t meta = *p++;
-            if (meta == 0x00) continue;
+            if (meta == 0x00) {
+                events_.push_back({at, Ev::ScoreNop, uint16_t(base), 0, 0});
+                continue;
+            }
             if (meta == 0x2F) {
-                if (p < end) ++p; // zero-length byte
+                if (scoreBytes_(p, end, 1, status, at)) {
+                    if (*p != 0)
+                        audit_(ScoreAudit::Domain::Sequence, ScoreAudit::Status::Malformed,
+                               0x2f, *p, at);
+                    else {
+                        // Keep the already accepted MA7 Track End Point's
+                        // Duration, as an authored NOP at EOF would. This is
+                        // clock retention only, not sequence hard mute.
+                        events_.push_back({at, Ev::ScoreNop, uint16_t(base), 0x2f, 3});
+                    }
+                }
+                p = end;
                 break;
             }
             if (!scoreBytes_(p, end, 1, status, at)) break;
             uint32_t len = readScoreLength_(p, end, false, at, ScoreAudit::Domain::Sequence);
+            if (p == end && len == 0) break;
             scoreBytes_(p, end, len, status, at);
             audit_(ScoreAudit::Domain::Sequence, ScoreAudit::Status::Reserved, 0xff, meta, at);
             p += std::min<size_t>(len, size_t(end - p));
@@ -1033,18 +1298,28 @@ void MaPlayer::decodeMa7_(const uint8_t* p, size_t n, int base,
             case 0x00:
             case 0x10: {
                 if (!scoreBytes_(p, end, 1, status, at, ch)) { p = end; break; }
-                int note = *p++ & 0x7F;
+                int note = *p++;
                 int vel = runVel[local];
                 if (eventClass == 0x10) {
                     if (!scoreBytes_(p, end, 1, status, at, ch)) { p = end; break; }
-                    vel = *p++ & 0x7F;
-                    runVel[local] = uint8_t(vel);
+                    vel = *p++;
                 }
                 uint32_t gate = readScoreLength_(p, end, false, at, ScoreAudit::Domain::Sequence);
+                if (p == end && gate == 0) break;
+                if (note > 127 || vel > 127) {
+                    audit_(ScoreAudit::Domain::Sequence, ScoreAudit::Status::Malformed, status,
+                           note > 127 ? note : vel, at, ch);
+                    events_.push_back({at, Ev::ScoreNop, uint16_t(ch), 0, 0});
+                    break;
+                }
+                if (eventClass == 0x10) runVel[local] = uint8_t(vel);
                 if (gate == 0) break;
                 uint64_t off = at + msToSample(gate * tbGms);
                 const uint64_t id = nextNoteId_++;
-                events_.push_back({at, Ev::NoteOn, uint16_t(ch), int16_t(note), int16_t(vel), id});
+                // Tag source grammar per event, including ordinary velocities:
+                // MA7-only silent-bank and Audio controls cannot spread to MS.
+                events_.push_back({at, Ev::Ma7NoteOn,
+                                   uint16_t(ch), int16_t(note), int16_t(vel), id, auditTrack_});
                 events_.push_back({off, Ev::NoteOff, uint16_t(ch), int16_t(note), 0, id});
             } break;
             case 0x20: // reserved, two data bytes
@@ -1057,11 +1332,14 @@ void MaPlayer::decodeMa7_(const uint8_t* p, size_t n, int base,
                 int cc = *p++, val = *p++;
                 routeController_(at, ch, cc, val, true);
             } break;
-            case 0x40:
-                scoreBytes_(p, end, 1, status, at, ch);
-                if (p < end)
-                    events_.push_back({at, Ev::Program, uint16_t(ch), int16_t(*p++ & 0x7F), 0});
-                break;
+            case 0x40: {
+                if (!scoreBytes_(p, end, 1, status, at, ch)) { p = end; break; }
+                int pc = *p++;
+                if (pc > 127) {
+                    audit_(ScoreAudit::Domain::Sequence, ScoreAudit::Status::Malformed, status, pc, at, ch);
+                    events_.push_back({at, Ev::ScoreNop, uint16_t(ch), 0, 0});
+                } else events_.push_back({at, Ev::Program, uint16_t(ch), int16_t(pc), 0});
+            } break;
             case 0x50: // reserved, one data byte
                 scoreBytes_(p, end, 1, status, at, ch);
                 audit_(ScoreAudit::Domain::Sequence, ScoreAudit::Status::Reserved, 0x50, 0, at, ch);
@@ -1070,7 +1348,13 @@ void MaPlayer::decodeMa7_(const uint8_t* p, size_t n, int base,
             case 0x60: {
                 if (!scoreBytes_(p, end, 2, status, at, ch)) { p = end; break; }
                 int lsb = *p++, msb = *p++;
-                int v14 = ((msb & 0x7F) << 7) | (lsb & 0x7F);
+                if (lsb > 127 || msb > 127) {
+                    audit_(ScoreAudit::Domain::Sequence, ScoreAudit::Status::Malformed, status,
+                           lsb > 127 ? lsb : msb, at, ch);
+                    events_.push_back({at, Ev::ScoreNop, uint16_t(ch), 0, 0});
+                    break;
+                }
+                int v14 = (msb << 7) | lsb;
                 events_.push_back({at, Ev::PitchBend, uint16_t(ch), int16_t(v14 - 8192), 0});
             } break;
             default:
@@ -1154,14 +1438,24 @@ bool MaPlayer::startPcm_(int ch, int rawNote, int soundingNote, const ParsedVoic
     channelPanGains(pv.pan, c.squaredControllers && !pv.panLocked, pv.panLeft, pv.panRight);
     pv.channel = ch; pv.keyNote = rawNote; pv.active = true;
     pv.noteId = noteId;
+    pv.atrGateId = 0;
+    pv.atrTrack = -1;
     pv.released = false; pv.recentLevel = 0;
     ++diagnostics_.pcmNotes;
     return true;
 }
 
-void MaPlayer::startAudio_(int ch, int note, float velocity, uint64_t noteId) {
+void MaPlayer::applyAudioPan_(PcmVoice& voice, const AudioPanState& state) {
+    voice.panLocked = state.mode != 1;
+    if (state.mode == 2) { voice.panLeft = voice.panRight = 1.0f; return; }
+    voice.pan = state.mode == 0 ? (int(state.value) - 64) / 64.0f : chans_[voice.channel & 127].pan;
+    channelPanGains(voice.pan, true, voice.panLeft, voice.panRight);
+}
+
+void MaPlayer::startAudio_(int ch, int note, float velocity, uint64_t noteId, bool ma7,
+                           bool modern, int sourceTrack) {
     if (velocity <= (1.0f / (127.0f * 127.0f))) return; // velocity 1 means mute
-    const auto found = scoreWaveBanks_.find(chans_[ch & 127].streamTrack);
+    const auto found = scoreWaveBanks_.find(sourceTrack);
     const int id = note <= 12 ? note + 1 : note - 92 + 14;
     if (found == scoreWaveBanks_.end() || size_t(id) >= found->second.size() ||
         found->second[id].pcm.empty()) { ++diagnostics_.missingAudio; return; }
@@ -1176,9 +1470,25 @@ void MaPlayer::startAudio_(int ch, int note, float velocity, uint64_t noteId) {
     *slot = PcmVoice{};
     slot->pcm = ws.pcm.data(); slot->len = ws.pcm.size();
     slot->rate = double(ws.fs) / double(rate_);
+    // Renderer-quality conversion for Mobile/MA7 recorded Mwa Audio, not a
+    // proprietary handset resampler. Keep source pitch, gates, gain and the
+    // separate oldest-first Audio allocation unchanged. The originating note
+    // grammar (not shared channel setup) excludes HandyPhone and ATR.
+    slot->qualityInterpolation = modern;
+    if (modern && slot->rate < 1.0) (void)pcm_detail::interpolationKernels();
+    if (modern && slot->rate > 1.0) (void)pcm_detail::downsamplingKernels();
     slot->vel = velocity; slot->pan = chans_[ch & 127].pan;
     channelPanGains(slot->pan, chans_[ch & 127].squaredControllers, slot->panLeft, slot->panRight);
     slot->channel = ch; slot->keyNote = note; slot->noteId = noteId;
+    if (ma7) {
+        const int track = sourceTrack;
+        const auto state = ma7AudioPan_.find(track);
+        if (state != ma7AudioPan_.end()) {
+            slot->audioSourceTrack = track;
+            // The existing trigger map addresses Mwa1..32; AudioID is0..31.
+            applyAudioPan_(*slot, state->second[size_t(id - 1)]);
+        }
+    }
     slot->startedAt = cursor_;
     slot->streamAudio = true; slot->active = true;
     ++diagnostics_.audioNotes; ++diagnostics_.pcmNotes;
@@ -1222,7 +1532,7 @@ float MaPlayer::PcmVoice::tick() {
     const double advance = rate * (1.0 + vibDepth * lfo);
     float allocationSample;
     const float s = pcm_detail::interpolatePcm(pcm, end, i, frac, loop,
-        loopStart, loopTravel, qualityInterpolation && !streamAudio, advance,
+        loopStart, loopTravel, qualityInterpolation, advance,
         &allocationSample);
     pos += advance;
     float e;
@@ -1255,6 +1565,15 @@ int MaPlayer::activeVoices_() const {
     for (const auto& v : pcmPool_) if (v.active) ++n;
     for (const auto& v : audioPool_) if (v.active) ++n;
     return n;
+}
+
+bool MaPlayer::hasOutputVoices_() const {
+    for (const auto& v : pool_) if (v.active() && !v.muted()) return true;
+    for (const auto& v : pcmPool_)
+        if (v.active && v.gain != 0.0f && v.vel != 0.0f) return true;
+    for (const auto& v : audioPool_)
+        if (v.active && v.gain != 0.0f && v.vel != 0.0f) return true;
+    return false;
 }
 
 void MaPlayer::fireEvent_(const Ev& e) {
@@ -1302,9 +1621,9 @@ void MaPlayer::fireEvent_(const Ev& e) {
                     channelPanGains(c.pan, c.squaredControllers, poolPanLeft_[i], poolPanRight_[i]);
                 }
             for (auto& voice : audioPool_)
-                if (voice.active && voice.channel == int(e.ch)) {
+                if (voice.active && voice.channel == int(e.ch) && !voice.panLocked) {
                     voice.pan = c.pan;
-                    channelPanGains(c.pan, c.squaredControllers, voice.panLeft, voice.panRight);
+                    channelPanGains(c.pan, voice.audioSourceTrack >= 0 || c.squaredControllers, voice.panLeft, voice.panRight);
                 }
             for (auto& voice : pcmPool_)
                 if (voice.active && voice.channel == int(e.ch) && voice.keyNote >= 0 && !voice.panLocked) {
@@ -1428,9 +1747,47 @@ void MaPlayer::fireEvent_(const Ev& e) {
                     pcmPool_[i].released = !pcmPool_[i].env.keyOffDeferred();
                 }
         } break;
+        case Ev::AtrNop:
+        case Ev::ScoreNop: break;
+        case Ev::AtrEnd: {
+            for (auto& pv : pcmPool_)
+                if (pv.active && pv.keyNote < 0 && pv.atrTrack == e.b) {
+                    pv.active = false; pv.atrGateId = 0;
+                }
+        } break;
+        case Ev::AtrPan: {
+            auto& state = atrChans_[e.b][e.ch & 3];
+            const double angle = double(e.a) / 127.0 * (3.14159265358979323846 / 2.0);
+            // Recommended constant-power law (p53), without extra makeup gain.
+            state.panLeft = e.a == 127 ? 0.0f : float(std::cos(angle));
+            state.panRight = e.a == 0 ? 0.0f : float(std::sin(angle));
+            for (auto& pv : pcmPool_)
+                if (pv.active && pv.keyNote < 0 && pv.atrTrack == e.b && pv.channel == int(e.ch)) {
+                    pv.panLeft = state.panLeft; pv.panRight = state.panRight;
+                }
+        } break;
+        case Ev::AtrVolume:
+        case Ev::AtrExpression: {
+            auto& state = atrChans_[e.b][e.ch & 3];
+            const float normalized = float(e.a) / 127.0f;
+            if (e.type == Ev::AtrVolume) state.volume = normalized * normalized;
+            else state.expression = normalized * normalized;
+            for (auto& pv : pcmPool_)
+                if (pv.active && pv.keyNote < 0 && pv.atrTrack == e.b && pv.channel == int(e.ch))
+                    pv.vel = state.volume * state.expression; // never accumulate
+        } break;
+        case Ev::WaveOff: {
+            // No guessed release envelope: stop this source at the authored
+            // gate while retaining the existing shared output filter's tail.
+            for (auto& pv : pcmPool_)
+                if (pv.active && pv.keyNote < 0 && e.noteId != 0 && pv.atrGateId == e.noteId) {
+                    pv.active = false; pv.atrGateId = 0;
+                    break;
+                }
+        } break;
         case Ev::WaveOn: {
-            // ATR wave trigger: play wave e.a one-shot at its native rate, no
-            // envelope shaping (the sample IS the sound, it ends on its own).
+            // ATR wave trigger: native rate, existing full-open envelope.
+            // The source's natural end or its own WaveOff stops playback.
             int wid = e.a;
             const auto bank = audioWaveBanks_.find(e.b);
             if (wid < 1 || wid > 62 || bank == audioWaveBanks_.end() ||
@@ -1439,10 +1796,15 @@ void MaPlayer::fireEvent_(const Ev& e) {
             int slot = allocatePcmSlot_();
             PcmVoice& pv = pcmPool_[slot];
             pv.streamAudio = false;
-            pv.qualityInterpolation = false;
+            pv.qualityInterpolation = true;
             pv.loopTravel = 0;
             pv.pcm = ws.pcm.data(); pv.len = ws.pcm.size();
             pv.rate = double(ws.fs) / double(rate_);
+            // Reuse the renderer-quality non-loop resampler, not a guessed
+            // handset DSP. Position/EOF, authored gates and slot policy stay
+            // unchanged. Unity remains exact; no reconstruction tail is added.
+            if (pv.rate < 1.0) (void)pcm_detail::interpolationKernels();
+            if (pv.rate > 1.0) (void)pcm_detail::downsamplingKernels();
             pv.lfoPhase = pv.lfoInc = pv.vibDepth = pv.baseVibDepth = 0.0;
             pv.amDepth = 0.0f; // ATR must not inherit a stolen WT slot's LFO
             pv.pos = 0.0; pv.loopStart = 0; pv.loopEnd = pv.len; pv.loop = false;
@@ -1451,20 +1813,46 @@ void MaPlayer::fireEvent_(const Ev& e) {
             flat.ar = 15; flat.sl = 0; flat.sr = 0; flat.egType = true;
             pv.env.configure(flat, double(rate_)); pv.env.keyOn();
             pv.gain = 1.0f; pv.vel = 1.0f; pv.pan = 0.0f;
-            pv.panLeft = pv.panRight = 1.0f;
+            const auto& atrState = atrChans_[e.b][e.ch & 3];
+            pv.vel = atrState.volume * atrState.expression;
+            pv.panLeft = atrState.panLeft; pv.panRight = atrState.panRight;
             pv.channel = int(e.ch); pv.keyNote = -1; pv.active = true;
-            pv.noteId = 0; // ATR one-shots have no scheduled key-off
+            pv.noteId = 0; // score NoteOff/AllNotesOff must still exclude ATR
+            pv.atrGateId = e.noteId;
+            pv.atrTrack = e.b;
             pv.released = false; pv.recentLevel = 0;
             ++diagnostics_.pcmNotes;
         } break;
+        case Ev::Ma7AudioPan: {
+            auto found = ma7AudioPan_.find(e.ch);
+            if (found == ma7AudioPan_.end()) break;
+            const uint8_t mode = uint8_t(e.b >> 8), value = uint8_t(e.b & 127);
+            if (mode == 1) found->second.fill(AudioPanState{}); // cancel ALL wave overrides
+            else found->second[size_t(e.a)] = AudioPanState{mode,value};
+            for (auto& voice : audioPool_) {
+                if (!voice.active || voice.audioSourceTrack != int(e.ch)) continue;
+                const int id = voice.keyNote <= 12 ? voice.keyNote : voice.keyNote - 92 + 13;
+                if (mode == 1 || id == e.a) applyAudioPan_(voice,found->second[size_t(id)]);
+            }
+        } break;
+        case Ev::Ma7NoteOn:
         case Ev::NoteOn: {
             int soundingNote = e.a + c.octShift;
             if (e.b <= 0) break; // explicit/running zero velocity is silent
             float vel01 = e.b / 127.0f;
-            float noteVelocity = vel01 * vel01;
-            if (c.streamTrack >= 0 && c.bankMsb == 125 && c.bankLsb <= 9 &&
+            const bool ma7 = e.type == Ev::Ma7NoteOn;
+            // Guideline8.2: SP-MIDI bank121/6 has silent pronunciation.
+            // Keep immutable base0, just like Velocity1; later gain cannot revive.
+            float noteVelocity = ma7 && (e.b == 1 || (c.bankMsb == 121 && c.bankLsb == 6))
+                ? 0.0f : vel01 * vel01;
+            // MA7 MTRs share the existing channel namespace. Their recorded
+            // Audio still belongs to the note's MTR, never the last MTR that
+            // initialized this channel. Leave legacy source policy unchanged.
+            const int sourceTrack = ma7 ? e.sourceTrack : c.streamTrack;
+            if (sourceTrack >= 0 && c.bankMsb == 125 && c.bankLsb <= 9 &&
                 c.program <= 9 && (e.a <= 12 || (e.a >= 92 && e.a <= 110))) {
-                startAudio_(e.ch, e.a, noteVelocity, e.noteId);
+                startAudio_(e.ch, e.a, noteVelocity, e.noteId, ma7,
+                            !e.handyPhoneNote, sourceTrack);
                 break;
             }
             const ParsedVoice* rv = resolveVoice_(e.ch, e.a);
@@ -1501,7 +1889,9 @@ void MaPlayer::fireEvent_(const Ev& e) {
             // HandyPhone score parts are fixed monophonic hardware parts. A
             // new note retriggers that part's slot; keeping its released voice
             // alongside the replacement turns SUS tails into an audible echo.
-            if (c.monophonic) {
+            // Shared channel initialization must not impose HPS allocation
+            // on Mobile/MA7 notes from an overlapping, differently typed MTR.
+            if (e.handyPhoneNote) {
                 for (int i = 0; i < kPoolSize; ++i) {
                     if (pool_[i].active() && pool_[i].channel == int(e.ch)) {
                         slot = i;
@@ -1573,7 +1963,17 @@ int MaPlayer::render(float* out, int frames) {
             fireEvent_(events_[nextEvent_]);
             ++nextEvent_;
         }
-        if (nextEvent_ >= events_.size() && activeVoices_() == 0 &&
+        // Natural EOF/steal can leave only orphan ATR gates far in the future.
+        // End only once ALL voices and the filter have drained and no authored
+        // event remains. Never advance time past a later trigger/controller.
+        // A zero-gain live tail cannot produce output once all authored
+        // events are consumed. Do not retire it during the score: a later
+        // Volume/Expression controller may revive it. Keep the normal filter
+        // drain and never use RMS/recentLevel to truncate a quiet sounding tail.
+        // Retain the source/gate endpoint of a still-live muted ATR recording.
+        if (nextEvent_ >= nonAtrGateEventEnd_ &&
+            (activeVoices_() == 0 ||
+             (cursor_ >= scoreEndSample_ && !hasOutputVoices_())) &&
             std::max({std::fabs(lp1L_), std::fabs(lp1R_),
                       std::fabs(lp2L_), std::fabs(lp2R_)}) < 1e-7f) {
             ended_ = true;
@@ -1639,6 +2039,8 @@ int MaPlayer::render(float* out, int frames) {
 
 void MaPlayer::seekToStart() {
     nextEvent_ = 0; cursor_ = 0;
+    atrChans_.clear();
+    for (auto& entry : ma7AudioPan_) entry.second.fill(AudioPanState{});
     for (auto& v : voiceTable_) if (v.sequenced) v.activated = false;
     activeVoiceWaveVersion_.fill(-1);
     ended_ = false; diagnostics_ = {};

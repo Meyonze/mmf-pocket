@@ -167,6 +167,9 @@ public:
     void setVolume(float v) { volume_ = v; }   // channel volume 0..1
     float tick();                          // one mono sample, ~[-1,1]
     bool  active() const { return active_; }
+    // Exact gain only, not recentLevel/envelope threshold. Used at score EOF
+    // when no later controller can unmute an otherwise live release tail.
+    bool  muted() const { return velocity_ == 0.0f || volume_ == 0.0f; }
     bool  released() const { return released_; }
     float recentLevel() const { return recentLevel_; }
     int   note() const { return note_; }
