@@ -25,12 +25,19 @@ final class ProgressivePlayback {
         void onError(String message);
     }
 
+    interface PcmObserver {
+        // Must not retain/mutate the reused array or perform blocking work.
+        void onPcm(short[] pcm, int frames);
+        void onEnd();
+    }
+
     private final Object lock = new Object();
     private final byte[] mmfData;
     private final boolean phoneSpeakerMode;
     private final File partialFile;
     private final File cachedFile;
     private final Listener listener;
+    private PcmObserver pcmObserver;
 
     private volatile boolean cancelled;
     private volatile boolean paused;
@@ -55,11 +62,18 @@ final class ProgressivePlayback {
 
     ProgressivePlayback(byte[] mmfData, boolean phoneSpeakerMode,
                         File partialFile, File cachedFile, Listener listener) {
+        this(mmfData, phoneSpeakerMode, partialFile, cachedFile, listener, null);
+    }
+
+    ProgressivePlayback(byte[] mmfData, boolean phoneSpeakerMode,
+                        File partialFile, File cachedFile, Listener listener,
+                        PcmObserver pcmObserver) {
         this.mmfData = mmfData;
         this.phoneSpeakerMode = phoneSpeakerMode;
         this.partialFile = partialFile;
         this.cachedFile = cachedFile;
         this.listener = listener;
+        this.pcmObserver = pcmObserver;
         readableFile = partialFile;
     }
 
@@ -241,12 +255,14 @@ final class ProgressivePlayback {
                     bytes[i * 2 + 1] = (byte) ((value >>> 8) & 0xff);
                 }
                 output.write(bytes, 0, count * BYTES_PER_FRAME);
+                observePcm(pcm, count);
                 synchronized (lock) {
                     renderedFrames += count;
                     lock.notifyAll();
                 }
             }
             if (cancelled) return;
+            finishObserver();
             if (renderedFrames == 0 || peak == 0) {
                 fail("音声データを生成できませんでした");
                 return;
@@ -411,6 +427,19 @@ final class ProgressivePlayback {
                 }
             }
         }
+    }
+
+    private void observePcm(short[] pcm, int frames) {
+        if (pcmObserver == null) return;
+        try { pcmObserver.onPcm(pcm, frames); }
+        catch (RuntimeException ignored) { pcmObserver = null; }
+    }
+
+    private void finishObserver() {
+        if (pcmObserver == null) return;
+        try { pcmObserver.onEnd(); }
+        catch (RuntimeException ignored) { /* Never fail audio for optional animation. */ }
+        pcmObserver = null;
     }
 
     private boolean waitForDrain(AudioTrack track, long endFrame) throws InterruptedException {

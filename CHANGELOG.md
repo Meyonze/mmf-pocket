@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.6.4 - 2026-10-12
+
+- Make Mafu react to the currently playing sound in MMF and supported WAV
+  files, with beat-linked bounce, sway, tilt and smoothly animated flourishes.
+- Combine recent sound strength and attack activity to keep gentle passages
+  restrained and sustained energetic passages more expressive. Change the
+  strength gradually rather than switching on a single loud accent.
+- Show slow breathing and swaying during silent introductions or unavailable
+  visual measurements, so playback still looks alive.
+- Reset visual history on track changes, pause and seek; perform optional WAV
+  analysis in the background and stop drawing audio motion when the UI is hidden.
+- Expand original synthetic visualization, cancellation, PCM-output and pose
+  regressions. No microphone, network permission or audio transmission added.
+- Keep the 1.6.3 sound engine, conversion cache and compact player layout.
+  Mafu reacts to the mixed sound, not an extracted lead melody or exact BPM.
+
 ## 1.6.3 - 2026-10-12
 
 - Improve recorded score-Audio and ATR sample-rate conversion with interpolation

@@ -85,6 +85,7 @@ public final class MainActivity extends Activity {
         public void onEvents(Player player, Player.Events events) {
             if (events.contains(Player.EVENT_POSITION_DISCONTINUITY)) {
                 allowProgressRegression = true;
+                if (mafuMascotView != null) mafuMascotView.resetAudioMotion();
             }
             updateUiFromController();
         }
@@ -1176,6 +1177,22 @@ public final class MainActivity extends Activity {
         mafuMascotView.setPlaybackState(playing, mafuMotionPace, mafuRoutineSeed);
     }
 
+    private void bindMafuAudio() {
+        if (mafuMascotView == null) return;
+        mafuMascotView.setAudioFrameProvider((values, position) -> {
+            MediaController controller = mediaController;
+            if (!activityStarted || controller == null || !controller.isPlaying()) return 0;
+            MediaItem item = controller.getCurrentMediaItem();
+            if (item == null || item.mediaMetadata.extras == null) return 0;
+            long token = item.mediaMetadata.extras.getLong(MmfPlayer.EXTRA_VISUAL_SOURCE, 0);
+            MafuAudioVisualization.Source source = MafuAudioVisualization.find(item.mediaId, token);
+            if (source == null) return 0;
+            position[0] = Math.max(0, controller.getCurrentPosition());
+            // Negative token means this same source has no measurements yet.
+            return source.sample(position[0], values) ? token : -token;
+        });
+    }
+
     private void updatePhoneSoundMode(boolean enabled) {
         MediaController controller = mediaController;
         if (controller == null) {
@@ -1341,6 +1358,7 @@ public final class MainActivity extends Activity {
     protected void onStart() {
         super.onStart();
         activityStarted = true;
+        bindMafuAudio();
         connectController();
     }
 
@@ -1349,6 +1367,7 @@ public final class MainActivity extends Activity {
         cancelBatchConversion();
         activityStarted = false;
         updateMafuMascot(false);
+        if (mafuMascotView != null) mafuMascotView.setAudioFrameProvider(null);
         disconnectController();
         super.onStop();
     }

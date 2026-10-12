@@ -84,6 +84,28 @@ jobs:
           javac -encoding UTF-8 --release 17 -Xlint:all -d build/progressive-playback-host app/src/main/java/app/mmfpocket/player/ProgressivePlayback.java tools/ProgressivePlaybackTest.java tools/progressive-playback-stubs/android/media/*.java tools/progressive-playback-stubs/app/mmfpocket/player/NativeMmfRenderer.java
           java -cp build/progressive-playback-host app.mmfpocket.player.ProgressivePlaybackTest build/progressive-playback-synthetic
 
+      - name: Build and run Mafu visual measurements and PCM observer host tests
+        run: |
+          mkdir -p build/mafu-audio-host
+          javac -encoding UTF-8 --release 17 -Xlint:all -d build/mafu-audio-host app/src/main/java/app/mmfpocket/player/MafuAudioEnvelope.java app/src/main/java/app/mmfpocket/player/MafuWavAnalysis.java app/src/main/java/app/mmfpocket/player/MafuAudioVisualization.java app/src/main/java/app/mmfpocket/player/MafuAudioDance.java app/src/main/java/app/mmfpocket/player/ProgressivePlayback.java tools/MafuAudioTest.java tools/MafuReactionTest.java tools/MafuIntensityTest.java tools/MafuPcmObserverTest.java tools/ProgressiveRenderTest.java tools/progressive-render-stubs/android/media/*.java tools/progressive-render-stubs/app/mmfpocket/player/NativeMmfRenderer.java
+          java -cp build/mafu-audio-host app.mmfpocket.player.MafuAudioTest
+          java -cp build/mafu-audio-host app.mmfpocket.player.MafuReactionTest
+          java -cp build/mafu-audio-host app.mmfpocket.player.MafuIntensityTest
+          java -cp build/mafu-audio-host app.mmfpocket.player.MafuPcmObserverTest build/mafu-observer-synthetic
+
+      - name: Build and run optional Mafu analysis lifecycle host tests
+        run: |
+          mkdir -p build/mafu-analysis-host
+          javac -encoding UTF-8 --release 17 -Xlint:all -cp build/mafu-audio-host -d build/mafu-analysis-host app/src/main/java/app/mmfpocket/player/MafuAudioAnalysis.java tools/MafuAnalysisLifecycleTest.java tools/mafu-analysis-stubs/android/content/*.java tools/mafu-analysis-stubs/android/content/res/*.java tools/mafu-analysis-stubs/android/net/*.java tools/mafu-analysis-stubs/android/os/*.java
+          java -cp build/mafu-analysis-host:build/mafu-audio-host app.mmfpocket.player.MafuAnalysisLifecycleTest
+
+      - name: Check actual Mafu pose math with host drawing stubs
+        run: |
+          mkdir -p build/mafu-view-host
+          javac -encoding UTF-8 --release 17 -Xlint:all -d build/mafu-view-host app/src/main/java/app/mmfpocket/player/MafuMesh.java app/src/main/java/app/mmfpocket/player/MafuAudioEnvelope.java app/src/main/java/app/mmfpocket/player/MafuAudioDance.java app/src/main/java/app/mmfpocket/player/IllustratedMafuMascotView.java tools/MafuPoseBoundsTest.java tools/MafuQuietMotionTest.java tools/mafu-view-stubs/android/content/*.java tools/mafu-view-stubs/android/graphics/*.java tools/mafu-view-stubs/android/os/*.java tools/mafu-view-stubs/android/view/*.java
+          java -cp build/mafu-view-host app.mmfpocket.player.MafuPoseBoundsTest
+          java -cp build/mafu-view-host app.mmfpocket.player.MafuQuietMotionTest
+
       - name: Build sanitizer smoke test
         run: >-
           c++ -std=c++20 -O1 -g -fsanitize=address,undefined

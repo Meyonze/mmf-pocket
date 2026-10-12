@@ -1,0 +1,6 @@
+package android.graphics;
+public final class Bitmap {
+    public enum Config { ARGB_8888 }
+    public static Bitmap createBitmap(int w,int h,Config c){return new Bitmap();}
+    public void setPixels(int[] p,int offset,int stride,int x,int y,int w,int h){}
+}

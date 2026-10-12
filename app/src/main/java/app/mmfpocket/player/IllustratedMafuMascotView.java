@@ -30,6 +30,22 @@ final class IllustratedMafuMascotView extends View {
     private int pace = PACE_NORMAL;
     private int routineVariant;
     private long stateStartedMs = SystemClock.uptimeMillis();
+    interface AudioFrameProvider {
+        // Positive token=measured, negative=pending/unavailable, zero=no source. No I/O.
+        long sample(float[] values, long[] position);
+    }
+    private AudioFrameProvider audioFrameProvider;
+    private final float[] audioValues = new float[4];
+    private final long[] audioPosition = new long[1];
+    private final MafuAudioDance audioDance = new MafuAudioDance();
+    private long lastDrawMs;
+
+    void setAudioFrameProvider(AudioFrameProvider provider) {
+        audioFrameProvider = provider;
+        resetAudioMotion();
+    }
+
+    void resetAudioMotion() { audioDance.reset(); lastDrawMs = 0; }
 
     IllustratedMafuMascotView(Context context) {
         super(context);
@@ -45,6 +61,7 @@ final class IllustratedMafuMascotView extends View {
         pace = clampedPace;
         routineVariant = nextRoutineVariant;
         stateStartedMs = SystemClock.uptimeMillis();
+        resetAudioMotion();
         invalidate();
     }
 
@@ -52,8 +69,20 @@ final class IllustratedMafuMascotView extends View {
     protected void onDraw(Canvas canvas) {
         super.onDraw(canvas);
 
-        float seconds = (SystemClock.uptimeMillis() - stateStartedMs) / 1000f;
-        Motion motion = calculateMotion(seconds);
+        long now = SystemClock.uptimeMillis();
+        float seconds = (now - stateStartedMs) / 1000f;
+        float elapsed = lastDrawMs == 0 ? 0 : (now - lastDrawMs) / 1000f;
+        lastDrawMs = now;
+        long audioToken = playing && audioFrameProvider != null
+                ? audioFrameProvider.sample(audioValues, audioPosition) : 0;
+        Motion motion;
+        if (playing && audioFrameProvider != null) {
+            if (audioToken <= 0) java.util.Arrays.fill(audioValues, 0);
+            audioDance.update(Math.abs(audioToken), audioPosition[0], elapsed, audioValues, routineVariant);
+            motion = calculateAudioMotion(seconds);
+        } else {
+            motion = calculateMotion(seconds);
+        }
         // Leave room for the jump arc while keeping the resting model prominent.
         float unit = Math.min(getWidth(), getHeight()) / 80f;
 
@@ -122,6 +151,42 @@ final class IllustratedMafuMascotView extends View {
         }
 
         return calculateFastMotion(seconds);
+    }
+
+    private Motion calculateAudioMotion(float seconds) {
+        Motion motion = new Motion();
+        float sway = wave(audioDance.phase, 1f);
+        float expression = .22f + .78f * audioDance.intensity;
+        float activity = audioDance.level * expression;
+        float beat = audioDance.pulse;
+        // An unmeasured/silent introduction still shows that playback is alive.
+        // This slow breathing cue is not a made-up beat or a detected melody.
+        float rest = 1f - Math.min(1f, audioDance.level * 3f + beat);
+        float breath = wave(seconds, .28f) * rest;
+        float drift = wave(seconds, .19f) * rest;
+        float actionProgress = audioDance.action < 0 ? 0 : Math.min(1,
+                audioDance.actionSeconds / MafuAudioDance.duration(audioDance.action));
+        // Leave headroom for the existing acrobatics; keep the player card compact.
+        float jumpRoom = 1f - .6f * (float)Math.sin(Math.PI * actionProgress);
+        motion.x = sway * (activity * 2.8f + audioDance.treble * expression * .6f)
+                + audioDance.lean * 2.4f + drift * .65f;
+        motion.y = wave(seconds, .22f) * .25f + breath * 1.15f
+                - activity * 1.6f - beat * 9.5f * jumpRoom;
+        motion.rotation = sway * activity * 7f + audioDance.lean * 6f + drift * 1.7f;
+        motion.scaleX = 1f + activity * .025f + beat * .12f + breath * .015f;
+        motion.scaleY = 1f - activity * .02f - beat * .09f - breath * .015f;
+        motion.speedLines = beat * audioDance.treble * .65f;
+        motion.soundPulse = beat;
+        if (audioDance.action >= 0) {
+            float progress = actionProgress;
+            switch (audioDance.action) {
+                case 0: applyCartwheel(motion, progress); break;
+                case 1: applyBackflip(motion, progress); break;
+                case 2: applyPirouette(motion, progress); break;
+                default: applyHappyHop(motion, progress); break;
+            }
+        }
+        return motion;
     }
 
     private Motion calculateFastMotion(float seconds) {
@@ -259,10 +324,12 @@ final class IllustratedMafuMascotView extends View {
     }
 
     private void drawShadow(Canvas canvas, Motion motion) {
-        accentPaint.setColor(Color.rgb(216, 229, 239));
-        accentPaint.setAlpha(playing ? 150 : 115);
+        float pulse = motion.soundPulse;
+        accentPaint.setColor(Color.rgb((int)(216 - pulse * 55),
+                (int)(229 - pulse * 25), (int)(239 - pulse * 4)));
+        accentPaint.setAlpha(playing ? (int)(130 + pulse * 100) : 115);
         float lift = Math.min(5f, Math.max(0f, -motion.y));
-        float width = 18f - lift * 0.7f;
+        float width = 18f - lift * 0.7f + pulse * 2.5f;
         canvas.drawOval(new RectF(-width, 27f, width, 31f), accentPaint);
     }
 
@@ -324,5 +391,6 @@ final class IllustratedMafuMascotView extends View {
         float scaleX = 1f;
         float scaleY = 1f;
         float speedLines;
+        float soundPulse;
     }
 }

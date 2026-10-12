@@ -47,9 +47,12 @@ final class MmfPlayer extends SimpleBasePlayer {
     static final String EXTRA_PHONE_SPEAKER = "app.mmfpocket.extra.PHONE_SPEAKER";
     static final String EXTRA_FORMAT_LABEL = "app.mmfpocket.extra.FORMAT_LABEL";
     static final String EXTRA_MOTION_PACE = "app.mmfpocket.extra.MOTION_PACE";
+    static final String EXTRA_VISUAL_SOURCE = "app.mmfpocket.extra.VISUAL_SOURCE";
 
     private final Context context;
     private final Handler mainHandler;
+    private final MafuAudioAnalysis visualAnalysis;
+    private MafuAudioVisualization.Source visualSource;
     private final ExecutorService preparationWorker = Executors.newSingleThreadExecutor();
     private final AudioManager audioManager;
     private final AudioFocusRequest audioFocusRequest;
@@ -92,6 +95,7 @@ final class MmfPlayer extends SimpleBasePlayer {
         this.context = context.getApplicationContext();
         this.foregroundServiceReady = foregroundServiceReady;
         mainHandler = new Handler(looper);
+        visualAnalysis = new MafuAudioAnalysis(this.context);
         audioManager = (AudioManager) context.getSystemService(Context.AUDIO_SERVICE);
         PowerManager powerManager =
                 (PowerManager) context.getSystemService(Context.POWER_SERVICE);
@@ -363,6 +367,7 @@ final class MmfPlayer extends SimpleBasePlayer {
         abandonAudioFocus();
         setWakeLockHeld(false);
         preparationWorker.shutdownNow();
+        visualAnalysis.release();
         if (receiverRegistered) {
             receiverRegistered = false;
             try {
@@ -407,6 +412,9 @@ final class MmfPlayer extends SimpleBasePlayer {
 
     private void startProgressivePlayback(
             MmfAudioRepository.PlaybackSource source, int requestGeneration) {
+        MafuAudioVisualization.Source visual = beginVisualization();
+        MafuAudioEnvelope.Builder visualBuilder = new MafuAudioEnvelope.Builder(
+                visual.envelope, ProgressivePlayback.SAMPLE_RATE);
         ProgressivePlayback playback = new ProgressivePlayback(
                 source.bytes, source.phoneSpeakerMode, source.partial, source.target,
                 new ProgressivePlayback.Listener() {
@@ -451,6 +459,13 @@ final class MmfPlayer extends SimpleBasePlayer {
                             if (requestGeneration != generation || released) return;
                             fail(message, PlaybackException.ERROR_CODE_AUDIO_TRACK_WRITE_FAILED);
                         });
+                    }
+                }, new ProgressivePlayback.PcmObserver() {
+                    @Override public void onPcm(short[] pcm, int frames) {
+                        if (!visual.cancelled) visualBuilder.acceptStereo16(pcm, frames);
+                    }
+                    @Override public void onEnd() {
+                        if (!visual.cancelled) visualBuilder.finish();
                     }
                 });
         progressivePlayback = playback;
@@ -513,6 +528,10 @@ final class MmfPlayer extends SimpleBasePlayer {
     private void startMediaPlayer(File wav, AssetFileDescriptor directWav,
                                   int requestGeneration) {
         releaseBackend();
+        MafuAudioVisualization.Source visual = beginVisualization();
+        Uri visualUri = currentItem.localConfiguration == null ? null
+                : currentItem.localConfiguration.uri;
+        visualAnalysis.start(visual, wav, visualUri);
         currentWav = wav;
         MediaPlayer player = new MediaPlayer();
         mediaPlayer = player;
@@ -887,6 +906,9 @@ final class MmfPlayer extends SimpleBasePlayer {
 
     private void releaseBackend() {
         prepared = false;
+        MafuAudioVisualization.clear(visualSource);
+        visualSource = null;
+        visualAnalysis.cancel();
         if (progressivePlayback != null) {
             progressivePlayback.cancel();
             progressivePlayback = null;
@@ -898,6 +920,20 @@ final class MmfPlayer extends SimpleBasePlayer {
             mediaPlayer.release();
             mediaPlayer = null;
         }
+    }
+
+    private MafuAudioVisualization.Source beginVisualization() {
+        MafuAudioVisualization.clear(visualSource);
+        visualSource = MafuAudioVisualization.start(currentItem.mediaId);
+        Bundle extras = currentItem.mediaMetadata.extras == null
+                ? new Bundle() : new Bundle(currentItem.mediaMetadata.extras);
+        extras.putLong(EXTRA_VISUAL_SOURCE, visualSource.token);
+        MediaMetadata metadata = new MediaMetadata.Builder().populate(currentItem.mediaMetadata)
+                .setExtras(extras).build();
+        currentItem = currentItem.buildUpon().setMediaMetadata(metadata).build();
+        playlist.set(currentIndex, currentItem);
+        invalidateState();
+        return visualSource;
     }
 
     private void abandonAudioFocus() {
