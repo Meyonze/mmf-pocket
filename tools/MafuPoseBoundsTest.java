@@ -16,7 +16,7 @@ public final class MafuPoseBoundsTest {
         MafuMesh mesh=new MafuMesh(192);double minX=999,minY=999,maxX=-999,maxY=-999;int poses=0;
         for(int action=-1;action<4;action++)for(int step=0;step<=24;step++) {
             dance.action=action;dance.actionSeconds=action<0?0:step/24f*MafuAudioDance.duration(action);
-            dance.intensity=1;dance.level=.95f;dance.bass=.8f;dance.treble=.8f;dance.pulse=.95f;dance.lean=step%2==0?.8f:-.8f;dance.phase=step*.137f;
+            dance.intensity=1;dance.level=1;dance.bass=1;dance.treble=1;dance.pulse=1;dance.lean=step%2==0?1:-1;dance.phase=step*.137f;
             Object motion=pose.invoke(view,3f+step*.03f);
             mesh.render(value(motion,"flipXDegrees"),value(motion,"turnYDegrees"));
             double roll=Math.toRadians(value(motion,"rotation")),cos=Math.cos(roll),sin=Math.sin(roll);

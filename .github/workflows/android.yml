@@ -87,10 +87,11 @@ jobs:
       - name: Build and run Mafu visual measurements and PCM observer host tests
         run: |
           mkdir -p build/mafu-audio-host
-          javac -encoding UTF-8 --release 17 -Xlint:all -d build/mafu-audio-host app/src/main/java/app/mmfpocket/player/MafuAudioEnvelope.java app/src/main/java/app/mmfpocket/player/MafuWavAnalysis.java app/src/main/java/app/mmfpocket/player/MafuAudioVisualization.java app/src/main/java/app/mmfpocket/player/MafuAudioDance.java app/src/main/java/app/mmfpocket/player/ProgressivePlayback.java tools/MafuAudioTest.java tools/MafuReactionTest.java tools/MafuIntensityTest.java tools/MafuPcmObserverTest.java tools/ProgressiveRenderTest.java tools/progressive-render-stubs/android/media/*.java tools/progressive-render-stubs/app/mmfpocket/player/NativeMmfRenderer.java
+          javac -encoding UTF-8 --release 17 -Xlint:all -d build/mafu-audio-host app/src/main/java/app/mmfpocket/player/MafuAudioEnvelope.java app/src/main/java/app/mmfpocket/player/MafuWavAnalysis.java app/src/main/java/app/mmfpocket/player/MafuAudioVisualization.java app/src/main/java/app/mmfpocket/player/MafuAudioDance.java app/src/main/java/app/mmfpocket/player/ProgressivePlayback.java tools/MafuAudioTest.java tools/MafuReactionTest.java tools/MafuIntensityTest.java tools/MafuCadenceTest.java tools/MafuPcmObserverTest.java tools/ProgressiveRenderTest.java tools/progressive-render-stubs/android/media/*.java tools/progressive-render-stubs/app/mmfpocket/player/NativeMmfRenderer.java
           java -cp build/mafu-audio-host app.mmfpocket.player.MafuAudioTest
           java -cp build/mafu-audio-host app.mmfpocket.player.MafuReactionTest
           java -cp build/mafu-audio-host app.mmfpocket.player.MafuIntensityTest
+          java -cp build/mafu-audio-host app.mmfpocket.player.MafuCadenceTest
           java -cp build/mafu-audio-host app.mmfpocket.player.MafuPcmObserverTest build/mafu-observer-synthetic
 
       - name: Build and run optional Mafu analysis lifecycle host tests

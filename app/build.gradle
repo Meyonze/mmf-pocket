@@ -25,7 +25,7 @@ android {
         applicationId "app.mmfpocket.player"
         minSdk 29
         targetSdk 35
-        versionCode 74
+        versionCode 76
         versionName "1.6.4"
 
         externalNativeBuild {

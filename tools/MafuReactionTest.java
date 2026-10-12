@@ -18,12 +18,14 @@ public final class MafuReactionTest {
         check(dance.pulse<.03,"same sampled window cannot retrigger");
         float prior=dance.pulse;
         for(int frame=0;frame<4;frame++)dance.update(2,40+frame*16,1f/60,attack,0);
-        check(dance.pulse<=prior,"weak input respects160ms refractory interval");
+        check(dance.pulse<=prior,"weak input respects visual recovery interval");
         dance.update(2,200,1f/60,attack,0);
-        check(dance.pulse>prior,"next genuinely later attack retriggers");
-        for(int frame=0;frame<180;frame++)dance.update(2,220+frame*16,1f/60,new float[4],0);
+        check(dance.pulse<=prior,"200ms ornament must not trigger another jump");
+        dance.update(2,480,1f/60,attack,0);
+        check(dance.pulse>prior,"later accent after recovery retriggers");
+        for(int frame=0;frame<180;frame++)dance.update(2,500+frame*16,1f/60,new float[4],0);
         check(dance.pulse<.001&&dance.level<.001,"silence still settles despite visual gain");
         dance.update(3,0,0,new float[4],0);check(dance.pulse==0,"source change clears beat memory");
-        System.out.println("PASS weak-attack visibility, held-window/160ms guard, silence and source reset. No sound output changed/tested here.");
+        System.out.println("PASS restrained weak attacks, held-window/recovery guard, silence and source reset. No sound output changed/tested here.");
     }
 }

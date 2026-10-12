@@ -4,6 +4,8 @@
 
 - Make Mafu react to the currently playing sound in MMF and supported WAV
   files, with beat-linked bounce, sway, tilt and smoothly animated flourishes.
+- Select prominent accents and thin dense small attacks, with a complete
+  smooth takeoff/landing arc instead of restarting a hop on each ornament.
 - Combine recent sound strength and attack activity to keep gentle passages
   restrained and sustained energetic passages more expressive. Change the
   strength gradually rather than switching on a single loud accent.

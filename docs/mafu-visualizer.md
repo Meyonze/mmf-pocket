@@ -1,5 +1,21 @@
 # Mafu audio-reactive animation
 
+## Prominent accents and calmer cadence
+
+Separate phrase-attack accounting from visible jump selection without changing
+the sound engine or PCM measurements. Weak decorations after stronger recent accents contribute to the
+overall expression but do not each trigger a jump or flip the lean direction.
+Select prominent measured onsets relative to a decaying recent peak (58%),
+with a minimum 420 ms visible recovery and a bounded 420..800 ms recovery adapted
+from accepted accent spacing. Very fast patterns deliberately feel half-time
+or slower. This is prominence-based thinning, not exact tempo/meter tracking,
+lead-melody extraction, fixed note counting or a predicted/fake beat grid.
+Each accepted jump follows a continuous sine-squared takeoff/landing arc over
+340..640 ms. No beat-free periodic hops; existing started acrobatics still finish.
+Reset cadence history on pause/seek/source changes. No extra worker or timeline
+allocation. Cadence tests cover dense 160 ms attacks, strong 480 ms accents plus
+80 ms ornaments, 30/60/120 Hz, slower accents, complete flight and resets.
+
 Starting with 1.6.4, Mafu samples visual measurements at the controller's current
 playback position, not the renderer's ahead-of-playback cursor. This changes
 only animation: the native decoder, sound processing, conversion-cache identity,
