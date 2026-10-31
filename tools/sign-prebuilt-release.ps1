@@ -34,7 +34,7 @@ if (-not $ApkSignerPath -or -not (Test-Path -LiteralPath $ApkSignerPath)) {
     throw 'Pass -ApkSignerPath with the path to your Android build-tools apksigner.bat.'
 }
 # apksigner prompts directly for the existing password; do not put it in arguments.
-& $ApkSignerPath sign --ks $keystore --ks-key-alias $KeyAlias --out $outputApk $inputApk
+& $ApkSignerPath sign --ks $keystore --ks-key-alias $KeyAlias --v2-signing-enabled true --out $outputApk $inputApk
 if ($LASTEXITCODE -ne 0) { throw 'APK signing failed.' }
 $verification = & $ApkSignerPath verify --verbose --print-certs $outputApk
 if ($LASTEXITCODE -ne 0) { throw 'APK signature verification failed.' }

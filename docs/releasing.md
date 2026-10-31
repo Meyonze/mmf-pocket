@@ -1,5 +1,53 @@
 # Release procedure
 
+## GitHub Actions signing and publication
+
+Use [Signed release](../.github/workflows/release.yml) to build, sign and publish
+without transferring the private key to this chat or signing every release on
+Windows. Register the EXISTING public release key, not a new/debug key.
+
+In [repository Actions secrets](https://github.com/Meyonze/mmf-pocket/settings/secrets/actions),
+add these two repository secrets once:
+
+| Name | Value |
+| --- | --- |
+| `MMF_RELEASE_KEYSTORE_BASE64` | Base64 of the existing release `.jks` file |
+| `MMF_RELEASE_STORE_PASSWORD` | Existing keystore password |
+
+On Windows, copy the key's Base64 directly to the clipboard without printing it:
+
+```powershell
+[Convert]::ToBase64String([IO.File]::ReadAllBytes('D:\path\to\existing-release.jks')) | Set-Clipboard
+```
+
+Paste it only into the GitHub secret field. Enter the password directly in its
+secret field. Do not put either value in chat, a commit, release notes or logs.
+If the key entry password differs, add `MMF_RELEASE_KEY_PASSWORD`; otherwise the
+workflow reuses the store password. The alias defaults to `mmf-pocket`; if yours
+differs, set the repository Actions variable `MMF_RELEASE_KEY_ALIAS`.
+
+For the prepared1.6.5 release, run Signed release from `main` using its defaults:
+
+- commit: `42e74ee5e0f3dd80ee4c8be58b387071c61194a8`
+- tag: `v1.6.5`
+- publish: enabled (disable to keep the signed release as a draft).
+
+The workflow checks main ancestry, version/tag agreement and successful Android
+CI for that exact SHA. It builds without signing credentials in Gradle's
+environment, then restores the key only in a private runner temporary directory
+for signing and removes it afterward. It verifies package/version, non-debug
+build type, alignment, v2 signing and the existing public certificate fingerprint
+`1C79EF3491BD915618F989E053C29648AF1AF0910D9E7150919D0D64D896C59E`.
+Only the signed universal APK and SHA256SUMS.txt are attached. Both uploaded draft
+assets are downloaded and checked before publication. Existing public releases,
+different tag targets and conflicting draft assets are not replaced.
+
+After the one-time setup, the release can be dispatched from GitHub or by the
+assistant. No Windows signing or key transfer is needed for subsequent releases.
+An unset/malformed key or different certificate stops the workflow; it does not
+fall back to debug signing. The fast Release automation checks workflow uses
+fake native tools/APIs and no signing secrets; it does not claim real signing.
+
 ## One-time signing setup
 
 Create a dedicated keystore outside the repository. Never commit the keystore or its passwords.

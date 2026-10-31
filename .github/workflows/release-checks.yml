@@ -1,0 +1,30 @@
+name: Release automation checks
+
+on:
+  push:
+    paths:
+      - '.github/workflows/release.yml'
+      - '.github/workflows/release-checks.yml'
+      - 'tools/ci-release.py'
+      - 'tools/ci-release-test.py'
+  pull_request:
+    paths:
+      - '.github/workflows/release.yml'
+      - '.github/workflows/release-checks.yml'
+      - 'tools/ci-release.py'
+      - 'tools/ci-release-test.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  release-guards:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check release guards without signing secrets or network mutations
+        run: python3 tools/ci-release-test.py

@@ -1,0 +1,109 @@
+name: Signed release
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: Full commit SHA with successful Android CI
+        required: true
+        default: '42e74ee5e0f3dd80ee4c8be58b387071c61194a8'
+      tag:
+        description: Stable release tag matching versionName
+        required: true
+        default: 'v1.6.5'
+      publish:
+        description: Publish after verification (off keeps a signed draft)
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: signed-release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      RELEASE_COMMIT: ${{ inputs.commit }}
+      RELEASE_TAG: ${{ inputs.tag }}
+    steps:
+      - name: Check out trusted release tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: automation
+          persist-credentials: false
+
+      - name: Validate release request
+        run: python3 automation/tools/ci-release.py validate-ref --commit "$RELEASE_COMMIT" --tag "$RELEASE_TAG"
+
+      - name: Check out release source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.commit }}
+          path: source
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify main ancestry, version and exact-commit CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          python3 automation/tools/ci-release.py prepare --source source
+          --commit "$RELEASE_COMMIT" --tag "$RELEASE_TAG"
+          --state "$RUNNER_TEMP/mmf-release-state.json"
+
+      - name: Check required signing secrets
+        env:
+          MMF_RELEASE_KEYSTORE_BASE64: ${{ secrets.MMF_RELEASE_KEYSTORE_BASE64 }}
+          MMF_RELEASE_STORE_PASSWORD: ${{ secrets.MMF_RELEASE_STORE_PASSWORD }}
+        run: python3 automation/tools/ci-release.py check-secrets
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
+
+      - name: Install Android SDK components
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018" "cmake;3.22.1"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+
+      - name: Lint and build unsigned release
+        working-directory: source
+        run: bash gradlew --no-daemon --max-workers=4 lint assembleRelease --stacktrace
+
+      - name: Sign and verify existing public certificate
+        env:
+          MMF_RELEASE_KEYSTORE_BASE64: ${{ secrets.MMF_RELEASE_KEYSTORE_BASE64 }}
+          MMF_RELEASE_STORE_PASSWORD: ${{ secrets.MMF_RELEASE_STORE_PASSWORD }}
+          MMF_RELEASE_KEY_PASSWORD: ${{ secrets.MMF_RELEASE_KEY_PASSWORD }}
+          MMF_RELEASE_KEY_ALIAS: ${{ vars.MMF_RELEASE_KEY_ALIAS || 'mmf-pocket' }}
+        run: >-
+          python3 automation/tools/ci-release.py sign
+          --state "$RUNNER_TEMP/mmf-release-state.json"
+          --output "$RUNNER_TEMP/mmf-public-release"
+
+      - name: Publish verified APK and checksum
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PUBLISH_RELEASE: ${{ inputs.publish }}
+        run: |
+          args=(publish --state "$RUNNER_TEMP/mmf-release-state.json" --output "$RUNNER_TEMP/mmf-public-release")
+          if [[ "$PUBLISH_RELEASE" == 'true' ]]; then args+=(--public); fi
+          url=$(python3 automation/tools/ci-release.py "${args[@]}")
+          printf '### Signed release\n\n%s\n\nCommit: `%s`\n' "$url" "$RELEASE_COMMIT" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove temporary signing material
+        if: always()
+        run: rm -rf -- "$RUNNER_TEMP"/mmf-sign-*
