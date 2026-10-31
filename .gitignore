@@ -15,3 +15,4 @@ keystore.properties
 .env.local
 Thumbs.db
 .DS_Store
+tools/__pycache__/

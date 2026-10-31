@@ -17,8 +17,6 @@ static std::string cell(std::string s) {
     for(auto& c:s)if(c=='\t'||c=='\n'||c=='\r')c=' ';return s;
 }
 int auditScores(const fs::path& root,const fs::path& report) {
-    std::ofstream out(report,std::ios::binary|std::ios::trunc);
-    if(!out){std::cerr<<"cannot open report\n";return 2;}
     std::vector<fs::path> files;
     if(fs::is_regular_file(root))files.push_back(root);
     else for(const auto& entry:fs::recursive_directory_iterator(root)) {
@@ -28,6 +26,14 @@ int auditScores(const fs::path& root,const fs::path& report) {
         if(ext==".mmf")files.push_back(entry.path());
     }
     std::sort(files.begin(),files.end());
+    if(files.empty()){std::cerr<<"No MMF input files found\n";return 2;}
+    // Resolve file identity before opening a destructive output handle. String
+    // comparisons miss aliases through symbolic links, hard links and folders.
+    if(fs::exists(report))for(const auto& path:files)if(fs::equivalent(path,report)) {
+        std::cerr<<"Report path identifies an input file; refusing overwrite\n";return 2;
+    }
+    std::ofstream out(report,std::ios::binary|std::ios::trunc);
+    if(!out){std::cerr<<"cannot open report\n";return 2;}
     out<<"file\tkind\tstatus\tcomplete\toverflow\tdomain\tformat\ttrack\tchannel\topcode\tcount\tfirst_seconds\tlast_seconds\tmin_value\tmax_value\n";
     size_t parsed=0,initialized=0,incomplete=0,overflow=0;
     for(const auto& path:files) {

@@ -45,6 +45,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import androidx.media3.common.C;
 import androidx.media3.common.MediaItem;
+import androidx.media3.common.MediaMetadata;
 import androidx.media3.common.Player;
 import androidx.media3.common.util.UnstableApi;
 import androidx.media3.session.MediaController;
@@ -105,6 +106,7 @@ public final class MainActivity extends Activity {
     private int mafuRoutineSeed;
     private TextView formatLabel;
     private TextView nowPlayingLabel;
+    private TextView songCredits;
     private TextView timeLabel;
     private ListView listView;
     private SeekBar playbackProgress;
@@ -341,12 +343,12 @@ public final class MainActivity extends Activity {
 
         LinearLayout playerPanel = new LinearLayout(this);
         playerPanel.setOrientation(LinearLayout.VERTICAL);
-        playerPanel.setPadding(dp(12), dp(6), dp(12), dp(6));
+        playerPanel.setPadding(dp(14), dp(3), dp(14), dp(3));
         playerPanel.setBackgroundResource(R.drawable.player_panel);
         LinearLayout.LayoutParams playerParams = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT);
-        playerParams.topMargin = dp(8);
+        playerParams.topMargin = dp(4);
 
         LinearLayout playerUpper = new LinearLayout(this);
         playerUpper.setOrientation(LinearLayout.HORIZONTAL);
@@ -356,14 +358,10 @@ public final class MainActivity extends Activity {
         playerUpperContent.setOrientation(LinearLayout.VERTICAL);
         playerUpperContent.setGravity(Gravity.CENTER_VERTICAL);
 
-        LinearLayout playerTop = new LinearLayout(this);
-        playerTop.setOrientation(LinearLayout.HORIZONTAL);
-        playerTop.setGravity(Gravity.CENTER_VERTICAL);
-
         mafuMascotView = new IllustratedMafuMascotView(this);
         mafuMascotView.setAlpha(0.72f);
         LinearLayout.LayoutParams mascotParams = new LinearLayout.LayoutParams(dp(84), dp(92));
-        mascotParams.rightMargin = dp(6);
+        mascotParams.rightMargin = dp(10);
         playerUpper.addView(mafuMascotView, mascotParams);
 
         LinearLayout trackInfo = new LinearLayout(this);
@@ -372,38 +370,60 @@ public final class MainActivity extends Activity {
 
         nowPlayingLabel = new TextView(this);
         nowPlayingLabel.setText(R.string.no_track_selected);
-        nowPlayingLabel.setTextSize(15);
+        nowPlayingLabel.setTextSize(17);
+        nowPlayingLabel.setTextColor(0xFF25344A);
         nowPlayingLabel.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        nowPlayingLabel.setSingleLine(true);
-        nowPlayingLabel.setEllipsize(TextUtils.TruncateAt.MIDDLE);
+        nowPlayingLabel.setMaxLines(2);
+        nowPlayingLabel.setEllipsize(TextUtils.TruncateAt.END);
         trackInfo.addView(nowPlayingLabel);
+
+        playerUpperContent.addView(trackInfo, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        songCredits = new TextView(this);
+        songCredits.setTextSize(12);
+        songCredits.setTextColor(0xFF68707B);
+        songCredits.setTypeface(Typeface.DEFAULT, Typeface.NORMAL);
+        songCredits.setMaxLines(2);
+        songCredits.setEllipsize(TextUtils.TruncateAt.END);
+        songCredits.setVisibility(View.GONE);
+        LinearLayout.LayoutParams creditParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        creditParams.topMargin = dp(2);
+        playerUpperContent.addView(songCredits, creditParams);
+        playerUpper.addView(playerUpperContent, new LinearLayout.LayoutParams(
+                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+        LinearLayout playerDetails = new LinearLayout(this);
+        playerDetails.setOrientation(LinearLayout.HORIZONTAL);
+        playerDetails.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout.LayoutParams detailParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        detailParams.topMargin = dp(2);
+        playerUpperContent.addView(playerDetails, detailParams);
 
         statusLabel = new TextView(this);
         statusLabel.setText(R.string.select_mmf_prompt);
-        statusLabel.setTextSize(12);
+        statusLabel.setTextSize(11);
         statusLabel.setTextColor(0xFF1E88E5);
         statusLabel.setSingleLine(true);
         statusLabel.setEllipsize(TextUtils.TruncateAt.END);
-        trackInfo.addView(statusLabel);
-
-        playerTop.addView(trackInfo, new LinearLayout.LayoutParams(
+        playerDetails.addView(statusLabel, new LinearLayout.LayoutParams(
                 0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
 
-        LinearLayout playerMetadata = new LinearLayout(this);
-        playerMetadata.setOrientation(LinearLayout.VERTICAL);
-        playerMetadata.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
-
         formatLabel = new TextView(this);
-        formatLabel.setTextSize(12);
-        formatLabel.setTextColor(0xFF9E9E9E);
-        formatLabel.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        formatLabel.setGravity(Gravity.END);
+        formatLabel.setTextSize(11);
+        formatLabel.setTextColor(0xFF68707B);
+        formatLabel.setTypeface(Typeface.DEFAULT, Typeface.NORMAL);
         formatLabel.setSingleLine(true);
-        playerMetadata.addView(formatLabel);
+        LinearLayout.LayoutParams formatParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        formatParams.leftMargin = dp(8);
+        formatParams.rightMargin = dp(12);
+        playerDetails.addView(formatLabel, formatParams);
 
         phoneSoundSwitch = new Switch(this);
         phoneSoundSwitch.setText(R.string.phone_sound_mode_short);
-        phoneSoundSwitch.setTextSize(9);
+        phoneSoundSwitch.setTextSize(10);
         phoneSoundSwitch.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
         phoneSoundSwitch.setChecked(getSharedPreferences(PREFS, MODE_PRIVATE)
                 .getBoolean(PREF_PHONE_SOUND, false));
@@ -413,10 +433,10 @@ public final class MainActivity extends Activity {
             updatePhoneSoundMode(checked);
             statusLabel.setText(checked ? R.string.phone_mode_enabled : R.string.phone_mode_disabled);
         });
-        playerMetadata.addView(phoneSoundSwitch);
-        playerTop.addView(playerMetadata);
-        playerUpperContent.addView(playerTop, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, dp(52)));
+        playerDetails.addView(phoneSoundSwitch);
+
+        playerPanel.addView(playerUpper, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
 
         playbackProgress = new SeekBar(this);
         playbackProgress.setMax(1000);
@@ -452,24 +472,25 @@ public final class MainActivity extends Activity {
                 else updatePlayerProgress();
             }
         });
-        playbackProgress.setPadding(dp(10), 0, dp(10), 0);
-        LinearLayout progressRow = new LinearLayout(this);
-        progressRow.setOrientation(LinearLayout.HORIZONTAL);
-        progressRow.setGravity(Gravity.CENTER_VERTICAL);
-        progressRow.addView(playbackProgress, new LinearLayout.LayoutParams(
-                0, dp(32), 1));
-        playerUpperContent.addView(progressRow, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, dp(32)));
-        playerUpper.addView(playerUpperContent, new LinearLayout.LayoutParams(
-                0, LinearLayout.LayoutParams.MATCH_PARENT, 1));
-        playerPanel.addView(playerUpper, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, dp(92)));
-
+        playbackProgress.setPadding(dp(8), 0, dp(8), 0);
         timeLabel = new TextView(this);
         timeLabel.setText(R.string.zero_playback_time);
         timeLabel.setTextSize(11);
         timeLabel.setTextColor(0xFF68707B);
-        timeLabel.setGravity(Gravity.START | Gravity.TOP);
+        timeLabel.setSingleLine(true);
+        timeLabel.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
+
+        LinearLayout progressRow = new LinearLayout(this);
+        progressRow.setOrientation(LinearLayout.HORIZONTAL);
+        progressRow.setGravity(Gravity.CENTER_VERTICAL);
+        progressRow.addView(playbackProgress, new LinearLayout.LayoutParams(
+                0, dp(24), 1));
+        LinearLayout.LayoutParams timeParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        timeParams.leftMargin = dp(6);
+        progressRow.addView(timeLabel, timeParams);
+        playerPanel.addView(progressRow, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
 
         LinearLayout controls = new LinearLayout(this);
         controls.setOrientation(LinearLayout.HORIZONTAL);
@@ -525,10 +546,10 @@ public final class MainActivity extends Activity {
                         new int[] {}
                 },
                 new int[] {0xFFEEEEEE, 0xFFFFFFFF}));
-        playPauseButton.setPadding(dp(11), dp(11), dp(11), dp(11));
+        playPauseButton.setPadding(dp(9), dp(9), dp(9), dp(9));
         playPauseButton.setEnabled(false);
         playPauseButton.setOnClickListener(v -> togglePlayback());
-        LinearLayout.LayoutParams playParams = new LinearLayout.LayoutParams(dp(52), dp(52));
+        LinearLayout.LayoutParams playParams = new LinearLayout.LayoutParams(dp(48), dp(48));
         playParams.leftMargin = dp(3);
         transportControls.addView(playPauseButton, playParams);
 
@@ -569,9 +590,8 @@ public final class MainActivity extends Activity {
         randomControlParams.leftMargin = dp(4);
         modeControls.addView(randomPlaybackButton, randomControlParams);
 
-        controls.addView(timeLabel, new LinearLayout.LayoutParams(dp(72), dp(52)));
         LinearLayout.LayoutParams transportParams = new LinearLayout.LayoutParams(
-                0, dp(52), 1);
+                0, dp(48), 1);
         controls.addView(transportControls, transportParams);
         View modeDivider = new View(this);
         modeDivider.setBackgroundColor(0xFFE0E0E0);
@@ -580,10 +600,10 @@ public final class MainActivity extends Activity {
         dividerParams.rightMargin = dp(6);
         controls.addView(modeDivider, dividerParams);
         LinearLayout.LayoutParams modeParams = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT, dp(52));
+                LinearLayout.LayoutParams.WRAP_CONTENT, dp(48));
         controls.addView(modeControls, modeParams);
         playerPanel.addView(controls, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, dp(52)));
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(48)));
 
         root.addView(playerPanel, playerParams);
         return root;
@@ -840,6 +860,7 @@ public final class MainActivity extends Activity {
         selectedEntry = entry;
         currentName = entry.name;
         nowPlayingLabel.setText(entry.name);
+        clearSongCredits();
         formatLabel.setText("");
         playPauseButton.setEnabled(true);
         stopButton.setEnabled(true);
@@ -1064,7 +1085,9 @@ public final class MainActivity extends Activity {
             name = item.mediaMetadata.title.toString();
             currentName = name;
             mafuRoutineSeed = item.mediaId.hashCode();
-            nowPlayingLabel.setText(name);
+            CharSequence displayTitle = item.mediaMetadata.displayTitle;
+            updateSongInformation(TextUtils.isEmpty(displayTitle) ? name : displayTitle,
+                    item.mediaMetadata);
             Bundle extras = item.mediaMetadata.extras;
             formatLabel.setText(extras == null ? ""
                     : extras.getString(MmfPlayer.EXTRA_FORMAT_LABEL, ""));
@@ -1081,6 +1104,8 @@ public final class MainActivity extends Activity {
                 selectedEntry = browserEntries.get(visibleIndex).file;
                 listView.setItemChecked(visibleIndex, true);
             }
+        } else {
+            clearSongCredits();
         }
 
         int state = controller.getPlaybackState();
@@ -1124,6 +1149,24 @@ public final class MainActivity extends Activity {
         updatePlayerProgress();
         if (controller.isPlaying() || state == Player.STATE_BUFFERING) startProgressUpdates();
         else progressHandler.removeCallbacks(progressUpdater);
+    }
+
+    private void clearSongCredits() {
+        songCredits.setText("");
+        songCredits.setVisibility(View.GONE);
+    }
+
+    private void updateSongInformation(CharSequence heading, MediaMetadata metadata) {
+        SongDisplayText text = SongDisplayText.from(heading, metadata.artist,
+                metadata.composer, metadata.writer, metadata.extras == null ? ""
+                        : metadata.extras.getString(MmfPlayer.EXTRA_ARRANGER, ""));
+        // Distinct views guarantee a line break and independent font weights,
+        // including files that put the entire "title by author" in ST.
+        nowPlayingLabel.setText(text.title);
+        nowPlayingLabel.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        songCredits.setText(text.byline);
+        songCredits.setTypeface(Typeface.DEFAULT, Typeface.NORMAL);
+        songCredits.setVisibility(text.byline.isEmpty() ? View.GONE : View.VISIBLE);
     }
 
     private void togglePlayback() {

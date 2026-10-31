@@ -11,6 +11,7 @@
 
 #include <cmath>
 #include <algorithm>
+#include <limits>
 
 namespace fxchain::smaf {
 
@@ -32,6 +33,7 @@ double pcmModulationSine(double phase) {
 
 namespace {
 constexpr double kTwoPi = 6.283185307179586;
+constexpr unsigned kCarrierMasks[8] = {2, 3, 15, 8, 8, 10, 9, 13};
 
 // total-level (attenuation) -> linear gain. the chip steps 0.75 dB per tl unit,
 // 63 units ~= -48 dB ~= silence. classic OPL scale.
@@ -309,23 +311,61 @@ float FmEnvelope::advance() {
         case Phase::Sustain:
             // second-decay (sr): a slow bleed toward silence, chip behaviour.
             level_ *= susStep_;
-            if (level_ <= 0.000015849) { level_ = 0.0; phase_ = Phase::Idle; }
+            if (level_ <= 0.000015849) {
+                level_ = 0.0; phase_ = Phase::Idle; pendingKeyOff_ = false;
+            }
             break;
         case Phase::Release:
             level_ *= relStep_;
-            if (level_ <= 0.000015849) { level_ = 0.0; phase_ = Phase::Idle; }
+            if (level_ <= 0.000015849) {
+                level_ = 0.0; phase_ = Phase::Idle; pendingKeyOff_ = false;
+            }
             break;
     }
     return float(level_);
 }
 
 // ── FmOperator ───────────────────────────────────────────────────────────────
+namespace {
+// Shared 16KiB interpolation table; limit at step=0 is exactly one.
+double blepGain(double step) {
+    static const std::array<double,2049> gains=[] {
+        std::array<double,2049> values{};
+        values[0]=1;
+        for(size_t i=1;i<values.size();++i) {
+            const double phase=kTwoPi*0.5*double(i)/4096;
+            const double sine=std::sin(phase);
+            values[i]=(phase*phase)/(sine*sine);
+        }
+        return values;
+    }();
+    const double position=step*4096;
+    const size_t index=std::min(size_t(position),size_t(2047));
+    const double fraction=position-double(index);
+    return gains[index]+(gains[index+1]-gains[index])*fraction;
+}
+double blepTerm(double phase, double step, double inverse) {
+    if (phase < step) { const double v=(inverse != 0 ? phase*inverse : phase/step); return 2*v-v*v-1; }
+    if (phase > 1-step) { const double v=(inverse != 0 ? (phase-1)*inverse : (phase-1)/step); return v*v+2*v+1; }
+    return 0;
+}
+double blepWave(uint8_t wave, double phase, double step, double inverse, double gain) {
+    const double x=phase-std::floor(phase);
+    const double half=x<0.5?x+0.5:x-0.5;
+    const double edge=blepTerm(half,step,inverse);
+    const double value=wave==6 ? (x<0.5?1.0:-1.0)+blepTerm(x,step,inverse)-edge
+        : (x<0.5?x*2:x*2-2)-edge;
+    return value*gain;
+}
+} // namespace
+
 void FmOperator::configure(const FmOpPatch& p, double sampleRate, int rateOffset,
                            bool modernTimbre) {
     patch_ = p;
     sampleRate_ = sampleRate;
     modernTimbre_ = modernTimbre;
     wave_ = p.wave;
+    blepEnabled_ = false; // FmVoice enables only eligible final carriers.
     tlGain_ = tlToGain(p.tl);
     // vibrato depth (DVB 0..3) as a phase-inc factor: ~3.4/6.7/13.4/26.8 cents,
     // the MA/YMF825 depth family. tremolo depth (DAM 0..3) as a linear gain
@@ -339,6 +379,14 @@ void FmOperator::configure(const FmOpPatch& p, double sampleRate, int rateOffset
         amAmt_=float(1.0-std::pow(10.0,-depths[p.dam&3]/20.0));
     }
     env_.configure(p, sampleRate, rateOffset);
+}
+
+void FmOperator::setBandlimited(bool enabled) {
+    blepEnabled_ = enabled && modernTimbre_ && (wave_ == 6 || wave_ == 24);
+    if (blepEnabled_ && phaseInc_ >= std::numeric_limits<double>::min() && phaseInc_ < 0.5) {
+        blepGain_ = blepGain(phaseInc_);
+        blepInverse_ = 1 / phaseInc_;
+    }
 }
 
 void FmOperator::recalc_() {
@@ -359,6 +407,10 @@ void FmOperator::recalc_() {
     // DT is sign/magnitude, not an offset-binary value. DT=0 and 4 are neutral.
     double detune = 1.0 + ((patch_.dt & 4) ? -1.0 : 1.0) * (patch_.dt & 3) * 0.0006;
     phaseInc_ = (freqHz_ * m * detune) / sampleRate_;
+    if (blepEnabled_ && phaseInc_ >= std::numeric_limits<double>::min() && phaseInc_ < 0.5) {
+        blepGain_ = blepGain(phaseInc_);
+        blepInverse_ = 1 / phaseInc_;
+    }
     // key-scale level: attenuate as the note rises above middle C, 0/1.5/3/6 dB
     // per octave by KSL (high notes thin out on the chip instead of blaring).
     static constexpr double kKslDbPerOct[4] = { 0.0, 3.0, 1.5, 6.0 };
@@ -387,7 +439,6 @@ float FmOperator::waveform_(uint8_t wave, double phase01) {
     // `wave & 7`; that made most authored custom voices use the wrong oscillator
     // and was a major source of poor timbre reproduction.
     double x = phase01 - std::floor(phase01);
-    double s = std::sin(kTwoPi * x);
     auto positiveHalf = [](double value) { return value > 0.0 ? value : 0.0; };
     auto triangle = [](double phase) {
         return phase < 0.25 ? phase * 4.0
@@ -400,10 +451,19 @@ float FmOperator::waveform_(uint8_t wave, double phase01) {
                            : 0.0;
     };
     auto clipped = [](double value) { return std::clamp(value * 1.7, -1.0, 1.0); };
+    auto halfCycle = [](double phase) {
+        // Normalized finite phase needs only an exact half-cycle subtraction.
+        // Preserve fmod's positive zero explicitly: compilers can remove
+        // fabs here based on ranges, changing its sign under downward rounding.
+        // Keep library behavior for the rounded endpoint 1 and nonfinite phase.
+        return phase < 0.5 ? phase : phase < 1.0
+            ? (phase == 0.5 ? 0.0 : phase - 0.5) : std::fmod(phase, 0.5);
+    };
+    // Compute sine only in the sine-derived waveform branches.
     switch (wave & 31) {
-        case 0: return float(s);                                  // sine
-        case 1: return float(positiveHalf(s));                    // half sine
-        case 2: return float(std::fabs(s));                       // abs sine (rectified)
+        case 0: return float(std::sin(kTwoPi * x));                // sine
+        case 1: return float(positiveHalf(std::sin(kTwoPi * x)));  // half sine
+        case 2: return float(std::fabs(std::sin(kTwoPi * x)));     // abs sine
         case 3: return float(x < 0.25 ? std::sin(kTwoPi*x)
                            : x >= 0.5 && x < 0.75 ? -std::sin(kTwoPi*x) : 0.0);
         case 4: return float(x < 0.5 ? std::sin(kTwoPi * 2.0 * x) : 0.0);
@@ -412,11 +472,14 @@ float FmOperator::waveform_(uint8_t wave, double phase01) {
         case 7: return float(x < 0.5 ? std::pow(1.0 - x*2.0, 3.0)
                                      : -std::pow(x*2.0 - 1.0, 3.0));
 
-        case 8:  return float(clipped(s));
-        case 9:  return float(positiveHalf(clipped(s)));
-        case 10: return float(std::fabs(clipped(s)));
-        case 11: return float(x < 0.25 ? positiveHalf(clipped(s))
-                            : x >= 0.5 && x < 0.75 ? positiveHalf(clipped(-s)) : 0.0);
+        case 8:  return float(clipped(std::sin(kTwoPi * x)));
+        case 9:  return float(positiveHalf(clipped(std::sin(kTwoPi * x))));
+        case 10: return float(std::fabs(clipped(std::sin(kTwoPi * x))));
+        case 11: {
+            const double s = std::sin(kTwoPi * x);
+            return float(x < 0.25 ? positiveHalf(clipped(s))
+                       : x >= 0.5 && x < 0.75 ? positiveHalf(clipped(-s)) : 0.0);
+        }
         case 12: return float(x < 0.5 ? clipped(std::sin(kTwoPi*2.0*x)) : 0.0);
         case 13: return float(x < 0.5 ? std::fabs(clipped(std::sin(kTwoPi*2.0*x))) : 0.0);
         case 14: return x < 0.5 ? 1.0f : 0.0f;
@@ -425,18 +488,19 @@ float FmOperator::waveform_(uint8_t wave, double phase01) {
         case 16: return float(triangle(x));
         case 17: return float(positiveTriangle(x));
         case 18: return float(std::fabs(triangle(x)));
-        case 19: { double h = std::fmod(x, 0.5); return float(h < 0.25 ? h*4.0 : 0.0); }
+        case 19: { double h = halfCycle(x); return float(h < 0.25 ? h*4.0 : 0.0); }
         case 20: return float(x < 0.5 ? triangle(x*2.0) : 0.0);
         case 21: return float(x < 0.5 ? std::fabs(triangle(x*2.0)) : 0.0);
-        case 22: { double h = std::fmod(x, 0.5); return h < 0.25 ? 1.0f : 0.0f; }
+        case 22: { double h = halfCycle(x); return h < 0.25 ? 1.0f : 0.0f; }
         case 23: return 0.0f;                                    // unbound user SRAM wave
 
         case 24: return float(x < 0.5 ? x*2.0 : x*2.0 - 2.0);    // bipolar saw
         case 25: return float(x < 0.5 ? x*2.0 : 0.0);
-        case 26: return float(std::fmod(x, 0.5) * 2.0);
-        case 27: { double h = std::fmod(x, 0.5); return float(h < 0.25 ? h*2.0 : 0.0); }
+        case 26: return float(halfCycle(x) * 2.0);
+        case 27: { double h = halfCycle(x); return float(h < 0.25 ? h*2.0 : 0.0); }
         case 28: return float(x < 0.25 ? x*4.0 : x < 0.5 ? x*4.0-2.0 : 0.0);
-        case 29: { double q = std::fmod(x, 0.25); return float(x < 0.5 ? q*4.0 : 0.0); }
+        case 29: return float(x < 0.25 ? x*4.0
+                        : x < 0.5 ? (x == 0.25 ? 0.0 : x - 0.25)*4.0 : 0.0);
         case 30: return x < 0.5 ? 1.0f : 0.0f;
         default: return 0.0f;                                    // unbound user SRAM wave (31)
     }
@@ -448,15 +512,23 @@ float FmOperator::tick(double modCycles, double lfoSin, double vibratoScale) {
     // musical index, so this stays simple. lfoSin drives this operator's own
     // vibrato (phase-inc scale) and tremolo (gain dip) when VIB/AM are set.
     float envGain = env_.advance();
-    if (nyMute_) return 0.0f;      // above fs/2: silent, never alias
     double inc = phaseInc_;
     if (vibAmt_ != 0.0) inc *= 1.0 + vibAmt_ * lfoSin * vibratoScale;
     phase_ += inc;
     if (phase_ >= 1.0) phase_ -= std::floor(phase_);
+    // Nyquist suppression mutes output, not source time. Keep the oscillator
+    // moving so a pitch bend back into range resumes the integrated phase.
+    if (nyMute_) return 0.0f;
     const double effectivePhase = phase_ + modCycles;
     // Related Yamaha waveform chart and independent MA3 model agree that
     // WS30 is quarter-square, unlike WS14 half-square. Legacy stays exact.
-    double out = modernTimbre_ && wave_ == 30
+    double out;
+    if (blepEnabled_ && inc >= std::numeric_limits<double>::min()) {
+        const double step=std::min(inc,0.5);
+        const bool constant = step == phaseInc_;
+        out = blepWave(wave_, effectivePhase, step,
+            constant ? blepInverse_ : 0, constant ? blepGain_ : blepGain(step));
+    } else out = modernTimbre_ && wave_ == 30
         ? ((effectivePhase - std::floor(effectivePhase)) < 0.25 ? 1.0 : 0.0)
         : waveform_(wave_, effectivePhase);
     float amGain = (amAmt_ != 0.0f) ? 1.0f - amAmt_ * float(0.5 + 0.5 * lfoSin) : 1.0f;
@@ -504,6 +576,28 @@ void FmVoice::noteOn(const FmVoicePatch& patch, double freqHz, float velocity) {
         ops_[i].configure(patch.ops[i], sampleRate_, offset, patch.modernTimbre);
         ops_[i].noteOn(freqHz);
     }
+    // Filtering a modulator, a phase-modulated carrier or a feedback node
+    // changes nonlinear synthesis before output filtering. Restrict BLEP to
+    // final carriers with no feedback and provably silent upstream sources.
+    static constexpr unsigned dependencies[8][4] = {
+        {0,1,0,0}, {0,0,0,0}, {0,0,0,0}, {0,0,2,5},
+        {0,1,2,4}, {0,1,0,4}, {0,0,2,4}, {0,0,2,0}
+    };
+    unsigned silent = 0;
+    for (int i = 0; i < 4; ++i)
+        if (ops_[i].silentForCurrentNote()) silent |= 1u << i;
+    const bool complete = nops >= (algo_ < 2 ? 2 : 4);
+    for (int i = 0; i < 4; ++i)
+        ops_[i].setBandlimited(complete && (kCarrierMasks[algo_] & (1u << i))
+            && opFb_[i] == 0 && (dependencies[algo_][i] & ~silent) == 0);
+    // Unused modulation has no observer until the next noteOn, which restores
+    // the rate and restarts phase. Hold it at zero for sin(0)'s exact fast path.
+    // Inspect every operator the algorithm ticks, including retained operators
+    // in an inconsistent public patch whose fourOp flag selects fewer setups.
+    bool usesLfo = false;
+    const int usedOperators = algo_ < 2 ? 2 : 4;
+    for (int i = 0; i < usedOperators; ++i) usesLfo = usesLfo || ops_[i].usesLfo();
+    if (!usesLfo) lfoInc_ = 0.0;
     active_ = true;
     released_ = false;
     keyOffRequested_ = false;
@@ -519,11 +613,21 @@ void FmVoice::noteOff(bool holdOn) {
 }
 
 void FmVoice::updateReleaseState_() {
-    static constexpr unsigned carriers[8] = {2, 3, 15, 8, 8, 10, 9, 13};
     released_ = keyOffRequested_;
     const int nops = fourOp_ ? 4 : 2;
     for (int i = 0; i < nops; ++i)
-        if ((carriers[algo_] & (1u << i)) && ops_[i].keyOffDeferred()) released_ = false;
+        if ((kCarrierMasks[algo_] & (1u << i)) && ops_[i].keyOffDeferred()) released_ = false;
+}
+
+bool FmVoice::muted() const {
+    if (velocity_ == 0.0f || volume_ == 0.0f) return true;
+    const int nops = fourOp_ ? 4 : 2;
+    for (int i = 0; i < nops; ++i)
+        if ((kCarrierMasks[algo_] & (1u << i)) && !ops_[i].muted()) return false;
+    // Feedback only changes phase; it cannot bypass a carrier's zero output.
+    // There is no voice-local output filter. The player's shared LP history
+    // is still drained by its existing EOF condition.
+    return true;
 }
 
 void FmVoice::setHold(bool on) {
@@ -623,12 +727,15 @@ float FmVoice::tick() {
 
     // Only carriers reach the output. A held modulator (e.g. XOF/SR=0)
     // must not retain a silent slot and cause audible notes to be stolen.
-    static constexpr unsigned carriers[8] = {2, 3, 15, 8, 8, 10, 9, 13};
     bool anyLive = false;
     int nops = fourOp_ ? 4 : 2;
     for (int i = 0; i < nops; ++i)
-        if ((carriers[algo_] & (1u << i)) && !ops_[i].finished()) { anyLive = true; break; }
+        if ((kCarrierMasks[algo_] & (1u << i)) && !ops_[i].finished()) { anyLive = true; break; }
     if (!anyLive) active_ = false;
+    // A Hold-deferred carrier can finish naturally while another carrier
+    // continues its release. Refresh only voices whose key-off is still held,
+    // so the remaining tail becomes eligible for release-first allocation.
+    if (keyOffRequested_ && !released_) updateReleaseState_();
 
     float result = float(out * velocity_ * volume_ * 0.7);
     recentLevel_ += (std::fabs(result) - recentLevel_) * 0.01f;

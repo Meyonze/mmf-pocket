@@ -79,7 +79,7 @@ private:
         int16_t  a;   // note / pc / cc-value / bend / wave number
         int16_t  b;   // velocity
         uint64_t noteId = 0; // paired gate identity, not pitch or pool slot
-        int sourceTrack = -1; // MA7 note's originating MTR, not channel state
+        int sourceTrack = -1; // Mobile/MA7 note's originating MTR, not channel state
         bool handyPhoneNote = false; // HPS FM retrigger policy belongs to a note
     };
     std::vector<Ev> events_;
@@ -161,11 +161,12 @@ private:
         int channel = -1, keyNote = -1;
         uint64_t noteId = 0;
         uint64_t atrGateId = 0; // independent of score NoteOff/AllNotesOff identity
+        uint64_t atrEndSample = 0; // nominal source EOF; preserve existing rate rounding
         int atrTrack = -1;
         int audioSourceTrack = -1; // MA7 recorded Audio only, never WT/ATR/legacy
         bool active = false;
         bool streamAudio = false;
-        uint64_t startedAt = 0;
+        uint64_t startOrder = 0; // successful Audio allocation order, including ties in sample time
         int stopFade = -1, stopFadeTotal = 1; // Audio gate: bounded 2ms anti-click fade
         float tick();
     };
@@ -179,6 +180,7 @@ private:
     std::map<int, std::array<AudioPanState,32>> ma7AudioPan_; // Mwa source namespace
     void applyAudioPan_(PcmVoice& voice, const AudioPanState& state);
     std::array<PcmVoice, 2> audioPool_{}; // Audio hardware has two slots, separate from WT
+    uint64_t nextAudioStartOrder_ = 0;
     // Voice-wave RAM is a different namespace from Mwa/Awa stream samples.
     std::array<PcmSample, 128> voiceWaveBank_{};
     // Initial setup RAM stays immutable during playback. Inline decoded versions
@@ -209,6 +211,9 @@ private:
     uint64_t scoreEndSample_ = 0;
     int motionPace_ = 1;
     bool ended_ = false;
+    bool atrEndPending_ = false;
+    uint64_t completedAtrEndSample_ = 0;
+    void resetEnd_(); // restore the conservative source-bound estimate on init/seek
     Diagnostics diagnostics_{};
     ScoreAudit scoreAudit_{};
     int auditFormat_ = -1, auditTrack_ = -1;

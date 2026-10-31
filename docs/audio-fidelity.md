@@ -1,6 +1,357 @@
 # Audio fidelity work
 
-Current release preparation: stable1.6.3/code69/cache r47 contains the same
+## Unreleased: current DSP and comparison workflow
+
+The current batch uses render cache **r63**, invalidating older rendered audio.
+It combines bounded high-rate PCM reconstruction, corrected Yamaha ADPCM
+rounding, continuous FM phase during Nyquist suppression, complete HPS/VMA bank
+identity, completed-carrier release classification and provably silent-tail
+completion. The changes below
+are software improvements; they do not establish handset-calibrated timbres or
+perceptual equivalence. Detailed probes and limits are in
+[DSP review evidence](dsp-review.md).
+
+### Mobile recorded Audio source binding (r63)
+
+Mobile NoteOn now carries its originating MTR, as MA7 notes already did.
+Runtime Audio routing and tone diagnostics prefer that event-local source,
+retaining the channel fallback for untagged legacy/internal notes. An unrelated
+MA7 track could previously replace a Mobile recording with its own Mwa or mute
+it. Existing shared-channel controller/pan profiles remain unchanged.
+All158 prior candidate WAVs stay exact. See [recorded source binding](recorded-source-binding.md).
+
+### Actual ATR source lifetime (r62)
+
+The r62 follow-up corrects the safety-tail estimate after long ATR sources
+are displaced. It waits for all authored events and actual ATR liveness,
+then uses completed sources' nominal EOF/gate bounds instead of a stolen
+recording's future length. It preserves the existing rounding convention,
+long/muted live recordings and future cues; seek restores the initial bound.
+All141 earlier candidate WAVs remain exact under their original comparison
+cap. See [ATR runtime endpoints](atr-runtime-end.md) for tests and limits.
+
+### Ignored command clocks (r61)
+
+The r61 follow-up retains the clocks of complete ignored CC/reserved messages
+at physical EOF. Missing EOS previously let those clocks disappear from the
+score endpoint and its safety-tail origin. Unknown-width or truncated commands
+retain their prior recovery behavior. No additional control is synthesized;
+all123 earlier candidate WAVs remain exact. See [score-clock recovery](score-clock-recovery.md).
+
+### Unmodulated square/saw carriers (r60)
+
+Modern final carriers using WS6/WS24 now use amplitude-compensated PolyBLEP
+when they have no feedback and every immediate upstream operator is provably
+silent for the note. The decision is made at note-on from actual envelope
+state and the algorithm graph, never from an instantaneous zero or level
+threshold. Legacy profiles, live modulation paths, feedback and incomplete
+public-C++ operator configurations retain their existing oscillator path.
+Odd MA7 AR0 attacks are not treated as silent.
+
+Pitch changes refresh cached parameters. Vibrato uses the current phase
+increment, with correction width capped at half a cycle; the existing nominal
+Nyquist mute and integrated oscillator phase remain intact. A shared approximately
+16KiB gain table avoids per-sample sine evaluation; constant pitch caches the
+gain and reciprocal step. Near-zero steps bypass reciprocal calculation.
+
+Independent finite Fourier-series references show at least75% lower squared
+error in12 stationary wave/frequency/rate combinations, with fundamental
+amplitude within0.1%. These are renderer tests, not listening scores or handset
+calibration. Broader correction was rejected after composed-FM measurements
+showed it could increase error. See [the investigation](fm-antialias-prototype.md).
+The123-input comparison changes six intended candidates and retains117 exact
+WAVs; every input retains its format and frame count. Timing, envelopes and
+controller semantics are unchanged. Android performance and reference-player
+listening remain unmeasured.
+
+### High-rate PCM reconstruction
+
+Modern instrument RAM, recorded score Audio and ATR retain the established
+32-tap/cutoff32 bank through source advance 4:1. Smoothstep blending selects
+64 taps over 4..5 and 128 taps over 8..10, using 128 taps above 10:1.
+Legacy profiles remain linear. Pitch, event scheduling, source advancement,
+gain/pan, gates and EOF are unchanged; no reconstruction tail is added.
+
+The r54 follow-up prepares the 64/128-tap interpolated coefficients in a
+separate fixed-size stack array before summing source samples. This allows
+SIMD coefficient calculation without changing the mathematical filter or
+source order. The 32-tap path remains together. There is no per-tick heap
+allocation or additional persistent voice storage; each FIR invocation needs
+at most 512 bytes for its coefficients.
+
+Compiler contraction can change floating-point rounding, so this is **not a
+bit-exact optimization** and caches advance to r54. In 1.2 million direct-filter
+cases per compiler, the largest measured before/after difference was
+3.5763e-7 full scale (about 0.012 PCM16 step) with GCC/FMA. Conservative
+host-table bounds are looser and exclude later mixing and quantization; see
+[the numerical evidence](dsp-review.md#long-filter-coefficient-preparation-r54).
+Fixed filter tables, blend transitions and their existing approximation error
+are retained. This does not add handset calibration or a new anti-alias filter.
+
+A single-process, CPU-pinned, alternating-order host benchmark uses 32 actual
+PCM voices. For tested 6/8/9/16 advances, median baseline/candidate ratios are
+about 1.8–2.2 for long-loop interiors and 1.2–1.4 for short loops. Controls show
+substantial host timing noise. These figures measure a synthesis workload,
+not Android playback, AudioTrack underruns, latency or power.
+
+The 64-tap bank retains 18 cutoff rows, including an interpolation guard.
+The 128-tap bank uses eight fractional-phase steps and 32 cutoff steps with
+bandwidth scale 8. Together the high-rate banks occupy 746,496 bytes, versus
+2,146,560 bytes for the initial 64-tap bank. They are prepared during voice
+allocation, with no per-tick allocation. Virtual loop history retains 64 source
+samples to distinguish an original attack from repeated short-loop content.
+
+Against the initial 64-tap implementation, 70,686 output comparisons through
+8:1 are bit-exact; against the original renderer, 458,400 comparisons through
+4:1 are bit-exact. At advances 16/32/64, a synthetic tone at 1.4 times output
+Nyquist has alias-energy reductions of 14.45/7.31/4.59 dB versus the 64-tap
+direct FIR. These are signal-specific measurements, not music SNR or listening
+scores. Independent FIR checks and expanded-source loop tests cover phase and
+cutoff endpoints, changing rates, short loops, attack history and EOF.
+
+The finite filter still has a transition band and weakens at extreme reduction
+ratios. Longer kernels can change transient ringing and subsequent limiter
+response. Host benchmarks do not establish Android throughput or battery cost;
+device/polyphony and listening validation remain necessary. This is not a
+model of Yamaha's proprietary resampler.
+
+### Yamaha ADPCM and FM phase
+
+ADPCM reconstructs each magnitude with one final integer division,
+`floor((2*magnitude+1)*step/8)`, then applies the sign. The previous separately
+truncated fractions lost up to two PCM units per code. Six original synthetic
+streams covering every code, deterministic bytes, saturation and quiet codes
+match all 17,536 reference PCM frames from the installed FFmpeg 7.1.5 decoder.
+Frozen fingerprints test nibble order, incremental decoding, reset and empty
+input without requiring FFmpeg at test runtime. Step adaptation, saturation
+and low-nibble-first order are unchanged. This is codec interoperability,
+not a claim of a large audible change or calibrated handset behaviour.
+
+The r54 FM follow-up removes common `fmod` calls from repeating waveform codes
+19/22/26/27/29 by exact half/quarter-period subtraction. Explicit zero endpoints
+retain signs under nondefault rounding, and the half-period endpoint-one/NaN
+fallback stays. Four compiler configurations retain about 10.44 million operator
+and voice samples each, plus observed voice state, byte-for-byte; cache identity
+therefore stays r54. Host synthesis medians improve about 1.1–1.5 for affected
+waveforms, with noisy controls and no Android performance claim. Nineteen
+original FM scores now cover the added shapes; previous fourteen inputs are
+unchanged. See [the audit](dsp-review.md#exact-halfquarter-period-fm-folding-r54-follow-up).
+
+An end-to-end frozen-engine comparison retains byte-exact PCM16 WAVs for
+HandyPhone, Mobile, MA7 FM and signed PCM8 ATR fixtures. The ADPCM ATR fixture
+changes 502 samples per channel as intended, with unchanged 4,421-frame duration.
+These are synthetic fixtures, not a private-corpus rerender.
+
+FM operators now advance phase while the existing Nyquist guard suppresses
+output, so a pitch return resumes integrated source phase. Envelope progression
+and the static suppression decision are unchanged. Independent integrated-sine
+checks cover pitch return, initial high notes, vibrato, retrigger and release.
+All 393,216 in-band operator samples in the frozen-core comparison remain
+bit-exact (32 waveform selectors, four multipliers, three pitches, vibrato and
+modern/legacy profiles; hash `47ac8f13f3504f36`). This does not calibrate a
+hardware phase accumulator or add dynamic harmonic/sideband anti-aliasing.
+
+### Unused FM LFO work
+
+At note-on, FM voices check the configured modulation depths of the operators
+their algorithm actually consumes. If none uses AM/VIB, the reset LFO stays at
+zero increment and the existing sample loop uses the library's exact `sin(0)`
+case. Every later note-on restores the authored LFO rate before checking again.
+Pitch, volume, Hold and vibrato-scale controls cannot enable an absent operator
+depth, so this leaves output unchanged. No per-sample branch or voice field is
+added. Checking actual consumed operators also preserves retained state in
+inconsistent synthetic patches passed directly to the public C++ API.
+
+Frozen r53 and candidate renders match all 6,144,000 sampled float outputs,
+recent levels and public active/released/muted flags byte-for-byte. All eleven
+generated SMAF-to-PCM16 WAVs are also byte-identical. The FM phase suite adds
+an independent single-operator/time-based-LFO oracle for 376,832 voice samples,
+including none/VIB/AM/both transitions, minimum depths, live controls, release,
+retrigger and retained operators. Render cache r53 is retained.
+
+Pinned, paired host timings show an unused-LFO median speedup of about 1.055,
+with substantial variation across cases. This does not establish uniform gains,
+Android throughput or battery savings. See [DSP review evidence](dsp-review.md).
+
+### FM waveform work
+
+Waveform synthesis now calculates sine within the branches that consume it.
+Square, triangle, saw and unbound-wave branches keep their existing formulas;
+they no longer perform an unused sine first. Phase normalization, signed zeros,
+all raw selector aliases and the modern raw-WS30 override are retained. The
+render cache remains r53 because audio output is unchanged.
+
+GCC and NDK Clang each match 4,298,240 operator samples plus 6,144,000 voice
+samples/public-state observations directly against the prior engine. An
+independent boundary audit matches 207,872 results across all selectors and
+four rounding modes. The phase suite adds 1,440 exact signal-value checks.
+All fourteen real comparison MMFs retain byte-identical PCM16 renders; three
+new square/triangle/saw scores join the unchanged eleven previous inputs.
+
+The Android ARM64 binary previously called sine before waveform dispatch;
+the new binary dispatches first. Host paired synthesis timings improve for the
+tested nonsine waves, but do not measure device throughput or listening quality.
+Details, timing ranges and floating-point-status limits are in
+[DSP review evidence](dsp-review.md).
+
+### HPS/VMA bank identity and completed Hold carriers
+
+HPS Bank events and VMA instrument definitions retain all eight bank bits.
+The high bit distinguishes drum and melody banks even when their low seven
+bits and program agree. Previously both definitions could collapse to one key,
+making setup order determine the wrong embedded timbre. Mobile and MA7 still
+require seven-bit controller data. Original regressions cover all 256 bank
+values, setup order, selection and switching, fallback, inline definitions,
+seek and render-block invariance.
+
+An FM carrier whose Hold-deferred key-off reaches silence naturally now clears
+its deferred state. A voice whose remaining carriers are releasing can then be
+considered released by the existing allocator. A genuinely live deferred
+carrier still protects its voice. Tests cover all eight algorithms, pedal-off,
+retrigger, seek and a full 32-voice pool. Paired fixtures keep the same envelope
+and output samples, then check that allocation chooses the release tail instead
+of cutting an unrelated held note. Envelope rates and allocator policy are
+unchanged. This is a state-management correction, not hardware calibration.
+
+### Provably silent FM and instrument-WT tails
+
+Cache r58 extends only the FM EOF query to exact-zero output under the current
+Nyquist guard and unbound user-wave selectors15/23/31. Pitch changes during the
+score can revive suppressed carriers and still run normally. Oscillators,
+envelopes, allocation and the shared output-filter drain retain their existing
+behavior. The envelope-only silence contract is unchanged. See the
+[r58 evidence](dsp-review.md#exact-zero-fm-output-at-eof-r58).
+
+At score EOF, an active FM voice whose output carriers are all permanently
+silent no longer forces the ten-second release backstop. The proof uses each
+configured envelope's finished state or exactly zero attack step and level;
+it never uses a small-output threshold. Raw AR0 alone is insufficient: MA7's
+attack low bit can make it audible, and is preserved. Only output carriers
+matter; live modulators and feedback cannot bypass their zero envelope gain.
+
+The authored score endpoint, later notes/controllers, shared output-filter
+drain, slot occupancy and allocation remain unchanged. Original all-eight-
+algorithm fixtures previously rendered 10.2 seconds of exact zero for a
+0.2-second score; the candidate ends at the authored 0.2 seconds. Targeted
+ASan/UBSan checks cover configured rate bits/KSR, slow and tiny nonzero audio,
+retrigger, future events, rests, seek, blocks and audible release/filter drain.
+Instrument WT uses the same configured-envelope proof, restricted to instrument
+slots with a nonnegative key and no stream-Audio flag. ATR and recorded Audio
+keep their existing source/gate rules. The looped stopped-attack/XOF WT fixture
+also previously added 80,000 exact-zero frames at 8 kHz.
+Full r53 validation passes, including the existing ATR and recorded-Audio
+resampling suites with fresh production objects.
+
+### Playback coordination
+
+First-write startup and resume now serialize with pause/cancel so an older
+operation cannot reactivate audio after a newer pause. Failed or cancelled
+sessions cannot resume. Volume updates serialize with both initial and seek
+replacement publication, retaining the latest requested volume. Slow track
+creation stays outside the lock, and a cancelled or failed creation releases
+its unused track without announcing readiness. Host doubles exercise these
+interleavings and unchanged PCM across ordinary writes, pause/resume and seek;
+Android audio scheduling and device latency still need device checks.
+
+### Reference workflow and local validation
+
+[Original audio probes](audio-probes.md) provide five synthetic WAVs and optional
+audio-track-only MMFs encoded and decoded with FFmpeg. The project's SMAF
+parser and ADPCM codec match all 266,240 decoded reference samples across
+8/22.05/44.1 kHz byte-for-byte. Original and decoded lengths are recorded
+separately because the encoder pads some tails. These probes do not test FM/ROM
+timbres. Normalized audio fixtures also pass independent outer structure/CRC
+checks; the reference parser treats ATR as opaque, so audio-event correctness
+is checked separately. Handset/other-app acceptance remains unverified.
+
+[Custom FM score probes](fm-probes.md) add fourteen author-defined MA-5 FM scores
+for sine/serial-FM, square/triangle/saw and other waveform, envelope, feedback,
+intrinsic LFO and pitch bend.
+Their fields, score events and CRC pass an independent pinned go-smaf parser;
+project playback binds the custom voice with no fallback and finite audible
+output. Two probes swap Bend and NoteOn at the same tick on F4, crossing the
+current KSR offset boundary. They support a reference question about envelope
+rate latching; their current output difference does not establish a defect.
+These are candidate test inputs, not reference recordings or ROM timbres.
+
+Boundary-spanning 16/32/64-tap interpolation now resolves the first source index
+once and walks the window without a modulo per tap. Coefficients, arithmetic
+order, interior paths and 128-tap boundary handling remain unchanged. All198,288
+frozen-output comparisons are bit-exact;608,256 independent expanded-index checks
+and54,000 varying-rate voice samples pass. Short-loop host timings improve about
+1.2–2x in tested cases; interior timings have noise and no Android throughput
+claim is made. This optimization does not require another audio-cache revision.
+
+The example renderer streams bounded little-endian PCM16 WAVs with the app's
+nearest, half-away-from-zero conversion. It checks storage failures and rejects
+invalid durations, nonfinite samples, oversized inputs and input/output aliases.
+Nine deterministic CLI contract tests are separate from real-engine checks on
+all five generated MMFs. [WAV comparison](audio-comparison.md) uses bounded
+memory and never normalizes, aligns, resamples or writes its inputs. Follow the
+[capture protocol](reference-capture.md) for other apps or old handsets.
+
+The r52 checkpoint passes ten native suites under ASan/UBSan and 33 Python
+checks (eight comparison, ten audio-generator, nine CLI and six FM-generator checks,
+including the explicitly enabled native and independent-parser integrations). Android
+lint, assembleDebug and assembleRelease pass for all three ABIs, with the same
+four existing lint warnings and no errors. Java host checks also pass 30 playback,
+64 render-cache and 12 PCM-observer cases. Frozen pre-fix code fails the seven
+new playback case groups and the completed-Hold state/allocation checks. Astra
+review found no introduced defect in the Hold, bank or playback changes.
+GitHub-hosted CI has not been run.
+No private-corpus rerender, handset recording or Android listening comparison
+is included in this batch.
+
+The r53 follow-up repeats all ten native suites under ASan/UBSan, now including
+stopped-attack FM and instrument-WT EOF regressions. Android lint/Debug/Release
+are rebuilt for all three ABIs, with four warnings and no errors. The expanded
+FM generator passes eight checks, including native rendering and the independent
+parser, across eleven scores; its original nine MMFs and candidate WAVs remain
+byte-identical. The other 27 Python checks and 106 Java host cases reuse their
+r52 results because their tools and playback source are unchanged. The combined
+Python coverage is 35 checks. Artifact hashes, source snapshots and fresh/reused
+test provenance are recorded in `build/artifacts/validation-r53.json`.
+
+The unused-LFO follow-up also passes all ten native sanitizer suites, the eight
+FM-generator checks and Android lint/Debug/Release. Its expanded FM phase suite
+passes the independent voice oracle, and all eleven real WAV renders retain
+their r53 bytes. The optimized APK, source snapshot, benchmark evidence and
+validation provenance are recorded separately in
+`build/artifacts/validation-r53-lfo-optimized.json`.
+
+The waveform-local follow-up passes the same ten sanitizer suites and Android
+lint/Debug/Release, with four existing lint warnings and no errors. All eight
+FM-generator checks pass over fourteen inputs, including the native renderer
+and independent parser. The fourteen PCM16 WAVs match the previous engine.
+Its source/evidence snapshots and APK/probe-pack hashes are recorded in
+`build/artifacts/validation-r53-waveform-optimized.json`.
+
+The r54 long-filter follow-up passes all ten native ASan/UBSan suites, all 35
+Python checks freshly (including fourteen FM inputs with native and independent
+parser integrations), and Android lint/Debug/Release for all three ABIs. Lint
+has four existing warnings and no errors. The 106 Java host cases reuse their
+earlier results because playback code and coordination tests are unchanged.
+The extra three WT workloads have native voice/rate checks and independent
+container CRC/event validation only, as described above. Default GCC renders
+all 22 real MMFs byte-identically; GCC/FMA shows the documented one-unit PCM16
+changes in two WT cases. APK, comparison-pack, source and evidence hashes are
+recorded in `build/artifacts/validation-r54-fir-optimized.json`.
+
+The exact FM-fold follow-up freshly passes all ten native ASan/UBSan suites
+and Android lint/Debug/Release for all three ABIs, with four existing lint
+warnings and no errors. The expanded phase suite passes baseline and final
+cores, including nondefault rounding endpoints. Eight FM-generator checks
+freshly validate nineteen inputs with native rendering and the independent
+parser; the other unchanged 27 Python checks reuse the preceding r54 results.
+Java playback code and its 106 host cases remain unchanged. All 27 actual MMF
+CLI renders (19 FM, five audio-track, three WT) match the pre-fold r54 engine.
+The source/evidence snapshots, APK and comparison-pack hashes are recorded in
+`build/artifacts/validation-r54-fm-fold-optimized.json`. No Android device or
+external-player recording is included.
+
+## Historical release preparation and earlier batches
+
+Historical release preparation: stable1.6.3/code69/cache r47 contains the same
 validated audio/playback code as DEV beta.10. It combines the historical
 source-only batches below with progressive-playback coordination repairs.
 See "Consolidated DEV beta.10" at the end for scope and verification limits.
@@ -2480,3 +2831,172 @@ ordinary/partial-write/pause-resume/paused-seek tests. The separate render-only
 60-case WAV oracle and four cleanup tests remain valid. Device audio behavior,
 latency, vendor ROM timbres and perceptual quality require separate validation.
 Both kinds of doubles live only under tools, excluded from Android source sets.
+
+### Missing custom PCM drum routing and dependency details (cache r55)
+
+A selected MA3/MA5 long-form PCM definition with a nonzero drum key is already
+resolved as a key-specific drum and, with a bound RAM wave, plays at its native
+sample rate. Those accepted definitions can also use bank0/124. If RAM was
+absent, or an explicit ROM address had no approximation recipe, dropping the
+selected PCM pointer also discarded its drum classification. A melody/no-care
+channel then selected generic GM piano instead of the existing percussion
+substitute. This was inconsistent with the resolver and bound-PCM path.
+
+Retain that classification after PCM binding fails. Known modern ROM recipes
+still take priority, including piano/string recipes; an unmatched drum key does
+not influence fallback. Bound RAM, melodic fallback, recorded-Audio priority,
+gains, tuning and approximation recipes are unchanged. This aligns existing
+accepted voice interpretation; it does not independently establish the handset
+meaning of every long-form header. Cache r55 forces affected conversions to
+use the corrected route.
+
+Original setup/bulk-byte regressions cover Mobile and MA7 channels, banks0/124,
+missing RAM, unknown ROM63, known ROM0/22/26, unmatched keys, and native-pitch RAM
+drums versus transposed melody. The previous r54 player fails the missing-drum
+regression. Fresh default-GCC O3 renders compare42 original MMFs against the
+saved r54 player: the four missing-wave custom-drum inputs change, the remaining
+38 WAVs are byte-identical. All27 previous comparison WAVs and the nine earlier
+tone-probe MMFs retain their exact bytes. These are software routing checks,
+not independent ROM/hardware timbre comparisons.
+
+`tools/tone-usage-audit.cpp --details` adds bounded grouped routes with raw
+channel/source/bank/program/note, selected definition and wave ID, current
+substitute strategy, scheduled counts/times and selected unsupported metadata.
+A summary is emitted even without note routes; the existing28-column aggregate
+TSV is retained. The4096-group limit reports overflow and returns nonzero;
+after-bound scheduled events remain explicit exclusions. Recorded Audio,
+ATR, zero velocity, immutable MA7 silence and bound-wave EP0 are distinct.
+Mobile recorded Velocity1 is no instance, not evidence of a missing wave.
+The tool does not tick oscillators/envelopes, so counts do not establish
+simultaneous voices, lifetimes, audibility or listening severity.
+
+`no_matching_supported_voice` does not prove missing ROM: absent, unsupported,
+wrong-key/split and not-yet-active definitions may all yield that path. Only a
+selected PCM definition's explicit ROM flag establishes an explicit ROM request.
+Known ROM addresses0..28 currently select18 distinct original FM patch recipes,
+with several aliases; this is neither29 unique timbres nor recovered ROM data.
+See [tone-dependency-probes.md](tone-dependency-probes.md) for fifteen original
+wire fixtures, report semantics and commands. The native inventory self-test
+and eight Python CLI tests cover routing, flags, bounds, original fixture
+expectations, no-note summaries, report failures and preserved aggregate output.
+
+The score-audit CLI previously opened/truncated its output before discovering
+inputs. It now enumerates first and rejects an output identifying any input
+before opening it, including symbolic/hard links and folder-discovered input.
+Empty or missing input preserves an existing report. Four actual CLI tests
+exercise these paths, successful TSV output and write failure; corresponding
+protection checks also cover both tone inventory modes. CI runs these checks.
+
+Final r55 validation: all10 fresh ASan/UBSan native suites pass, as do the eight
+tone CLI tests and four score CLI tests. Android lint/Debug/Release builds pass
+for arm64-v8a, armeabi-v7a and x86_64 (0 lint errors,4 existing warnings); the
+debug APK signature verifies with APKv2. Playback coordination sources are
+unchanged, so their106 previously validated Java host cases were not rerun.
+The35 earlier Python checks are also unchanged and retain previous checkpoint
+provenance. No GitHub Actions run, fresh Android device execution, power/timing
+measurement or reference listening is claimed. The user's prior routine-device
+report remains normal behavior with no known issue; no new mandatory check is
+requested. Source changes remain uncommitted and unpublished.
+
+### Recorded-Audio oldest-first ties (cache r56)
+
+The two-slot recorded-Audio pool previously compared only the sample cursor
+when choosing its oldest voice. Several successful starts in the same sample
+therefore had identical ages. A fourth simultaneous trigger repeatedly stole
+slot0, retaining sources2+4 rather than3+4. Three simultaneous starts can also
+leave the wrong age order for a later trigger. This differs from the pool's
+existing oldest-first policy, without requiring a new hardware interpretation.
+
+Replace that timestamp with a successful-allocation serial and reset its
+counter on init/seek. The decoded-event ceiling bounds the counter. Missing or
+muted recordings return before allocation. Keep source/MTR binding, the two
+slots, gains, gate identities, pan, resampling and FM/WT/ATR paths. The serial
+adds one player counter, no per-sample work and no sample storage. Cache r56
+forces a fresh conversion for affected inputs.
+
+An Astra review reproduced16 failing baseline waveform cases; all16 now match
+last-two-only reference scores exactly. Ordinary ascending timestamps already
+worked. Permanent regressions add mixed playback/decode order, stale gates,
+free-slot reuse, independently mixed retained-source PCM, muted/missing inputs,
+render blocks, seek and reinit. Their standalone ASan/UBSan harness passes.
+See [DSP evidence](dsp-review.md#recorded-audio-start-order-r56).
+
+Twelve original full-container MMFs cover six Mobile/MA7 overlap/control pairs
+with4/5/8 starts. All12 bind recorded PCM, not fallback FM; scheduled channel,
+MTR and onset are checked. In54 default-GCC O3 comparisons against the validated
+r55 binary, only the six overlap inputs change. All48 other WAVs are identical,
+including every earlier42 candidate. All six corrected overlap WAVs match their
+independently authored last-two control. These establish software allocation
+and interoperability, not handset acceptance, factory allocation, ROM fidelity,
+reference listening quality, Android speed or battery use.
+
+All10 fresh native suites pass under ASan/UBSan, alongside fresh runs of the
+eight tone-inventory and four score-inventory CLI tests using the r56 core.
+Android lint/Debug/Release pass for all3 configured ABIs (0 lint errors,4 existing
+warnings); APKv2 debug signature verifies. Unchanged35 Python and106 Java host
+checks retain their prior checkpoint provenance. No fresh device execution,
+GitHub Actions run, release signing or publication was performed. The user's
+prior routine device checks remain normal with no known issue; no new mandatory
+user check is requested. Changes remain uncommitted.
+
+### Reject incomplete MA7 FM operator records (cache r57)
+
+MA7's exact FM image size identified two or four supplied operator records,
+while its algorithm independently selected the operators executed by the core.
+Short FM/FM+AL images with algorithms2..7 were accepted even though they lacked
+the required third/fourth records. Their defaults could mask a complete setup
+voice or replace it inline, changing sound and release. This was a consistency
+error, not an out-of-bounds read or evidence of handset calibration.
+
+Check required versus supplied operators before applying the MA7 image. Reject
+only insufficient bodies. Complete four-record images using a two-operator
+algorithm retain their previous acceptance, as do proper four-operator images.
+VMA, MA3/MA5, PCM and AL synthesis policy are unchanged. Invalid definitions
+cannot claim the key or create activation events; existing complete voices or
+normal missing-voice fallback remain selected. Cache r57 refreshes affected
+cached output.
+
+The Astra original proof exposes all12 combinations of algorithms2..7 and
+plain/AL incomplete images. The permanent regression fails against r56 and
+passes the corrected ASan/UBSan parser, checking setup order, inline replacement,
+standalone fallback, complete-image compatibility, blocks and seek. See
+[DSP evidence](dsp-review.md#ma7-incomplete-operator-images-r57).
+
+Nine original complete containers add six malformed-definition cases and three
+controls. Native inventory confirms excluded incomplete definitions, preserved
+complete voices and normal FM fallback. Default-GCC O3 rendering of all63 inputs
+changes only the six malformed-definition cases; each equals its corresponding
+control without the malformed definition. The other57 WAVs, including all54
+previous candidates, are byte-identical. Container integrity does not make these
+deliberately inconsistent inner definitions valid handset inputs. No reference
+acceptance, new AL synthesis, ROM fidelity or device-performance claim is made.
+
+All10 native suites are freshly linked/executed and pass with ASan/UBSan. The
+changed parser object is recompiled; three validated r56 core objects are reused
+after exact source/interface comparisons. The eight tone and four score CLI
+checks and inventory self-test pass against that parser. Android lint/Debug/
+Release pass for all3 configured ABIs (0 lint errors,4 existing warnings), with
+a verified APKv2 debug signature. Unchanged35 Python and106 Java host checks
+retain prior checkpoint provenance. No new device execution, GitHub Actions run,
+reference listening or publication was performed. The user's prior routine
+device checks remain normal; no new mandatory check is requested. Source
+changes remain uncommitted.
+
+### Mobile CC1 isolation from shared MA7 state (cache r59)
+
+Mobile CC1 remains physically unapplied until its own depth curve is supported.
+Previously it was audited Unapplied but queued as generic Modulation; another
+MA7 MTR sharing that channel could select the MA7 vibrato law at render time.
+The route now preserves the same timestamp and audit as a ScoreNop. MA7 CC1,
+intrinsic Mobile EVB, HPS octave markers and channel initialization policy are
+unchanged. Cache r59 refreshes affected mixed-format conversions.
+
+The original18-case proof isolates the shared-channel, MA7-initialized-last
+cases. Permanent72-combination FM/WT, plain/packed, order/channel/time fixtures
+also cover seek/blocks and a terminal physicalEOF control with no masking EOS.
+All82 earlier candidate WAVs remain exact.26 new complete MMFs add independent
+bitwise CRC and chunk checks: eight corrected candidates match timed NOP
+controls, eleven total control pairs match, and100 of108 WAVs are byte-identical.
+Genuine MA7 FM/WT OFF/max modulation controls remain distinct and unchanged.
+This enforces existing support policy, not hardware calibration or a new Mobile
+modulation implementation. See [DSP evidence](dsp-review.md#mobile-cc1-source-grammar-isolation-r59).

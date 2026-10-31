@@ -26,10 +26,10 @@ public:
 
     // decode one 4-bit code to a 16-bit pcm sample.
     int16_t decodeNibble(uint8_t code) {
-        int delta = step_ >> 3;
-        if (code & 1) delta += step_ >> 2;
-        if (code & 2) delta += step_ >> 1;
-        if (code & 4) delta += step_;
+        // Reconstruct (2*magnitude+1)*step/8 with one integer division.
+        // Summing separately truncated step fractions loses up to two PCM
+        // units per code and accumulates bias on quiet low-step passages.
+        int delta = ((int(code & 7) * 2 + 1) * step_) / 8;
         if (code & 8) delta = -delta;
         last_ = clamp16(last_ + delta);
         // step adaptation (opna-b table, expressed as the published ratios)

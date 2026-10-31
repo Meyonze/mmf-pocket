@@ -22,7 +22,7 @@ final class MmfAudioRepository {
     // Bump whenever synthesis, timing or post-processing changes so an older
     // WAV cannot hide a renderer fix behind a valid content hash.
     // 1.6.2: faithful event/source handling and bounded chunk recovery.
-    private static final String RENDER_CACHE_VERSION = "r47";
+    private static final String RENDER_CACHE_VERSION = "r63";
     private static final int MAX_MMF_BYTES = 16 * 1024 * 1024;
     private static final long MAX_CACHE_BYTES = 512L * 1024 * 1024;
     private static final long STALE_PARTIAL_AGE_MS = 24L * 60 * 60 * 1000;
@@ -33,6 +33,7 @@ final class MmfAudioRepository {
     static PlaybackSource preparePlaybackSource(
             Context context, Uri uri, boolean phoneSpeakerMode) throws IOException {
         byte[] bytes = readMmf(context, uri);
+        MmfMetadata metadata = MmfMetadata.read(bytes);
         String formatLabel = NativeMmfRenderer.detectFormat(bytes);
         int motionPace = NativeMmfRenderer.detectMotionPace(bytes);
         File cacheDirectory = new File(context.getCacheDir(), CACHE_DIR_NAME);
@@ -48,13 +49,13 @@ final class MmfAudioRepository {
             cached.setLastModified(System.currentTimeMillis());
             return new PlaybackSource(
                     bytes, cached, cached, null, phoneSpeakerMode, formatLabel,
-                    motionPace, "");
+                    motionPace, metadata, "");
         }
 
         File partial = new File(cacheDirectory, key + "-" + System.nanoTime() + ".part");
         return new PlaybackSource(
                 bytes, null, cached, partial, phoneSpeakerMode, formatLabel,
-                motionPace, "");
+                motionPace, metadata, "");
     }
 
     static RenderResult renderOrGetCached(
@@ -157,11 +158,12 @@ final class MmfAudioRepository {
         final boolean phoneSpeakerMode;
         final String formatLabel;
         final int motionPace;
+        final MmfMetadata metadata;
         final String error;
 
         PlaybackSource(byte[] bytes, File cached, File target, File partial,
                        boolean phoneSpeakerMode, String formatLabel, int motionPace,
-                       String error) {
+                       MmfMetadata metadata, String error) {
             this.bytes = bytes;
             this.cached = cached;
             this.target = target;
@@ -169,11 +171,13 @@ final class MmfAudioRepository {
             this.phoneSpeakerMode = phoneSpeakerMode;
             this.formatLabel = formatLabel;
             this.motionPace = motionPace;
+            this.metadata = metadata;
             this.error = error;
         }
 
         static PlaybackSource error(String message) {
-            return new PlaybackSource(null, null, null, null, false, "", 1, message);
+            return new PlaybackSource(null, null, null, null, false, "", 1,
+                    MmfMetadata.EMPTY, message);
         }
     }
 }

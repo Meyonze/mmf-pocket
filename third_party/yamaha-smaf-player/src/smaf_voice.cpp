@@ -212,6 +212,10 @@ ParsedVoice parseVoiceExclusive(const uint8_t* p, size_t n) {
         else if (flags == 2 && vn == 40) operators = 2;
         else if (flags == 2 && vn == 60) operators = 4;
         if (operators) {
+            // Algorithm selects the operators the core will execute. A short
+            // image must not replace a valid voice with default extra ops.
+            // Keep complete larger images with unused registers compatible.
+            if (opCountFromAlg(voice[3]) > operators) return out;
             uint8_t vm35[3 + 7 * 4]{};
             vm35[0] = voice[1];
             vm35[1] = voice[2];
@@ -338,7 +342,9 @@ ParsedVoice parseVoiceExclusive(const uint8_t* p, size_t n) {
     // real instruments bind instead of falling back to the gm approximation.
     if (n >= 7 && p[1] == 0x03) {
         out.key.bankMSB = 0;
-        out.key.bankLSB = p[3] & 0x7f;    // Bank (bit7 = drum bank, masked off here)
+        // HPS/VMA Bank is eight bits: bit7 distinguishes drum and melody
+        // banks with the same low seven bits and program. Keep it in the key.
+        out.key.bankLSB = p[3];
         out.key.pc      = p[4];           // PC
         const uint8_t* g = p + 5; size_t gn = n - 5;      // body starts after the header
         if (gn >= 2) {

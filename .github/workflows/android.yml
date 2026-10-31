@@ -47,9 +47,16 @@ jobs:
           javac -encoding UTF-8 -d build/audio-file-type-tests app/src/main/java/app/mmfpocket/player/AudioFileTypes.java tools/AudioFileTypesTest.java
           java -cp build/audio-file-type-tests app.mmfpocket.player.AudioFileTypesTest
 
+      - name: Check embedded MMF display metadata
+        run: |
+          mkdir -p build/mmf-metadata-tests
+          javac -encoding UTF-8 --release 17 -Xlint:all -d build/mmf-metadata-tests app/src/main/java/app/mmfpocket/player/MmfMetadata.java app/src/main/java/app/mmfpocket/player/SongDisplayText.java tools/MmfMetadataTest.java tools/SongDisplayTextTest.java
+          java -cp build/mmf-metadata-tests app.mmfpocket.player.MmfMetadataTest
+          java -cp build/mmf-metadata-tests app.mmfpocket.player.SongDisplayTextTest
+
   native-security-smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 45
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -127,6 +134,11 @@ jobs:
           c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Ithird_party/yamaha-smaf-player/src tools/audio-regression.cpp third_party/yamaha-smaf-player/src/smaf_file.cpp third_party/yamaha-smaf-player/src/ma_fm_core.cpp third_party/yamaha-smaf-player/src/smaf_voice.cpp third_party/yamaha-smaf-player/src/ma_player.cpp -o audio-regression
           ./audio-regression
 
+      - name: Build and run VMA and HandyPhone bank isolation tests
+        run: |
+          c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Ithird_party/yamaha-smaf-player/src tools/vma-bank-regression-test.cpp third_party/yamaha-smaf-player/src/smaf_file.cpp third_party/yamaha-smaf-player/src/ma_fm_core.cpp third_party/yamaha-smaf-player/src/smaf_voice.cpp third_party/yamaha-smaf-player/src/ma_player.cpp -o vma-bank-regression-test
+          ./vma-bank-regression-test
+
       - name: Build and run recorded Audio resampling tests
         run: |
           c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Ithird_party/yamaha-smaf-player/src tools/recorded-resample-test.cpp third_party/yamaha-smaf-player/src/smaf_file.cpp third_party/yamaha-smaf-player/src/ma_fm_core.cpp third_party/yamaha-smaf-player/src/smaf_voice.cpp third_party/yamaha-smaf-player/src/ma_player.cpp -o recorded-resample-test
@@ -137,7 +149,70 @@ jobs:
           c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Ithird_party/yamaha-smaf-player/src tools/atr-resample-test.cpp third_party/yamaha-smaf-player/src/smaf_file.cpp third_party/yamaha-smaf-player/src/ma_fm_core.cpp third_party/yamaha-smaf-player/src/smaf_voice.cpp third_party/yamaha-smaf-player/src/ma_player.cpp -o atr-resample-test
           ./atr-resample-test
 
+      - name: Check aligned WAV comparison tool
+        run: PYTHONDONTWRITEBYTECODE=1 python3 tools/compare-wav-test.py
+
+      - name: Check FM carrier spectral measurements
+        run: |
+          c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Ithird_party/yamaha-smaf-player/src tools/fm-spectrum-audit.cpp third_party/yamaha-smaf-player/src/ma_fm_core.cpp -o fm-spectrum-audit
+          ./fm-spectrum-audit --self-test
+          ./fm-spectrum-audit > /dev/null
+          ./fm-spectrum-audit --bandlimited > /dev/null
+
+      - name: Check unmodulated FM carrier bandlimiting
+        run: |
+          c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Ithird_party/yamaha-smaf-player/src tools/fm-bandlimit-test.cpp third_party/yamaha-smaf-player/src/ma_fm_core.cpp -o fm-bandlimit-test
+          ./fm-bandlimit-test
+
+      - name: Check ignored score instruction clocks
+        run: |
+          c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Ithird_party/yamaha-smaf-player/src tools/score-ignored-clock-test.cpp third_party/yamaha-smaf-player/src/smaf_file.cpp third_party/yamaha-smaf-player/src/ma_fm_core.cpp third_party/yamaha-smaf-player/src/smaf_voice.cpp third_party/yamaha-smaf-player/src/ma_player.cpp -o score-ignored-clock-test
+          ./score-ignored-clock-test
+
+      - name: Check actual ATR source lifetime
+        run: |
+          c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Ithird_party/yamaha-smaf-player/src tools/atr-runtime-end-test.cpp third_party/yamaha-smaf-player/src/smaf_file.cpp third_party/yamaha-smaf-player/src/ma_fm_core.cpp third_party/yamaha-smaf-player/src/smaf_voice.cpp third_party/yamaha-smaf-player/src/ma_player.cpp -o atr-runtime-end-test
+          ./atr-runtime-end-test
+
+      - name: Check recorded Audio source track binding
+        run: |
+          c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Ithird_party/yamaha-smaf-player/src tools/recorded-source-binding-test.cpp third_party/yamaha-smaf-player/src/smaf_file.cpp third_party/yamaha-smaf-player/src/ma_fm_core.cpp third_party/yamaha-smaf-player/src/smaf_voice.cpp third_party/yamaha-smaf-player/src/ma_player.cpp -o recorded-source-binding-test
+          ./recorded-source-binding-test
+
+      - name: Check local renderer CLI contract
+        run: PYTHONDONTWRITEBYTECODE=1 python3 tools/smaf-render-cli-test.py
+
+      - name: Check original audio-probe generation
+        run: PYTHONDONTWRITEBYTECODE=1 python3 tools/generate-audio-probes-test.py
+
+      - name: Check original FM score probes and native binding
+        run: PYTHONDONTWRITEBYTECODE=1 python3 tools/generate-fm-probes-test.py --native
+
+      - name: Check FM phase through Nyquist suppression
+        run: |
+          mkdir -p build/fm-phase-tests
+          c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Ithird_party/yamaha-smaf-player/src tools/fm-phase-test.cpp third_party/yamaha-smaf-player/src/ma_fm_core.cpp -o build/fm-phase-tests/fm-phase-test
+          ./build/fm-phase-tests/fm-phase-test
+
+      - name: Build and run Yamaha ADPCM reference tests
+        run: |
+          mkdir -p build/adpcm-tests
+          c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Ithird_party/yamaha-smaf-player/src tools/yamaha-adpcm-test.cpp -o build/adpcm-tests/yamaha-adpcm-test
+          ./build/adpcm-tests/yamaha-adpcm-test
+
+      - name: Build and run high-rate resampling tests
+        run: |
+          mkdir -p build/high-rate-tests
+          c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Ithird_party/yamaha-smaf-player/src tools/high-rate-resample-test.cpp third_party/yamaha-smaf-player/src/smaf_file.cpp third_party/yamaha-smaf-player/src/ma_fm_core.cpp third_party/yamaha-smaf-player/src/smaf_voice.cpp third_party/yamaha-smaf-player/src/ma_player.cpp -o build/high-rate-tests/high-rate-resample-test
+          ./build/high-rate-tests/high-rate-resample-test
+
       - name: Build and run scheduled tone inventory tests
         run: |
           c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Ithird_party/yamaha-smaf-player/src tools/tone-usage-audit.cpp third_party/yamaha-smaf-player/src/smaf_file.cpp third_party/yamaha-smaf-player/src/ma_fm_core.cpp third_party/yamaha-smaf-player/src/smaf_voice.cpp third_party/yamaha-smaf-player/src/ma_player.cpp -o tone-usage-audit
           ./tone-usage-audit --self-test
+          PYTHONDONTWRITEBYTECODE=1 python3 tools/tone-usage-audit-cli-test.py --binary ./tone-usage-audit
+
+      - name: Check score inventory input protection
+        run: |
+          c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Ithird_party/yamaha-smaf-player/src tools/score-audit.cpp third_party/yamaha-smaf-player/src/smaf_file.cpp third_party/yamaha-smaf-player/src/ma_fm_core.cpp third_party/yamaha-smaf-player/src/smaf_voice.cpp third_party/yamaha-smaf-player/src/ma_player.cpp -o score-audit
+          PYTHONDONTWRITEBYTECODE=1 python3 tools/score-audit-cli-test.py --binary ./score-audit
