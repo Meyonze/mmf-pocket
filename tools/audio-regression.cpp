@@ -125,6 +125,9 @@ bool matchesMa7Center(const std::vector<float>& actual, const std::vector<float>
 #include "pcm-downsample-regression.h"
 #include "score-audit-regression.h"
 #include "fm-dc-regression.h"
+#include "custom-drum-fallback-regression.h"
+#include "recorded-audio-fifo-regression.h"
+#include "ma7-incomplete-fm-regression.h"
 
 void checkPcmModulation() {
     for(int i=0;i<100000;++i) {
@@ -1380,8 +1383,21 @@ void checkVoiceStealing() {
 #include "fm-feedback-regression.h"
 #include "wave-boundary-regression.h"
 #include "muted-tail-regression.h"
+#include "finished-hold-regression.h"
+#include "silent-attack-regression.h"
+#include "silent-wt-regression.h"
+#include "fm-zero-output-regression.h"
+#include "mobile-modulation-isolation-regression.h"
 
 int main() {
+    mobileModulationIsolation::test();
+    fmZeroOutputRegression::test();
+    ma7IncompleteFm::checkIncompleteImages();
+    checkRecordedAudioFifo();
+    customDrumFallback::checkRoutes();
+    silentAttackRegression::test();
+    silentWtRegression::test();
+    finishedHoldRegression::test();
     mutedTailRegression::test();
     checkWaveBoundaries();
     checkFmFeedback();

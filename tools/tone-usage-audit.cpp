@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <compare>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -31,6 +32,28 @@ struct Usage {
     uint64_t fallback=0,romSource=0,ramSource=0,missingAudio=0,epZero=0;
     Gaps requested,bound;
 };
+struct Route {
+    int channel=-1,source=-1,bankMsb=-1,bankLsb=-1,program=-1,note=-1;
+    int definition=-1,wave=-1,modern=0;
+    std::string reason,substitute="-";
+    uint64_t al=0,fixed=0,dt=0,sram=0;
+    auto operator<=>(const Route&) const = default;
+};
+struct Occurrences { uint64_t count=0,first=0,last=0; };
+struct Details {
+    // Bound memory independently of the number of notes/unique bank changes.
+    static constexpr size_t maxGroups=4096;
+    std::map<Route,Occurrences> groups;
+    uint64_t overflow=0;
+    void add(const Route& route,uint64_t sample) {
+        auto found=groups.find(route);
+        if(found==groups.end()) {
+            if(groups.size()>=maxGroups){++overflow;return;}
+            found=groups.emplace(route,Occurrences{0,sample,sample}).first;
+        }
+        ++found->second.count;found->second.last=sample;
+    }
+};
 void gap(const ParsedVoice& v,Gaps& g) {
     g.al+=v.al.present;
     bool fixed=false,dt=false,sram=false;
@@ -41,7 +64,7 @@ void gap(const ParsedVoice& v,Gaps& g) {
     }
     g.fixed+=fixed;g.dt+=dt;g.sram+=sram;
 }
-Usage measure(MaPlayer& p,bool initialized) {
+Usage measure(MaPlayer& p,bool initialized,Details* details=nullptr) {
     Usage u;u.initialized=initialized;u.complete=p.scoreAudit().scanComplete;
     u.definitions=p.voiceTable_.size();if(!initialized)return u;
     std::set<size_t> requests,bound;
@@ -53,7 +76,7 @@ Usage measure(MaPlayer& p,bool initialized) {
         const auto& c=p.chans_[e.ch&127];
         const bool ma7=e.type==MaPlayer::Ev::Ma7NoteOn;
         const bool silent=note&&ma7&&(e.b==1||(c.bankMsb==121&&c.bankLsb==6));
-        const int source=ma7?e.sourceTrack:c.streamTrack;
+        const int source=e.sourceTrack>=0?e.sourceTrack:c.streamTrack;
         // Same routing guard, not a wave-existence guess. This branch never
         // resolves an instrument, even if its wave is missing or muted.
         const bool recording=note&&source>=0&&c.bankMsb==125&&c.bankLsb<=9&&c.program<=9
@@ -64,6 +87,39 @@ Usage measure(MaPlayer& p,bool initialized) {
         const auto after=p.diagnostics();
         const auto fm=after.fmNotes-before.fmNotes,pcm=after.pcmNotes-before.pcmNotes;
         const auto audio=after.audioNotes-before.audioNotes,fb=after.fallbackNotes-before.fallbackNotes;
+        if(details&&(note||e.type==MaPlayer::Ev::WaveOn)) {
+            Route r;r.channel=e.ch;r.source=source;r.bankMsb=c.bankMsb;r.bankLsb=c.bankLsb;
+            r.program=c.program;r.note=e.a;r.modern=c.modernTimbre;
+            if(selected) {
+                r.definition=int(selected-p.voiceTable_.data());
+                if(selected->isPcm)r.wave=selected->pcm.waveId;
+                Gaps g;gap(*selected,g);r.al=g.al;r.fixed=g.fixed;r.dt=g.dt;r.sram=g.sram;
+            }
+            if(e.type==MaPlayer::Ev::WaveOn) {
+                r.source=e.b;r.wave=e.a;r.bankMsb=r.bankLsb=r.program=r.note=-1;
+                r.reason=pcm?"bound_atr":"missing_atr_wave";
+            } else if(e.b<=0)r.reason="zero_velocity";
+            else if(silent)r.reason="immutable_silent";
+            else if(recording) {
+                r.wave=e.a<=12?e.a+1:e.a-92+14;
+                r.reason=audio?"bound_recorded":after.missingAudio>before.missingAudio
+                    ?"missing_recorded_wave":"recorded_no_instance";
+            } else if(fb) {
+                r.reason=selected&&selected->isPcm
+                    ?(selected->pcm.rom?"explicit_rom_wave":"missing_ram_wave")
+                    :"no_matching_supported_voice";
+                const bool romRecipe=selected&&selected->isPcm&&selected->pcm.rom
+                    &&c.modernTimbre&&FmVoicePatch::romApprox(selected->pcm.waveId);
+                const bool pcmDrum=selected&&selected->valid&&selected->isPcm
+                    &&(selected->key.bankMSB==125||selected->key.drumNote!=0);
+                r.substitute=romRecipe?"rom_recipe":pcmDrum||c.rhythm||c.drum||c.bankMsb==125
+                    ?"drum_recipe":c.modernTimbre?"gm_modern_recipe":"gm_legacy_recipe";
+            } else if(fm)r.reason="bound_fm";
+            else if(pcm>audio)r.reason="bound_ram";
+            else if(selected&&selected->isPcm&&selected->pcm.endPt==0)r.reason="ep_zero";
+            else r.reason="no_instance";
+            details->add(r,e.sample);
+        }
         u.fm+=fm;u.audio+=audio;u.fallback+=fb;u.missingAudio+=after.missingAudio-before.missingAudio;
         if(e.type==MaPlayer::Ev::WaveOn){u.atr+=pcm;continue;}
         if(!note)continue;
@@ -88,7 +144,7 @@ Usage measure(MaPlayer& p,bool initialized) {
     u.requestedDefs=requests.size();u.boundDefs=bound.size();return u;
 }
 Usage measure(const SmafFile& f){MaPlayer p;const bool ok=p.init(f,44100);return measure(p,ok);}
-int audit(const fs::path& root,const fs::path& report);
+int audit(const fs::path& root,const fs::path& report,bool details=false);
 void require(bool ok,const char* text){if(!ok){std::cerr<<"FAIL: "<<text<<'\n';std::exit(1);}}
 SmafFile fixture(int note=60) {
     SmafFile f;TrackChunk t;t.formatType=2;t.trackNumber=0;
@@ -120,10 +176,19 @@ void selfTest() {
         auto& patch=pcm.voiceTable_[0];patch.isPcm=true;patch.pcm.rom=rom;patch.pcm.voiceWaveOnly=true;
         patch.pcm.waveId=1;patch.pcm.endPt=ep;patch.pcm.env.ar=15;patch.al.present=true;
         if(present)pcm.voiceWaveBank_[1].pcm.assign(80,4000);
-        u=measure(pcm,true);
-        if(rom||!present)require(u.fm==1&&u.fallback==1&&u.bound.al==0&&u.requested.al==1&&u.romSource==rom&&u.ramSource==!rom,"requested PCM metadata differs from fallback synthesis");
-        else if(ep==0)require(u.epZero==1&&u.fm==0&&u.wt==0&&u.requested.al==0,"EP0 success has no instance; gap is not assumed");
-        else require(u.wt==1&&u.bound.al==1&&u.fallback==0,"bound RAM WT classification");
+        Details detail;u=measure(pcm,true,&detail);
+        const auto& r=detail.groups.begin()->first;
+        if(rom||!present) {
+            require(u.fm==1&&u.fallback==1&&u.bound.al==0&&u.requested.al==1&&u.romSource==rom&&u.ramSource==!rom,"requested PCM metadata differs from fallback synthesis");
+            require(r.reason==(rom?"explicit_rom_wave":"missing_ram_wave")&&r.wave==1&&r.definition==0,
+                "PCM detail preserves selected definition/wave even at EP0");
+        } else if(ep==0) {
+            require(u.epZero==1&&u.fm==0&&u.wt==0&&u.requested.al==0,"EP0 success has no instance; gap is not assumed");
+            require(r.reason=="ep_zero"&&r.substitute=="-","EP0 with bound wave is intentional no-pronunciation");
+        } else {
+            require(u.wt==1&&u.bound.al==1&&u.fallback==0,"bound RAM WT classification");
+            require(r.reason=="bound_ram"&&r.substitute=="-","RAM detail has no substitute recipe");
+        }
     }
     for(bool present:{false,true}) {
         MaPlayer audio;auto file=fixture(0);
@@ -131,15 +196,19 @@ void selfTest() {
         require(audio.init(file,44100),"recording branch initializes");audio.chans_[0].bankMsb=125;
         audio.voiceTable_[0].key.bankMSB=125;audio.voiceTable_[0].al.present=true;
         require(audio.resolveVoice_(0,0)!=nullptr,"unused conflicting instrument genuinely resolves before branch");
-        u=measure(audio,true);require(u.requestedDefs==0&&u.requested.al==0&&u.boundDefs==0&&u.fallback==0,"recording precedence never counts conflicting instrument");
+        Details detail;u=measure(audio,true,&detail);require(u.requestedDefs==0&&u.requested.al==0&&u.boundDefs==0&&u.fallback==0,"recording precedence never counts conflicting instrument");
         require(u.audio==present&&u.missingAudio==!present,"recording missing wave never becomes fallback FM");
+        const auto& r=detail.groups.begin()->first;
+        require(r.reason==(present?"bound_recorded":"missing_recorded_wave")&&r.definition==-1&&r.wave==1,
+            "recorded detail retains source wave and never selects conflicting voice");
     }
     for(bool bankMute:{false,true}) {
         MaPlayer mute;require(mute.init(f,44100),"mute initializes");mute.events_[0].type=MaPlayer::Ev::Ma7NoteOn;
         mute.events_[0].b=bankMute?100:1;
         if(bankMute){mute.chans_[0].bankMsb=121;mute.chans_[0].bankLsb=6;mute.voiceTable_[0].key.bankMSB=121;mute.voiceTable_[0].key.bankLSB=6;}
-        mute.voiceTable_[0].al.present=true;u=measure(mute,true);
+        mute.voiceTable_[0].al.present=true;Details detail;u=measure(mute,true,&detail);
         require(u.immutableSilent==1&&u.fm==1&&u.boundDefs==0&&u.bound.al==0,"immutable MA7 silence still fires but cannot count as gap use");
+        require(detail.groups.begin()->first.reason=="immutable_silent","detail does not treat silent MA7 allocation as sounding FM");
     }
     MaPlayer zero;require(zero.init(f,44100),"zero volume initializes");zero.chans_[0].volume=0;
     require(measure(zero,true).boundDefs==1,"channel volume zero is not permanent silence");
@@ -153,6 +222,26 @@ void selfTest() {
     u=measure(timed,true);require(u.fm==2&&u.boundDefs==2&&u.bound.al==1,"same-key timed activation and tied event order retain distinct definitions");
     MaPlayer limit;require(limit.init(f,44100),"bound fixture initializes");limit.events_.push_back({uint64_t(44100)*600,MaPlayer::Ev::NoteOn,0,60,100,999});
     u=measure(limit,true);require(u.fm==1&&u.afterBound==1,"events beyond playback safety bound are explicit exclusions");
+    Details bounded;Route route;bounded.add(route,10);bounded.add(route,20);
+    require(bounded.groups.begin()->second.count==2&&bounded.groups.begin()->second.first==10
+        &&bounded.groups.begin()->second.last==20,"repeated route retains first/last and count");
+    for(size_t i=1;i<=Details::maxGroups;++i){route.definition=int(i);bounded.add(route,30);}
+    require(bounded.groups.size()==Details::maxGroups&&bounded.overflow==1,"detail memory limit reports excluded occurrences");
+    // Mobile velocity1 also produces no recorded instance, but does not test
+    // wave existence. It must not be mislabeled as missing recorded data.
+    MaPlayer quietAudio;require(quietAudio.init(fixture(0),44100),"quiet recording initializes");
+    quietAudio.chans_[0].bankMsb=125;quietAudio.events_[0].b=1;
+    Details quiet;measure(quietAudio,true,&quiet);
+    require(quiet.groups.size()==1&&quiet.groups.begin()->first.reason=="recorded_no_instance",
+        "recorded velocity1 is not evidence of a missing wave");
+    for(bool present:{false,true}) {
+        MaPlayer atr;require(atr.init(f,44100),"ATR detail initializes");
+        atr.events_={{0,MaPlayer::Ev::WaveOn,120,1,3}};
+        if(present){atr.audioWaveBanks_[3].resize(2);atr.audioWaveBanks_[3][1].pcm.assign(80,4000);}
+        Details detail;measure(atr,true,&detail);const auto& r=detail.groups.begin()->first;
+        require(r.reason==(present?"bound_atr":"missing_atr_wave")&&r.source==3&&r.wave==1&&r.note==-1,
+            "ATR reports its source/one-based wave, independently of score channel banks");
+    }
     // Original generated sentinel, not music. Output must never truncate any
     // input, including a hard link or an input discovered inside a folder.
     const auto temporary=fs::temp_directory_path()/(
@@ -170,7 +259,7 @@ void selfTest() {
     std::cout<<"Scheduled tone usage tests PASS\n";
 }
 std::string utf8(const fs::path& p){const auto s=p.generic_u8string();return {reinterpret_cast<const char*>(s.data()),s.size()};}
-int audit(const fs::path& root,const fs::path& report) {
+int audit(const fs::path& root,const fs::path& report,bool details) {
     std::vector<fs::path> paths;
     if(fs::is_regular_file(root))paths.push_back(root);
     else for(const auto& e:fs::recursive_directory_iterator(root))if(e.is_regular_file()) {
@@ -185,17 +274,40 @@ int audit(const fs::path& root,const fs::path& report) {
         std::cerr<<"Report path identifies an input file; refusing overwrite\n";return 2;
     }
     std::ofstream out(report,std::ios::binary|std::ios::trunc);if(!out)return 2;
-    out<<"file\tinitialized\tcomplete\tdefinitions\trequested_defs\tbound_defs\tnotes\tafter_bound\tzero_velocity\timmutable_silent\tfm\twt\trecorded\tatr\tno_instance\tfallback\trom_source_fallback\tram_source_fallback\tmissing_recorded\tep_zero\trequested_al\tbound_al\trequested_fixed\tbound_fixed\trequested_dt\tbound_dt\trequested_sram\tbound_sram\n";
+    if(details)out<<"file\tkind\tinitialized\tcomplete\tafter_bound\tdetail_overflow\tchannel\tsource_track\tbank_msb\tbank_lsb\tprogram\tnote\tdefinition\twave_id\tmodern\treason\tsubstitute\tcount\tfirst_seconds\tlast_seconds\trequested_al\trequested_fixed\trequested_dt\trequested_sram\n";
+    else out<<"file\tinitialized\tcomplete\tdefinitions\trequested_defs\tbound_defs\tnotes\tafter_bound\tzero_velocity\timmutable_silent\tfm\twt\trecorded\tatr\tno_instance\tfallback\trom_source_fallback\tram_source_fallback\tmissing_recorded\tep_zero\trequested_al\tbound_al\trequested_fixed\tbound_fixed\trequested_dt\tbound_dt\trequested_sram\tbound_sram\n";
+    bool overflow=false;
     for(const auto& path:paths) {
         if(fs::file_size(path)>(16u<<20))return 3;
         std::ifstream in(path,std::ios::binary);std::vector<uint8_t> bytes{std::istreambuf_iterator<char>(in),{}};SmafFile f;
-        if(!in||!f.parse(bytes.data(),bytes.size()))return 3;const auto u=measure(f);
+        if(!in||!f.parse(bytes.data(),bytes.size()))return 3;
+        Details d;MaPlayer p;const bool initialized=p.init(f,44100);
+        const auto u=measure(p,initialized,details?&d:nullptr);
         auto name=utf8(fs::is_regular_file(root)?path.filename():path.lexically_relative(root));for(char& c:name)if(c=='\t'||c=='\r'||c=='\n')c=' ';
+        if(details) {
+            auto prefix=[&](const char* kind){out<<name<<'\t'<<kind<<'\t'<<u.initialized<<'\t'
+                <<u.complete<<'\t'<<u.afterBound<<'\t'<<d.overflow;};
+            // Always emit a summary, including valid files with no note routes.
+            prefix("summary");out<<"\t-1\t-1\t-1\t-1\t-1\t-1\t-1\t-1\t-1\tsummary\t-\t"
+                <<u.notes<<"\t0\t0\t0\t0\t0\t0\n";
+            for(const auto& [r,n]:d.groups) {
+                prefix("route");out<<'\t'<<r.channel<<'\t'<<r.source<<'\t'<<r.bankMsb<<'\t'<<r.bankLsb
+                    <<'\t'<<r.program<<'\t'<<r.note<<'\t'<<r.definition<<'\t'<<r.wave<<'\t'<<r.modern
+                    <<'\t'<<r.reason<<'\t'<<r.substitute<<'\t'<<n.count<<'\t'<<double(n.first)/44100
+                    <<'\t'<<double(n.last)/44100<<'\t'<<r.al<<'\t'<<r.fixed<<'\t'<<r.dt<<'\t'<<r.sram<<'\n';
+            }
+            overflow|=d.overflow!=0;
+        } else {
         out<<name<<'\t'<<u.initialized<<'\t'<<u.complete;
         for(auto x:{u.definitions,u.requestedDefs,u.boundDefs,u.notes,u.afterBound,u.zeroVelocity,u.immutableSilent,u.fm,u.wt,u.audio,u.atr,u.noInstance,u.fallback,u.romSource,u.ramSource,u.missingAudio,u.epZero,u.requested.al,u.bound.al,u.requested.fixed,u.bound.fixed,u.requested.dt,u.bound.dt,u.requested.sram,u.bound.sram})out<<'\t'<<x;
-        out<<'\n';if(!u.initialized||!u.complete)return 4;
+        out<<'\n';
+        }
+        if(!u.initialized||!u.complete)return 4;
     }
-    out.flush();std::cout<<"Scheduled tone inventory files="<<paths.size()<<"; routing only, no waveform/lifetime/listening claim.\n";return out?0:5;
+    out.flush();std::cout<<"Scheduled tone inventory files="<<paths.size()<<"; routing only, no waveform/lifetime/listening claim.\n";
+    if(!out)return 5;
+    if(overflow){std::cerr<<"Detail group limit reached; report is incomplete\n";return 4;}
+    return 0;
 }
 } // namespace toneUsage
 #ifdef _WIN32
@@ -205,6 +317,8 @@ int wmain(int argc,wchar_t** argv) {
 int main(int argc,char** argv) {
     if(argc==2&&std::string(argv[1])=="--self-test"){toneUsage::selfTest();return 0;}
 #endif
-    if(argc!=3){std::cerr<<"usage: tone-usage-audit <MMF-or-folder> <local-report.tsv> | --self-test\n";return 2;}
-    try{return toneUsage::audit(fs::path(argv[1]),fs::path(argv[2]));}catch(...){std::cerr<<"tone usage inventory failed\n";return 2;}
+    const bool details=argc==4&&fs::path(argv[1])==fs::path("--details");
+    if(argc!=3&&!details){std::cerr<<"usage: tone-usage-audit [--details] <MMF-or-folder> <local-report.tsv> | --self-test\n";return 2;}
+    try{return toneUsage::audit(fs::path(argv[details?2:1]),fs::path(argv[details?3:2]),details);}
+    catch(...){std::cerr<<"tone usage inventory failed\n";return 2;}
 }

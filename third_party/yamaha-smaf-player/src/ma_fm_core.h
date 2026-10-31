@@ -110,6 +110,11 @@ public:
     bool keyOffDeferred() const { return pendingKeyOff_; }
     float advance();                 // returns linear gain 0..1 for this sample
     bool  isFinished() const { return phase_ == Phase::Idle; }
+    // Exact silence until a new configure/keyOn, not a level threshold.
+    // The configured step includes MA7 low bits: raw AR0 can still attack.
+    bool silentForCurrentNote() const {
+        return isFinished() || (atkStep_ == 0.0 && level_ == 0.0);
+    }
 private:
     enum class Phase { Idle, Attack, Decay, Sustain, Release };
     Phase phase_ = Phase::Idle;
@@ -130,13 +135,24 @@ public:
     void noteOff(bool holdOn = false);
     void setHold(bool on) { env_.setHold(on); }
     bool keyOffDeferred() const { return env_.keyOffDeferred(); }
+    bool usesLfo() const { return vibAmt_ != 0.0 || amAmt_ != 0.0f; }
     // modIn is the phase-modulation input in cycles (0 for a pure carrier).
     // lfoSin is the voice LFO value (-1..1); the operator applies its own
     // vibrato/tremolo depth from the patch when VIB/AM are enabled.
     // returns the operator output in roughly [-1, 1] scaled by tl + envelope.
     float tick(double modIn, double lfoSin = 0.0, double vibratoScale = 1.0);
     bool  finished() const { return env_.isFinished(); }
+    bool silentForCurrentNote() const { return env_.silentForCurrentNote(); }
+    // Exact zero output with current controls. Pitch changes may clear the
+    // Nyquist guard, so use only after future score events are exhausted.
+    // Keep ticking this operator during the score to preserve phase/envelope.
+    bool muted() const {
+        const auto wave = wave_ & 31;
+        return nyMute_ || wave == 15 || wave == 23 || wave == 31
+            || silentForCurrentNote();
+    }
     void  setBaseFreq(double f) { freqHz_ = f; recalc_(); }
+    void setBandlimited(bool enabled); // FmVoice restricts this to unmodulated final carriers.
 private:
     void recalc_();
     FmOpPatch  patch_{};
@@ -152,6 +168,8 @@ private:
     bool   nyMute_     = false; // operator lands above fs/2 -> silent, no alias
     uint8_t wave_      = 0;
     bool modernTimbre_ = false;
+    bool blepEnabled_ = false;
+    double blepGain_ = 1.0, blepInverse_ = 1.0;
     static float waveform_(uint8_t wave, double phase01);
 };
 
@@ -167,9 +185,10 @@ public:
     void setVolume(float v) { volume_ = v; }   // channel volume 0..1
     float tick();                          // one mono sample, ~[-1,1]
     bool  active() const { return active_; }
-    // Exact gain only, not recentLevel/envelope threshold. Used at score EOF
-    // when no later controller can unmute an otherwise live release tail.
-    bool  muted() const { return velocity_ == 0.0f || volume_ == 0.0f; }
+    // Exact zero gain or provably silent carriers, never a level threshold.
+    // Used only at score EOF, after future controllers/notes are exhausted;
+    // this query does not retire slots or change voice-allocation policy.
+    bool  muted() const;
     bool  released() const { return released_; }
     float recentLevel() const { return recentLevel_; }
     int   note() const { return note_; }

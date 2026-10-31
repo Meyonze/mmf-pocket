@@ -11,25 +11,28 @@ public final class AudioTrack {
     public static Consumer<Integer> onBuild=id->{};
     public static Consumer<AudioTrack> onWrite=track->{};
     public static Consumer<AudioTrack> onHead=track->{};
+    public static Consumer<AudioTrack> onPlay=track->{};
+    public static Consumer<AudioTrack> onVolume=track->{};
     public static int maxWriteBytes=Integer.MAX_VALUE;
     public static boolean autoDrain=true;
     public final int id;
     public final ByteArrayOutputStream written=new ByteArrayOutputStream();
-    public volatile int head, releases, writes;
+    public volatile int head, releases, writes, plays;
     public volatile boolean playing;
+    public volatile float volume=1f;
     private AudioTrack(int id){this.id=id;}
-    public static void reset(){tracks.clear();onBuild=id->{};onWrite=track->{};onHead=track->{};maxWriteBytes=Integer.MAX_VALUE;autoDrain=true;}
+    public static void reset(){tracks.clear();onBuild=id->{};onWrite=track->{};onHead=track->{};onPlay=track->{};onVolume=track->{};maxWriteBytes=Integer.MAX_VALUE;autoDrain=true;}
     public static int getMinBufferSize(int rate,int channels,int encoding){return 4096;}
     public int getState(){return STATE_INITIALIZED;}
     public int getPlaybackHeadPosition(){onHead.accept(this);return head;}
-    public int setVolume(float value){return 0;}
+    public int setVolume(float value){onVolume.accept(this);volume=value;return 0;}
     public int write(byte[] data,int offset,int size,int mode){
         ++writes;int count=Math.min(size,maxWriteBytes);written.write(data,offset,count);
         if(autoDrain)head+=count/4;
         onWrite.accept(this);return count;
     }
     public void pause(){playing=false;}
-    public void play(){playing=true;}
+    public void play(){onPlay.accept(this);++plays;playing=true;}
     public void flush(){}
     public void stop(){playing=false;}
     public void release(){++releases;}

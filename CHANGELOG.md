@@ -1,5 +1,110 @@
 # Changelog
 
+## 1.6.5 - 2026-10-31
+
+- Show embedded MMF song titles and available artist/composer/lyricist/arranger
+  credits, including Japanese CNTI and OPDA/Dch metadata. Separate title-embedded
+  "by creator / site" credits into a normal-weight line below the bold title;
+  preserve ordinary English titles and fall back to filenames when absent.
+- Compact the playback panel by18dp at normal text size and reduce the gap
+  above it by4dp. Preserve the mascot and play icon sizes, let large time text
+  grow naturally, and keep status/settings beside the song information.
+- Bind Mobile recorded Audio to the originating MTR, including compressed
+  transport and remembered-velocity notes. A later MA7 track sharing the channel
+  could select its own Mwa instead, or mute the note when absent. Keep existing
+  channel profiles and legacy fallback; align tone diagnostics and refresh
+  rendered caches to r63.
+- Correct the safety-tail horizon when long ATR recordings are displaced by
+  PCM voice allocation. Use completed source/gate bounds after all actual ATR
+  voices and authored events finish; preserve live/muted long recordings,
+  future cues, resampling rounding and seek replay. Refresh caches to r62.
+- Preserve authored clocks for complete ignored controller/reserved commands
+  in Mobile/MA7 scores, including physical EOF without EOS. Retain truncated
+  recovery and coverage classification; correct the score/tail endpoint and
+  refresh rendered caches to r61. Add EOF and sustained-tail regressions.
+- Reduce aliasing in modern unmodulated square/saw final carriers with
+  amplitude-compensated PolyBLEP. Exclude modulators, feedback nodes and
+  carriers with live upstream operators; preserve legacy synthesis. Cache
+  constant-pitch coefficients and share a small interpolated gain table.
+  Refresh rendered caches to r60 and add eight original scope-control scores.
+- Add a standalone FM carrier spectrum audit with analytic/DFT self-checks
+  and twelve coherent-frequency measurements to establish a baseline for
+  future alias-reduction work; leave the r59 renderer unchanged.
+- Add explicit frame intervals to the PCM16 WAV comparison tool to measure
+  onsets and sustained notes separately, retaining original frame positions
+  and reporting the selected range without rewriting recordings.
+- Add seven original FM waveform7–13 comparison scores and document the
+  disagreement between published waveform models. Preserve all nineteen
+  earlier captures and the r59 renderer while reference accuracy is unresolved.
+- Keep unapplied Mobile CC1 as a timed no-op when mixed-format tracks share
+  channels. Prevent it from borrowing another track's MA7 vibrato law while
+  preserving genuine MA7 modulation and intrinsic voice EVB; refresh caches
+  to r59.
+- End exact-zero FM tails caused by the existing Nyquist guard or unbound
+  user-wave selectors after all authored events and the shared filter drain.
+  Preserve pitch revival, live carriers and slot allocation; refresh caches
+  to r58 so older conversions lose the unnecessary silent safety tail.
+- Reject MA7 FM/AL images that omit operators required by their algorithm.
+  Preserve earlier complete voices and normal missing-voice fallback instead
+  of synthesizing default extra operators; refresh caches to r57.
+- Preserve recorded-Audio start order when several notes share a sample time.
+  Replace the oldest successful trigger instead of repeatedly stealing the
+  same slot; retain gates, source binding and the two-slot pool. Refresh caches
+  to r56 and add original same-tick/multiple-track waveform regressions.
+- Keep a selected custom PCM drum's classification when its RAM/unknown ROM
+  wave is absent, including drum-key definitions outside bank125. Preserve
+  mapped ROM recipes and bound RAM behavior; refresh converted caches to r55.
+- Add bounded per-instrument tone dependency reports and fifteen original
+  fixtures separating explicit ROM requests, missing RAM and unmatched voices.
+- Prevent the score inventory CLI from overwriting an input through an output
+  path, symbolic link or hard link, and preserve reports when input is absent.
+- Replace common half/quarter-period FM remainder calls with exact phase
+  subtraction and explicit positive-zero endpoints. Preserve the rounded
+  phase-one and nonfinite fallback; this optimization leaves rendered audio
+  unchanged.
+- Add five original FM waveform comparison scores (codes 19/22/26/27/29),
+  preserving all fourteen earlier comparison MMFs byte-for-byte.
+- Prepare 64/128-tap PCM filter coefficients separately to reduce synthesis
+  work while retaining the filter and source timeline. Refresh caches to r54
+  because compiler fused arithmetic can change float rounding.
+- Add a portable 32-voice synthesis benchmark with 22 original workloads and
+  Android build instructions; device measurements remain outstanding.
+- Compute sine only in FM waveform branches that use it, preserving samples
+  and selector behavior while reducing work for square, triangle and saw waves.
+- Add original square/triangle/saw comparison scores; preserve the existing
+  eleven comparison MMFs byte-for-byte.
+- Reduce unused FM modulation work by holding its LFO at zero when none of the
+  operators consumed by the algorithm has AM/VIB depth. Preserve rendered
+  samples, live controls and retriggers, including retained operator state.
+- End provably silent FM and instrument-WT tails after the authored score and
+  filter drain, avoiding a ten-second silent safety tail for stopped attacks. Keep
+  slow/MA7 odd attacks, quiet nonzero voices and later events intact.
+- Preserve the complete HPS/VMA bank byte so melody and drum banks with the
+  same low seven bits and program select their own embedded instruments.
+- Let naturally finished Hold-deferred FM carriers stop protecting a remaining
+  release tail from voice allocation, preserving live held carriers.
+- Serialize playback starts and volume publication with pause, resume and
+  cancellation; suppress readiness after cancellation or failure during creation.
+- Preserve FM oscillator phase through Nyquist-suppressed intervals so pitch
+  returning into range follows elapsed source time.
+- Reduce repeated loop-boundary indexing without changing audio output.
+- Add original WAV/audio-track and custom-FM SMAF probe generation, independent
+  structure/CRC validation, and a reference-capture workflow.
+- Harden the local WAV renderer's quantization, input validation and storage
+  error handling.
+- Reduce PCM resampling aliasing with 64-tap filtering above 4:1 and 128-tap
+  filtering above 8:1, with smooth transitions. Retain the existing path at or
+  below 4:1, legacy profiles, pitch, event timing and source endpoints.
+- Trim unreachable filter-table rows: both higher-rate banks together use about
+  0.71 MiB, down from the initial 64-tap bank's 2.05 MiB.
+- Correct Yamaha ADPCM delta rounding to divide once after combining the
+  magnitude terms; verify against independent synthetic reference vectors.
+- Add a dependency-free PCM16 WAV comparison tool for per-channel level, DC,
+  sample differences and unmatched tails, without gain or timing correction.
+- Refresh converted audio caches and add high-rate spectral, loop-history
+  and boundary regression checks. This is renderer quality, not handset-ROM
+  or hardware calibration.
+
 ## 1.6.4 - 2026-10-12
 
 - Make Mafu react to the currently playing sound in MMF and supported WAV

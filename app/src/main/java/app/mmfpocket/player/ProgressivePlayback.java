@@ -85,61 +85,65 @@ final class ProgressivePlayback {
     }
 
     void cancel() {
-        cancelled = true;
         synchronized (lock) {
-            lock.notifyAll();
-        }
-        AudioTrack track = audioTrack;
-        if (track != null) {
-            try {
-                track.pause();
-                track.flush();
-            } catch (IllegalStateException ignored) {
-                // The playback thread may already be releasing it.
+            cancelled = true;
+            AudioTrack track = audioTrack;
+            if (track != null) {
+                try {
+                    track.pause();
+                    track.flush();
+                } catch (IllegalStateException ignored) {
+                    // The playback thread may already be releasing it.
+                }
             }
+            lock.notifyAll();
         }
         if (renderThread != null) renderThread.interrupt();
         if (playbackThread != null) playbackThread.interrupt();
     }
 
     void pause() {
-        if (playbackComplete) return;
-        paused = true;
-        if (!ready) return;
-        AudioTrack track = audioTrack;
-        if (track != null) {
-            try {
-                track.pause();
-            } catch (IllegalStateException ignored) {
-                // A simultaneous seek may be replacing the track.
+        synchronized (lock) {
+            if (playbackComplete) return;
+            paused = true;
+            if (!ready) return;
+            AudioTrack track = audioTrack;
+            if (track != null) {
+                try {
+                    track.pause();
+                } catch (IllegalStateException ignored) {
+                    // A simultaneous seek may be replacing the track.
+                }
             }
         }
     }
 
     void setVolume(float value) {
-        volume = Math.max(0f, Math.min(1f, value));
-        AudioTrack track = audioTrack;
-        if (track != null) {
-            try {
-                track.setVolume(volume);
-            } catch (IllegalStateException ignored) {
-                // The playback thread may be replacing the track during a seek.
+        synchronized (lock) {
+            volume = Math.max(0f, Math.min(1f, value));
+            AudioTrack track = audioTrack;
+            if (track != null) {
+                try {
+                    track.setVolume(volume);
+                } catch (IllegalStateException ignored) {
+                    // The playback thread may already be releasing it.
+                }
             }
         }
     }
 
     void resume() {
-        if (!ready || playbackComplete) return;
-        paused = false;
-        AudioTrack track = audioTrack;
-        if (track != null && submittedFrame > trackBaseFrame) {
-            try {
-                track.play();
-            } catch (IllegalStateException ignored) {
-                // The playback loop will start a replacement after a seek.
-            }
-        }
         synchronized (lock) {
+            if (!ready || playbackComplete || cancelled || failed) return;
+            paused = false;
+            AudioTrack track = audioTrack;
+            if (track != null && requestedSeek < 0 && submittedFrame > trackBaseFrame) {
+                try {
+                    track.play();
+                } catch (IllegalStateException ignored) {
+                    // The playback loop will start a replacement after a seek.
+                }
+            }
             lock.notifyAll();
         }
     }
@@ -317,10 +321,14 @@ final class ProgressivePlayback {
                 input = new RandomAccessFile(readableFile, "r");
             }
             track = createAudioTrack();
-            audioTrack = track;
-            trackBaseFrame = 0;
-            submittedFrame = 0;
-            ready = true;
+            synchronized (lock) {
+                if (cancelled || failed) return;
+                audioTrack = track;
+                track.setVolume(volume);
+                trackBaseFrame = 0;
+                submittedFrame = 0;
+                ready = true;
+            }
             listener.onReady();
 
             byte[] bytes = new byte[BLOCK_FRAMES * BYTES_PER_FRAME];
@@ -340,10 +348,12 @@ final class ProgressivePlayback {
                     track = createAudioTrack();
                     cursor = Math.min(seek, renderedFrames);
                     synchronized (lock) {
+                        if (cancelled || failed) return;
                         trackBaseFrame = cursor;
                         submittedFrame = cursor;
                         if (requestedSeek < 0) lastKnownPosition = cursor;
                         audioTrack = track;
+                        track.setVolume(volume);
                     }
                     trackStarted = false;
                     if (requestedSeek >= 0) continue;
@@ -401,9 +411,17 @@ final class ProgressivePlayback {
                     cursor += writtenFrames;
                     submittedFrame = cursor;
                     if (!trackStarted) {
-                        track.play();
-                        trackStarted = true;
-                        buffering = false;
+                        synchronized (lock) {
+                            // A control request may arrive during the write.
+                            // Serialize starting with pause/resume/cancel so a
+                            // completed write cannot reactivate stale audio.
+                            if (!paused && !cancelled && !failed
+                                    && requestedSeek < 0 && audioTrack == track) {
+                                track.play();
+                                trackStarted = true;
+                                buffering = false;
+                            }
+                        }
                     }
                 }
             }
@@ -486,14 +504,13 @@ final class ProgressivePlayback {
             track.release();
             throw new IOException("AudioTrackを初期化できません");
         }
-        track.setVolume(volume);
         return track;
     }
 
     private void fail(String message) {
-        if (cancelled || failed) return;
-        failed = true;
         synchronized (lock) {
+            if (cancelled || failed) return;
+            failed = true;
             lock.notifyAll();
         }
         listener.onError(message);

@@ -21,6 +21,23 @@ The passwords may instead be supplied only for the current process through
 those variables only while Gradle is running. The current release key uses the
 same password for the keystore and key entry.
 
+### Sign a cloud-prepared APK on Windows
+
+A prepared signing bundle contains the unsigned release APK, `release-input.json`
+and `sign-prebuilt-release.ps1`. Extract them into one folder and run:
+
+```powershell
+.\sign-prebuilt-release.ps1 -KeyStorePath 'D:\path\to\existing-release.jks'
+```
+
+If needed, specify `-ApkSignerPath` pointing to Android build-tools35.0.0's
+`apksigner.bat`, or `-KeyAlias` for the existing alias. The tool prompts for the
+password locally; do not put it in chat or command arguments. It checks the
+input hash and verifies the output certificate against the existing public
+release before creating `SHA256SUMS.txt`. It does not publish anything.
+Return only the signed APK to the release operator; never transfer the signing
+key or passwords. This Windows wrapper is not covered by Linux host execution.
+
 ## Build and verify
 
 ```powershell

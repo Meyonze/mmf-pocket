@@ -47,6 +47,7 @@ final class MmfPlayer extends SimpleBasePlayer {
     static final String EXTRA_PHONE_SPEAKER = "app.mmfpocket.extra.PHONE_SPEAKER";
     static final String EXTRA_FORMAT_LABEL = "app.mmfpocket.extra.FORMAT_LABEL";
     static final String EXTRA_MOTION_PACE = "app.mmfpocket.extra.MOTION_PACE";
+    static final String EXTRA_ARRANGER = "app.mmfpocket.extra.ARRANGER";
     static final String EXTRA_VISUAL_SOURCE = "app.mmfpocket.extra.VISUAL_SOURCE";
 
     private final Context context;
@@ -405,7 +406,7 @@ final class MmfPlayer extends SimpleBasePlayer {
             fail(source.error, PlaybackException.ERROR_CODE_IO_UNSPECIFIED);
             return;
         }
-        updateFormatMetadata(source.formatLabel, source.motionPace);
+        updateFormatMetadata(source.formatLabel, source.motionPace, source.metadata);
         if (source.cached != null) startMediaPlayer(source.cached, requestGeneration);
         else startProgressivePlayback(source, requestGeneration);
     }
@@ -875,14 +876,25 @@ final class MmfPlayer extends SimpleBasePlayer {
     }
 
     private void updateFormatMetadata(String formatLabel, int motionPace) {
+        updateFormatMetadata(formatLabel, motionPace, MmfMetadata.EMPTY);
+    }
+
+    private void updateFormatMetadata(String formatLabel, int motionPace, MmfMetadata song) {
         if (currentItem == null) return;
         Bundle extras = currentItem.mediaMetadata.extras == null
                 ? new Bundle() : new Bundle(currentItem.mediaMetadata.extras);
         extras.putString(EXTRA_FORMAT_LABEL, formatLabel);
         if (isDirectWav(currentItem)) extras.putBoolean(EXTRA_PHONE_SPEAKER, false);
         extras.putInt(EXTRA_MOTION_PACE, motionPace);
+        extras.putString(EXTRA_ARRANGER, song.arranger());
         MediaMetadata metadata = new MediaMetadata.Builder()
                 .populate(currentItem.mediaMetadata)
+                // Keep title as the filename: file-type checks/export naming
+                // use it. The playback area uses the embedded display title.
+                .setDisplayTitle(song.title().isEmpty() ? null : song.title())
+                .setArtist(song.artist().isEmpty() ? null : song.artist())
+                .setComposer(song.composer().isEmpty() ? null : song.composer())
+                .setWriter(song.lyricist().isEmpty() ? null : song.lyricist())
                 .setSubtitle(formatLabel)
                 .setExtras(extras)
                 .build();

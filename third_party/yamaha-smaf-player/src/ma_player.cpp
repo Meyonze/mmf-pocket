@@ -137,7 +137,12 @@ void MaPlayer::routeController_(uint64_t at, int ch, int cc, int val, bool ma7) 
         case 11: type = Ev::Expression; break;
         case 1:
             type = Ev::Modulation;
-            if (!ma7 || val > 127) status = S::Unapplied;
+            if (!ma7) {
+                // Mobile's depth curve is unverified. Keep its clock/audit,
+                // even when a different MTR selected MA7 channel state.
+                type = Ev::ScoreNop;
+                status = S::Unapplied;
+            }
             break;
         case 15:
             type = Ev::PitchBendRange;
@@ -193,6 +198,10 @@ void MaPlayer::routeController_(uint64_t at, int ch, int cc, int val, bool ma7) 
     }
     audit_(ScoreAudit::Domain::Controller, status, cc, val, at, ch);
     if (route) events_.push_back({at, type, uint16_t(ch), int16_t(routedValue), int16_t(b)});
+    // The controller's full, known-width payload was consumed. Preserve its
+    // authored time even when its operation/value is not synthesized. Without
+    // EOS, dropping this event could move the score endpoint back to a gate.
+    else events_.push_back({at, Ev::ScoreNop, uint16_t(ch), 0, 0});
 }
 
 void MaPlayer::auditVoice_(const ParsedVoice& v, uint64_t at) {
@@ -302,9 +311,11 @@ bool MaPlayer::init(const SmafFile& file, uint32_t sampleRate,
     cursor_ = 0; endSample_ = 0;
     nextNoteId_ = 1;
     fmSteal_ = pcmSteal_ = 0;
+    nextAudioStartOrder_ = 0;
     pcmLimit_ = std::any_of(file.tracks.begin(), file.tracks.end(),
         [](const TrackChunk& t) { return !t.isAudioTrack && t.formatType == 3; }) ? 32 : 16;
-    scoreEndSample_ = 0; motionPace_ = 1; ended_ = false; diagnostics_ = {};
+    scoreEndSample_ = 0; motionPace_ = 1; ended_ = false; atrEndPending_ = false;
+    completedAtrEndSample_ = 0; diagnostics_ = {};
     scoreAudit_ = {}; auditFormat_ = auditTrack_ = -1;
     for (auto& wave : voiceWaveBank_) wave = PcmSample{};
     voiceWaveVersions_.clear(); voiceWaveVersionBytes_ = 0;
@@ -395,11 +406,22 @@ bool MaPlayer::init(const SmafFile& file, uint32_t sampleRate,
     // render() normally ends earlier and fades the safety boundary if reached.
     // Orphan ATR gates must not extend unrelated held FM/WT voices to the
     // global600s ceiling. A real long recording still needs its playback time.
-    scoreEndSample_ = std::max(events_[nonAtrGateEventEnd_ - 1].sample, atrPlaybackEndSample_);
-    endSample_ = scoreEndSample_ + uint64_t(rate_) * 10;
-    uint64_t cap = uint64_t(kSafetySeconds * rate_);
-    if (endSample_ > cap) endSample_ = cap;
+    resetEnd_();
     return true;
+}
+
+void MaPlayer::resetEnd_() {
+    completedAtrEndSample_ = 0;
+    if (nonAtrGateEventEnd_ == 0) {
+        scoreEndSample_ = endSample_ = 0;
+        atrEndPending_ = false;
+        return;
+    }
+    const uint64_t authoredEnd = events_[nonAtrGateEventEnd_ - 1].sample;
+    scoreEndSample_ = std::max(authoredEnd, atrPlaybackEndSample_);
+    endSample_ = std::min(scoreEndSample_ + uint64_t(rate_) * 10,
+                         uint64_t(kSafetySeconds * rate_));
+    atrEndPending_ = atrPlaybackEndSample_ > authoredEnd;
 }
 
 void MaPlayer::calculateMotionPace_() {
@@ -1052,11 +1074,15 @@ void MaPlayer::decodeMobile_(const uint8_t* p, size_t n, int base, double tbDms,
                 if (gate == 0) break;
                 uint64_t off = at + msToSample(gate * tbGms);
                 const uint64_t id = nextNoteId_++;
-                events_.push_back({at,  Ev::NoteOn,  uint16_t(ch), int16_t(note), int16_t(vel), id});
+                // Mwa wave IDs belong to this MTR, even when a later MA7
+                // track shares the channel and replaces its setup state.
+                events_.push_back({at, Ev::NoteOn, uint16_t(ch), int16_t(note),
+                                   int16_t(vel), id, auditTrack_});
                 events_.push_back({off, Ev::NoteOff, uint16_t(ch), int16_t(note), 0, id});
             } break;
             case 0xA0:
-                scoreBytes_(p, end, 2, s, at, ch);
+                if (scoreBytes_(p, end, 2, s, at, ch))
+                    events_.push_back({at, Ev::ScoreNop, uint16_t(ch), 0, 0});
                 audit_(ScoreAudit::Domain::Sequence, ScoreAudit::Status::Reserved, 0xa0, 0, at, ch);
                 p += (end - p >= 2 ? 2 : (end - p)); break;   // reserved
             case 0xB0: {                                // control change
@@ -1074,7 +1100,8 @@ void MaPlayer::decodeMobile_(const uint8_t* p, size_t n, int base, double tbDms,
                     events_.push_back({at, Ev::ScoreNop, uint16_t(ch), 0, 0});
                 } else events_.push_back({at, Ev::Program, uint16_t(ch), int16_t(pc), 0}); } break;
             case 0xD0:
-                scoreBytes_(p, end, 1, s, at, ch);
+                if (scoreBytes_(p, end, 1, s, at, ch))
+                    events_.push_back({at, Ev::ScoreNop, uint16_t(ch), 0, 0});
                 audit_(ScoreAudit::Domain::Sequence, ScoreAudit::Status::Reserved, 0xd0, 0, at, ch);
                 if (p < end) ++p; break;          // reserved
             case 0xE0: {                                 // pitch bend lsb,msb
@@ -1323,7 +1350,8 @@ void MaPlayer::decodeMa7_(const uint8_t* p, size_t n, int base,
                 events_.push_back({off, Ev::NoteOff, uint16_t(ch), int16_t(note), 0, id});
             } break;
             case 0x20: // reserved, two data bytes
-                scoreBytes_(p, end, 2, status, at, ch);
+                if (scoreBytes_(p, end, 2, status, at, ch))
+                    events_.push_back({at, Ev::ScoreNop, uint16_t(ch), 0, 0});
                 audit_(ScoreAudit::Domain::Sequence, ScoreAudit::Status::Reserved, 0x20, 0, at, ch);
                 p += std::min<size_t>(2, size_t(end - p));
                 break;
@@ -1341,7 +1369,8 @@ void MaPlayer::decodeMa7_(const uint8_t* p, size_t n, int base,
                 } else events_.push_back({at, Ev::Program, uint16_t(ch), int16_t(pc), 0});
             } break;
             case 0x50: // reserved, one data byte
-                scoreBytes_(p, end, 1, status, at, ch);
+                if (scoreBytes_(p, end, 1, status, at, ch))
+                    events_.push_back({at, Ev::ScoreNop, uint16_t(ch), 0, 0});
                 audit_(ScoreAudit::Domain::Sequence, ScoreAudit::Status::Reserved, 0x50, 0, at, ch);
                 if (p < end) ++p;
                 break;
@@ -1401,7 +1430,7 @@ bool MaPlayer::startPcm_(int ch, int rawNote, int soundingNote, const ParsedVoic
     pv.loopTravel = 0;
     if (pv.qualityInterpolation) {
         (void)pcm_detail::interpolationKernels();
-        (void)pcm_detail::downsamplingKernels();
+        pcm_detail::prepareDownsamplingKernels();
     }
     // Share the existing FM approximation rather than invent a different
     // WT vibrato curve. The hardware LFO rate/shape remains uncalibrated.
@@ -1439,6 +1468,7 @@ bool MaPlayer::startPcm_(int ch, int rawNote, int soundingNote, const ParsedVoic
     pv.channel = ch; pv.keyNote = rawNote; pv.active = true;
     pv.noteId = noteId;
     pv.atrGateId = 0;
+    pv.atrEndSample = 0;
     pv.atrTrack = -1;
     pv.released = false; pv.recentLevel = 0;
     ++diagnostics_.pcmNotes;
@@ -1464,7 +1494,7 @@ void MaPlayer::startAudio_(int ch, int note, float velocity, uint64_t noteId, bo
     for (auto& v : audioPool_) if (!v.active) { slot = &v; break; }
     if (!slot) {
         slot = &*std::min_element(audioPool_.begin(), audioPool_.end(),
-            [](const PcmVoice& a, const PcmVoice& b) { return a.startedAt < b.startedAt; });
+            [](const PcmVoice& a, const PcmVoice& b) { return a.startOrder < b.startOrder; });
         ++diagnostics_.stolenAudio;
     }
     *slot = PcmVoice{};
@@ -1476,7 +1506,7 @@ void MaPlayer::startAudio_(int ch, int note, float velocity, uint64_t noteId, bo
     // grammar (not shared channel setup) excludes HandyPhone and ATR.
     slot->qualityInterpolation = modern;
     if (modern && slot->rate < 1.0) (void)pcm_detail::interpolationKernels();
-    if (modern && slot->rate > 1.0) (void)pcm_detail::downsamplingKernels();
+    if (modern && slot->rate > 1.0) pcm_detail::prepareDownsamplingKernels();
     slot->vel = velocity; slot->pan = chans_[ch & 127].pan;
     channelPanGains(slot->pan, chans_[ch & 127].squaredControllers, slot->panLeft, slot->panRight);
     slot->channel = ch; slot->keyNote = note; slot->noteId = noteId;
@@ -1489,7 +1519,10 @@ void MaPlayer::startAudio_(int ch, int note, float velocity, uint64_t noteId, bo
             applyAudioPan_(*slot, state->second[size_t(id - 1)]);
         }
     }
-    slot->startedAt = cursor_;
+    // A score can start several Audio notes at one sample. Timestamp ties
+    // repeatedly stole slot0 and retained an older slot1 note. Preserve the
+    // actual dispatch order; the decoded-event cap bounds this counter.
+    slot->startOrder = nextAudioStartOrder_++;
     slot->streamAudio = true; slot->active = true;
     ++diagnostics_.audioNotes; ++diagnostics_.pcmNotes;
 }
@@ -1507,7 +1540,7 @@ float MaPlayer::PcmVoice::tick() {
             // Preserve original attack history across the first few traversals
             // of a very short loop; cap once every kernel tap is periodic.
             const size_t length = loopEnd - loopStart;
-            const size_t history = qualityInterpolation ? 16 : 8;
+            const size_t history = qualityInterpolation ? 64 : 8;
             const size_t limit = ((end + history + length - 1) / length) * length;
             if (loopTravel < limit) {
                 const double traversals = std::floor((pos - double(end)) / double(length)) + 1.0;
@@ -1570,7 +1603,10 @@ int MaPlayer::activeVoices_() const {
 bool MaPlayer::hasOutputVoices_() const {
     for (const auto& v : pool_) if (v.active() && !v.muted()) return true;
     for (const auto& v : pcmPool_)
-        if (v.active && v.gain != 0.0f && v.vel != 0.0f) return true;
+        if (v.active && v.gain != 0.0f && v.vel != 0.0f &&
+            // Only instrument WT uses this envelope silence certificate.
+            // ATR and recorded Audio retain their source/gate endpoint rules.
+            (v.keyNote < 0 || v.streamAudio || !v.env.silentForCurrentNote())) return true;
     for (const auto& v : audioPool_)
         if (v.active && v.gain != 0.0f && v.vel != 0.0f) return true;
     return false;
@@ -1590,7 +1626,9 @@ void MaPlayer::fireEvent_(const Ev& e) {
         case Ev::Program:   c.program = e.a; break;
         case Ev::BankMsb:   c.bankMsb = e.a; break;
         case Ev::BankLsb:
-            c.bankLsb = e.a & 0x7f;              // 7-bit bank
+            // HPS Bank is a full byte, including its drum-bank bit. Mobile
+            // and MA7 data have already passed their seven-bit validation.
+            c.bankLsb = e.a;
             c.drum    = (e.a & 0x80) != 0;       // bit7 = drum bank
             break;
         case Ev::Volume: {
@@ -1752,6 +1790,8 @@ void MaPlayer::fireEvent_(const Ev& e) {
         case Ev::AtrEnd: {
             for (auto& pv : pcmPool_)
                 if (pv.active && pv.keyNote < 0 && pv.atrTrack == e.b) {
+                    if (atrEndPending_) completedAtrEndSample_ = std::max(completedAtrEndSample_,
+                        std::min(e.sample, pv.atrEndSample));
                     pv.active = false; pv.atrGateId = 0;
                 }
         } break;
@@ -1781,6 +1821,8 @@ void MaPlayer::fireEvent_(const Ev& e) {
             // gate while retaining the existing shared output filter's tail.
             for (auto& pv : pcmPool_)
                 if (pv.active && pv.keyNote < 0 && e.noteId != 0 && pv.atrGateId == e.noteId) {
+                    if (atrEndPending_) completedAtrEndSample_ = std::max(completedAtrEndSample_,
+                        std::min(e.sample, pv.atrEndSample));
                     pv.active = false; pv.atrGateId = 0;
                     break;
                 }
@@ -1804,7 +1846,7 @@ void MaPlayer::fireEvent_(const Ev& e) {
             // handset DSP. Position/EOF, authored gates and slot policy stay
             // unchanged. Unity remains exact; no reconstruction tail is added.
             if (pv.rate < 1.0) (void)pcm_detail::interpolationKernels();
-            if (pv.rate > 1.0) (void)pcm_detail::downsamplingKernels();
+            if (pv.rate > 1.0) pcm_detail::prepareDownsamplingKernels();
             pv.lfoPhase = pv.lfoInc = pv.vibDepth = pv.baseVibDepth = 0.0;
             pv.amDepth = 0.0f; // ATR must not inherit a stolen WT slot's LFO
             pv.pos = 0.0; pv.loopStart = 0; pv.loopEnd = pv.len; pv.loop = false;
@@ -1819,6 +1861,9 @@ void MaPlayer::fireEvent_(const Ev& e) {
             pv.channel = int(e.ch); pv.keyNote = -1; pv.active = true;
             pv.noteId = 0; // score NoteOff/AllNotesOff must still exclude ATR
             pv.atrGateId = e.noteId;
+            pv.atrEndSample = e.sample;
+            if (ws.fs > 0) pv.atrEndSample += uint64_t(std::ceil(
+                double(ws.pcm.size()) * double(rate_) / double(ws.fs))) + 1;
             pv.atrTrack = e.b;
             pv.released = false; pv.recentLevel = 0;
             ++diagnostics_.pcmNotes;
@@ -1845,10 +1890,10 @@ void MaPlayer::fireEvent_(const Ev& e) {
             // Keep immutable base0, just like Velocity1; later gain cannot revive.
             float noteVelocity = ma7 && (e.b == 1 || (c.bankMsb == 121 && c.bankLsb == 6))
                 ? 0.0f : vel01 * vel01;
-            // MA7 MTRs share the existing channel namespace. Their recorded
-            // Audio still belongs to the note's MTR, never the last MTR that
-            // initialized this channel. Leave legacy source policy unchanged.
-            const int sourceTrack = ma7 ? e.sourceTrack : c.streamTrack;
+            // Mobile/MA7 Audio belongs to the note's MTR, even when another
+            // MTR initialized the shared channel later. Untagged legacy or
+            // internally constructed notes retain their channel fallback.
+            const int sourceTrack = e.sourceTrack >= 0 ? e.sourceTrack : c.streamTrack;
             if (sourceTrack >= 0 && c.bankMsb == 125 && c.bankLsb <= 9 &&
                 c.program <= 9 && (e.a <= 12 || (e.a >= 92 && e.a <= 110))) {
                 startAudio_(e.ch, e.a, noteVelocity, e.noteId, ma7,
@@ -1857,6 +1902,7 @@ void MaPlayer::fireEvent_(const Ev& e) {
             }
             const ParsedVoice* rv = resolveVoice_(e.ch, e.a);
             const ParsedVoice* missingRom = nullptr;
+            bool missingPcmDrum = false;
             if (rv && rv->isPcm) {                      // sampled (drum / pcm) voice
                 if (rv->valid && startPcm_(e.ch, e.a, soundingNote, *rv, c, noteVelocity, e.noteId)) {
                     break;
@@ -1869,6 +1915,10 @@ void MaPlayer::fireEvent_(const Ev& e) {
                 // ROM's native waveform level have not been calibrated. The
                 // beta.6 compensation made some fallback layers ~21 dB quieter.
                 if(rv->valid && rv->pcm.rom && c.modernTimbre) missingRom=rv;
+                // Preserve the same custom-drum classification used by
+                // resolveVoice_/startPcm_ when a selected PCM wave is absent.
+                // Long-form drum keys also occur outside bank125.
+                missingPcmDrum = rv->valid && (rv->key.bankMSB == 125 || rv->key.drumNote != 0);
                 rv = nullptr;
             }
             ++diagnostics_.fmNotes;
@@ -1881,7 +1931,7 @@ void MaPlayer::fireEvent_(const Ev& e) {
             const FmVoicePatch* romPatch=missingRom?FmVoicePatch::romApprox(missingRom->pcm.waveId):nullptr;
             FmVoicePatch patch = rv ? rv->patch
                 : romPatch ? *romPatch
-                : (c.rhythm || c.drum || c.bankMsb == 125) ? FmVoicePatch::drumApprox(e.a)
+                : (missingPcmDrum || c.rhythm || c.drum || c.bankMsb == 125) ? FmVoicePatch::drumApprox(e.a)
                 : c.modernTimbre ? FmVoicePatch::gmModernApprox(c.program)
                                 : FmVoicePatch::gmApprox(c.program);
             patch.modernTimbre=c.modernTimbre;
@@ -1953,7 +2003,7 @@ int MaPlayer::render(float* out, int frames) {
     // after the song safety limit. Previously the inner loop broke here but a
     // following render() call produced one more frame again, so a caller could
     // spend hours draining an effectively endless release tail.
-    const uint64_t absoluteEnd = endSample_;
+    uint64_t absoluteEnd = endSample_;
     if (ended_ || cursor_ >= absoluteEnd) { ended_ = true; return 0; }
 
     int produced = 0;
@@ -1962,6 +2012,20 @@ int MaPlayer::render(float* out, int frames) {
         while (nextEvent_ < events_.size() && events_[nextEvent_].sample <= cursor_) {
             fireEvent_(events_[nextEvent_]);
             ++nextEvent_;
+        }
+        // Source lengths are only conservative estimates: a long ATR voice
+        // may have been stolen before EOF. Once no authored event remains
+        // and every actual ATR source has ended, anchor the safety tail to
+        // the sources that actually completed, not a recording no longer playing.
+        // Use liveness, never amplitude; silent/muted recordings still count.
+        if (atrEndPending_ && nextEvent_ >= nonAtrGateEventEnd_ &&
+            std::none_of(pcmPool_.begin(), pcmPool_.end(),
+                [](const PcmVoice& v) { return v.active && v.keyNote < 0; })) {
+            atrEndPending_ = false;
+            const uint64_t authoredEnd = events_[nonAtrGateEventEnd_ - 1].sample;
+            scoreEndSample_ = std::min(scoreEndSample_, std::max(authoredEnd, completedAtrEndSample_));
+            endSample_ = std::min(endSample_, scoreEndSample_ + uint64_t(rate_) * 10);
+            absoluteEnd = endSample_;
         }
         // Natural EOF/steal can leave only orphan ATR gates far in the future.
         // End only once ALL voices and the filter have drained and no authored
@@ -1994,6 +2058,8 @@ int MaPlayer::render(float* out, int frames) {
         for (int i = 0; i < kPcmPool; ++i) {           // sampled drum/pcm voices
             if (!pcmPool_[i].active) continue;
             float s = pcmPool_[i].tick();
+            if (atrEndPending_ && pcmPool_[i].keyNote < 0 && !pcmPool_[i].active)
+                completedAtrEndSample_ = std::max(completedAtrEndSample_, pcmPool_[i].atrEndSample);
             l += s * kMixGain * pcmPool_[i].panLeft; r += s * kMixGain * pcmPool_[i].panRight;
         }
         for (auto& voice : audioPool_) {
@@ -2039,6 +2105,7 @@ int MaPlayer::render(float* out, int frames) {
 
 void MaPlayer::seekToStart() {
     nextEvent_ = 0; cursor_ = 0;
+    resetEnd_();
     atrChans_.clear();
     for (auto& entry : ma7AudioPan_) entry.second.fill(AudioPanState{});
     for (auto& v : voiceTable_) if (v.sequenced) v.activated = false;
@@ -2061,6 +2128,7 @@ void MaPlayer::seekToStart() {
     poolNoteId_.fill(0);
     poolPanLocked_.fill(false);
     fmSteal_ = pcmSteal_ = 0;
+    nextAudioStartOrder_ = 0;
     lp1L_ = lp1R_ = lp2L_ = lp2R_ = 0.0f;
     limEnv_ = 0.0f;
 }
