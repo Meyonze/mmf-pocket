@@ -55,3 +55,5 @@ Androidの3 ABIのDebug・Releaseビルドとlintも通過しています。
 移行域では元の形状と基準波形の両方を計算します。Android実機の負荷・消費電力は
 未測定です。残る波形、低・中音域、動的なFM変調・フィードバックの折り返しや、
 メーカー音源との音色校正は引き続き別の課題です。
+
+r71のコミット`3d6a7e7`は[GitHub Actions全体](https://github.com/Meyonze/mmf-pocket/actions/runs/42065711794)も通過しました。

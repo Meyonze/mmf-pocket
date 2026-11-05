@@ -2,7 +2,7 @@
 
 ## Unreleased: current DSP and comparison workflow
 
-The current batch uses render cache **r71**, invalidating older rendered audio.
+The current batch uses render cache **r72**, invalidating older rendered audio.
 It combines bounded high-rate PCM reconstruction, corrected Yamaha ADPCM
 rounding, continuous FM phase during Nyquist suppression, complete HPS/VMA bank
 identity, completed-carrier release classification and provably silent-tail
@@ -10,6 +10,15 @@ completion. The changes below
 are software improvements; they do not establish handset-calibrated timbres or
 perceptual equivalence. Detailed probes and limits are in
 [DSP review evidence](dsp-review.md).
+
+### High gated-sine carriers (r72)
+
+Eligible modern WS3/4/5/11/12/13 final outputs transition over Fs/4..Fs/3 toward
+their DC and first Fourier component. Cosine carriers retain their quarter-cycle
+offset; low/mid-band output uses the unchanged raw waveform function. Numerical
+quadrature supplies a780-case reference with post-transition RMS below9.68e-8.
+All983 prior WAVs remain exact;156 of270 new scores change intentionally, with114
+exact controls and all formats/frame counts retained. See [gated-sine reconstruction](gated-sine-carrier-reconstruction.md).
 
 ### High clipped-sine carriers (r71)
 
