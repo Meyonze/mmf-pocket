@@ -2,7 +2,7 @@
 
 ## Unreleased: current DSP and comparison workflow
 
-The current batch uses render cache **r63**, invalidating older rendered audio.
+The current batch uses render cache **r64**, invalidating older rendered audio.
 It combines bounded high-rate PCM reconstruction, corrected Yamaha ADPCM
 rounding, continuous FM phase during Nyquist suppression, complete HPS/VMA bank
 identity, completed-carrier release classification and provably silent-tail
@@ -10,6 +10,18 @@ completion. The changes below
 are software improvements; they do not establish handset-calibrated timbres or
 perceptual equivalence. Detailed probes and limits are in
 [DSP review evidence](dsp-review.md).
+
+### Zero-loop PCM reconstruction (r64)
+
+Signed PCM8 WT voices with an exactly zero endpoint loop retain their modern
+interpolation profile. Retirement waits until all63 past source taps of the
+largest reconstruction kernel are zero, including short-loop traversal and
+subsequent filter widening. The zero-start all-zero case can still stop at once.
+This removes the prior linear-only exception without truncating FIR history.
+The190 earlier fixtures retain exact WAVs;15 of32 new fixtures change as intended,
+and all16 signed/unsigned reference pairs retain identical common PCM and an
+exactly zero remainder. See [zero-loop reconstruction](silent-loop-reconstruction.md)
+for synthetic measurements, limits and workload implications.
 
 ### Mobile recorded Audio source binding (r63)
 

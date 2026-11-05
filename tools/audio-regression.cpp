@@ -1195,6 +1195,27 @@ void checkMa7SignedWaveRam() {
     setVoice(oldZeroLoop,silentWt); appendExclusive(oldZeroLoop,unsignedSilent);
     check(renderAll(overwrite)==renderAll(oldZeroLoop),
           "unsigned overwrite clears new signed-only zero-loop retirement state");
+
+    // Identical signed/unsigned waves must use the same reconstruction even
+    // when only the signed form may retire its exactly silent endpoint loop.
+    // Exercise upsampling and downsampling, not just native-rate playback.
+    auto signedTone=signedSilent, unsignedTone=unsignedSilent;
+    for (int i=0;i<256;++i) {
+        const int value=i<254?int(std::lround(80*std::sin(2*3.14159265358979323846*0.45*i))):0;
+        signedTone[7+i]=uint8_t(value); unsignedTone[7+i]=uint8_t(value+128);
+    }
+    for (int note : {36,48,60,67,72,84,96}) {
+        auto signedFile=file, unsignedFile=file;
+        signedFile.tracks[0].sequenceData=unsignedFile.tracks[0].sequenceData=
+            {0,0x10,uint8_t(note),100,40,40,0xff,0x2f,0};
+        setVoice(signedFile,silentWt); appendExclusive(signedFile,signedTone);
+        setVoice(unsignedFile,silentWt); appendExclusive(unsignedFile,unsignedTone);
+        const auto actual=renderAll(signedFile), reference=renderAll(unsignedFile);
+        check(actual.size()<reference.size() &&
+              std::equal(actual.begin(),actual.end(),reference.begin()),
+              "signed silent-loop wave retains the unsigned reference reconstruction at every pitch");
+        check(actual==renderAll(signedFile,1),"signed silent-loop quality is independent of render block size");
+    }
 }
 
 void checkMa7WtRateBits() {

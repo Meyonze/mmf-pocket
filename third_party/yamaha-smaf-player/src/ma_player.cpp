@@ -1453,8 +1453,6 @@ bool MaPlayer::startPcm_(int ch, int rawNote, int soundingNote, const ParsedVoic
     pv.silentLoop = ws->retireSilentLoop && pv.loop &&
         std::all_of(ws->pcm.begin() + pv.loopStart, ws->pcm.begin() + pv.loopEnd,
                     [](int16_t sample) { return sample == 0; });
-    // Preserve the existing exact-zero retirement contract (sinc has history).
-    if (pv.silentLoop) pv.qualityInterpolation = false;
     pv.env.configure(v.pcm.env, double(rate_)); pv.env.keyOn();
     pv.gain = float(std::pow(10.0, -0.75 * double(v.pcm.env.tl) / 20.0));
     // Match FM voices: authored note velocity is part of the musical balance,
@@ -1529,9 +1527,16 @@ void MaPlayer::startAudio_(int ch, int note, float velocity, uint64_t noteId, bo
 
 float MaPlayer::PcmVoice::tick() {
     if (!active || !pcm || len == 0) { active = false; return 0.0f; }
-    // A zero-only loop cannot become audible again after reaching its start.
-    // Retire it without cutting any nonzero sample or guessing an EG duration.
-    if (silentLoop && pos >= double(loopStart)) { active = false; return 0.0f; }
+    // A zero-only loop can still reconstruct nonzero attack history. Keep
+    // the largest filter's 63 past source taps, including across short wraps.
+    // This bound remains valid if pitch/vibrato later widens the filter. A
+    // loop starting at zero has no nonzero attack history to retain.
+    if (silentLoop) {
+        const double history = qualityInterpolation && loopStart != 0 ? pcm_detail::kMaxPastSamples : 0;
+        if (pos + double(loopTravel) >= double(loopStart) + history) {
+            active = false; return 0.0f;
+        }
+    }
     size_t end = (loopEnd > 0 && loopEnd <= len) ? loopEnd : len;
     if (pos >= double(end)) {
         if (loop && loopEnd > loopStart) {

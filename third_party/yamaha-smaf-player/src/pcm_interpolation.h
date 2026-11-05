@@ -55,7 +55,9 @@ using DownsampleBank = DownsampleKernelBank<kDownsampleTaps, kCutoffSteps>;
 using HighRateBank = DownsampleKernelBank<64, 64, 17>;
 // Above 8:1, bandwidth is at most 1/8. A narrower cutoff grid and eight
 // fractional phases provide the longer kernel without a large shared table.
-using ExtremeRateBank = DownsampleKernelBank<128, 32, 32, 8, 8>;
+constexpr int kExtremeRateTaps = 128;
+constexpr int kMaxPastSamples = kExtremeRateTaps / 2 - 1;
+using ExtremeRateBank = DownsampleKernelBank<kExtremeRateTaps, 32, 32, 8, 8>;
 
 inline const DownsampleBank& downsamplingKernels() {
     static const DownsampleBank bank;
