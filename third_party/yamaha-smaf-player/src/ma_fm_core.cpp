@@ -376,6 +376,24 @@ double blepWave(uint8_t wave, double phase, double step, double inverse, double 
         : (x<0.5?x*2:x*2-2)-edge;
     return value*gain;
 }
+double rectifiedCarrier(uint8_t wave, double phase, double step) {
+    const double position = phase - std::floor(phase);
+    if (step <= 0.25) {
+        const double sine = std::sin(kTwoPi * position);
+        return double(float(wave == 1 ? (sine > 0 ? sine : 0.0) : std::fabs(sine)));
+    }
+    // The second harmonic crosses Nyquist at Fs/4. Only DC and WS1's
+    // fundamental remain in band; fade after that crossing, reaching Fs/3.
+    const double x = position >= 1.0 ? 0.0 : position;
+    const double target = wave == 1 ? 2.0 / kTwoPi + 0.5 * pcmModulationSine(x)
+                                  : 4.0 / kTwoPi;
+    if (step >= 1.0 / 3.0) return target;
+    const double sine = std::sin(kTwoPi * position);
+    const double raw = double(float(wave == 1 ? (sine > 0 ? sine : 0.0) : std::fabs(sine)));
+    const double blend = (step - 0.25) * 12.0;
+    const double mix = blend * blend * (3 - 2 * blend);
+    return raw + mix * (target - raw);
+}
 } // namespace
 
 void FmOperator::configure(const FmOpPatch& p, double sampleRate, int rateOffset,
@@ -401,8 +419,8 @@ void FmOperator::configure(const FmOpPatch& p, double sampleRate, int rateOffset
 }
 
 void FmOperator::setBandlimited(bool enabled) {
-    blepEnabled_ = enabled && modernTimbre_ && (wave_ == 6 || wave_ == 16 || wave_ == 24);
-    if (blepEnabled_ && wave_ == 16) (void)pcmModulationSine(0.0);
+    blepEnabled_ = enabled && modernTimbre_ && (wave_ == 1 || wave_ == 2 || wave_ == 6 || wave_ == 16 || wave_ == 24);
+    if (blepEnabled_ && (wave_ == 1 || wave_ == 16)) (void)pcmModulationSine(0.0);
     if (blepEnabled_ && phaseInc_ >= std::numeric_limits<double>::min() && phaseInc_ < 0.5) {
         blepGain_ = blepGain(phaseInc_);
         blepInverse_ = 1 / phaseInc_;
@@ -549,7 +567,8 @@ float FmOperator::tick(double modCycles, double lfoSin, double vibratoScale) {
     double out;
     if (blepEnabled_ && inc >= std::numeric_limits<double>::min()) {
         const double step=std::min(inc,0.5);
-        if (wave_ == 16) out = triangleCarrier(effectivePhase, step);
+        if (wave_ == 1 || wave_ == 2) out = rectifiedCarrier(wave_, effectivePhase, step);
+        else if (wave_ == 16) out = triangleCarrier(effectivePhase, step);
         else {
             const bool constant = step == phaseInc_;
             out = blepWave(wave_, effectivePhase, step,

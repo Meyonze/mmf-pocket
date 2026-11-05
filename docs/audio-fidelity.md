@@ -2,7 +2,7 @@
 
 ## Unreleased: current DSP and comparison workflow
 
-The current batch uses render cache **r69**, invalidating older rendered audio.
+The current batch uses render cache **r70**, invalidating older rendered audio.
 It combines bounded high-rate PCM reconstruction, corrected Yamaha ADPCM
 rounding, continuous FM phase during Nyquist suppression, complete HPS/VMA bank
 identity, completed-carrier release classification and provably silent-tail
@@ -10,6 +10,17 @@ completion. The changes below
 are software improvements; they do not establish handset-calibrated timbres or
 perceptual equivalence. Detailed probes and limits are in
 [DSP review evidence](dsp-review.md).
+
+### High rectified-sine carriers (r70)
+
+Eligible modern WS1/WS2 final carriers transition over Fs/4..Fs/3 toward their
+analytic DC and in-band fundamental. Low/mid-band float rounding, live modulation,
+feedback and legacy paths retain their previous output. A260-case independent
+reference checks DC/fundamental and phase, with post-transition RMS error below
+9.14e-8. All707 prior WAVs remain exact;52 of90 new scores change intentionally,
+with38 exact controls and all formats/frame counts retained. No per-voice state
+or allocation is added. See [rectified-carrier reconstruction](rectified-carrier-reconstruction.md)
+for formulas, workload uncertainty and remaining scope.
 
 ### Intrinsic vibrato and Nyquist suppression (r69)
 

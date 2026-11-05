@@ -139,6 +139,11 @@ jobs:
           c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Ithird_party/yamaha-smaf-player/src tools/silent-note-pool-test.cpp third_party/yamaha-smaf-player/src/smaf_file.cpp third_party/yamaha-smaf-player/src/ma_fm_core.cpp third_party/yamaha-smaf-player/src/smaf_voice.cpp third_party/yamaha-smaf-player/src/ma_player.cpp -o silent-note-pool-test
           ./silent-note-pool-test
 
+      - name: Build and run rectified-carrier tests
+        run: |
+          c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Ithird_party/yamaha-smaf-player/src tools/fm-rectified-carrier-test.cpp third_party/yamaha-smaf-player/src/ma_fm_core.cpp -o fm-rectified-carrier-test
+          ./fm-rectified-carrier-test
+
       - name: Build and run intrinsic-vibrato Nyquist tests
         run: |
           c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Ithird_party/yamaha-smaf-player/src tools/fm-vibrato-nyquist-test.cpp third_party/yamaha-smaf-player/src/smaf_file.cpp third_party/yamaha-smaf-player/src/ma_fm_core.cpp third_party/yamaha-smaf-player/src/smaf_voice.cpp third_party/yamaha-smaf-player/src/ma_player.cpp -o fm-vibrato-nyquist-test
