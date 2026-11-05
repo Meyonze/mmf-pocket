@@ -2,7 +2,7 @@
 
 ## Unreleased: current DSP and comparison workflow
 
-The current batch uses render cache **r73**, invalidating older rendered audio.
+The current batch uses render cache **r74**, invalidating older rendered audio.
 It combines bounded high-rate PCM reconstruction, corrected Yamaha ADPCM
 rounding, continuous FM phase during Nyquist suppression, complete HPS/VMA bank
 identity, completed-carrier release classification and provably silent-tail
@@ -10,6 +10,15 @@ completion. The changes below
 are software improvements; they do not establish handset-calibrated timbres or
 perceptual equivalence. Detailed probes and limits are in
 [DSP review evidence](dsp-review.md).
+
+### Reclaim permanently zero envelopes under voice pressure (r74)
+
+Full FM/WT pools reuse stopped/finished output envelopes before audible release
+tails or held voices. Channel gain, Nyquist suppression and tiny nonzero attacks
+never prove permanence; ATR and recorded Audio are excluded. HPS retriggers,
+free-slot priority, note identities and held round-robin state are preserved.
+A 72-case dense-score oracle matches the complete float output with the stopped
+note removed; all 2,121 prior WAVs remain exact. See [silent voice allocation](silent-voice-allocation.md).
 
 ### Remaining high fixed-wave carriers (r73)
 

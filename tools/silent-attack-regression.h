@@ -177,8 +177,8 @@ void quietAndAllocation() {
     s.insert(s.end(),{20,0x92,72,25,20,100,0xff,0x2f,0});
     check(player.init(full,8000),"allocation-preservation fixture initializes"); drain(player);
     check(player.diagnostics().fmNotes==33&&player.diagnostics().stolenFm==1
-          &&player.diagnostics().stolenHeldFm==1,
-          "silent attacks retain occupied slots and existing held-note allocation during the score");
+          &&player.diagnostics().stolenHeldFm==0,
+          "silent attacks retain occupied slots but are reclaimed before sounding held notes under pressure");
 }
 
 void test() { configuredAttack(); topologyAndFeedback(); endpointAndEvents(); releaseAndFilterDrain(); quietAndAllocation(); }

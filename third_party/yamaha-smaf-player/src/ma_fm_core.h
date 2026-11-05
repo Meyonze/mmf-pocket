@@ -194,6 +194,9 @@ public:
     // Used only at score EOF, after future controllers/notes are exhausted;
     // this query does not retire slots or change voice-allocation policy.
     bool  muted() const;
+    // All output envelopes are permanently zero until another noteOn.
+    // Unlike muted(), this excludes reversible channel gain/pitch suppression.
+    bool silentForCurrentNote() const;
     bool  released() const { return released_; }
     float recentLevel() const { return recentLevel_; }
     int   note() const { return note_; }

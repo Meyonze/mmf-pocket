@@ -59,3 +59,5 @@ WS15・23・31の未対応ユーザー波形、低・中音域、変調・フィ
 ASan/UBSan付きで通過しました。ローカルのクラウドでは
 `ASAN_OPTIONS=detect_leaks=0`でリーク検査を無効にしています。
 Androidの3 ABIのDebug・Releaseビルドとlintも通過しました。実機負荷・消費電力は未測定です。
+
+r73のコミット`9298e8d`は[GitHub Actions全体](https://github.com/Meyonze/mmf-pocket/actions/runs/42079761502)も通過しました。

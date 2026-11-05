@@ -1245,8 +1245,15 @@ const ParsedVoice* MaPlayer::resolveVoice_(int ch, int note) const {
 int MaPlayer::allocatePcmSlot_() {
     for (int i=0;i<pcmLimit_;++i) if (!pcmPool_[i].active) return i;
     int slot=-1;
+    // Reclaim an instrument's stopped/finished envelope before audible tails
+    // or held parts. ATR and recorded Audio have independent lifetimes.
     for (int i=0;i<pcmLimit_;++i)
-        if (pcmPool_[i].released && (slot<0 || pcmPool_[i].recentLevel<pcmPool_[slot].recentLevel)) slot=i;
+        if (pcmPool_[i].keyNote >= 0 && !pcmPool_[i].streamAudio &&
+            pcmPool_[i].env.silentForCurrentNote()) { slot=i; break; }
+    if (slot<0) {
+        for (int i=0;i<pcmLimit_;++i)
+            if (pcmPool_[i].released && (slot<0 || pcmPool_[i].recentLevel<pcmPool_[slot].recentLevel)) slot=i;
+    }
     ++diagnostics_.stolenPcm;
     if (slot<0) { slot=pcmSteal_++%pcmLimit_; ++diagnostics_.stolenHeldPcm; }
     return slot;
@@ -1971,12 +1978,18 @@ void MaPlayer::fireEvent_(const Ev& e) {
                     if (!pool_[i].active()) { slot = i; break; }
             }
             if (slot < 0) {
+                // A stopped carrier envelope cannot revive via controllers,
+                // bend or Hold. Reuse it before stealing an audible part.
+                for (int i = 0; i < kPoolSize; ++i)
+                    if (pool_[i].silentForCurrentNote()) { slot = i; break; }
                 // Preserve held melody notes when release tails fill the pool.
                 // Prefer the quietest released voice; fully held pools use
                 // deterministic per-player round-robin, reset on seek/init.
-                for (int i = 0; i < kPoolSize; ++i)
-                    if (pool_[i].released() &&
-                        (slot < 0 || pool_[i].recentLevel() < pool_[slot].recentLevel())) slot = i;
+                if (slot < 0) {
+                    for (int i = 0; i < kPoolSize; ++i)
+                        if (pool_[i].released() &&
+                            (slot < 0 || pool_[i].recentLevel() < pool_[slot].recentLevel())) slot = i;
+                }
                 if (slot < 0) { slot = fmSteal_++ % kPoolSize; ++diagnostics_.stolenHeldFm; }
                 ++diagnostics_.stolenFm;
             }
