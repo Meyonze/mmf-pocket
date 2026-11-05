@@ -144,6 +144,11 @@ jobs:
           c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Ithird_party/yamaha-smaf-player/src tools/silent-note-pool-test.cpp build/native-sanitizer/libsmaf.a -o silent-note-pool-test
           ./silent-note-pool-test
 
+      - name: Build and run clipped-sine carrier tests
+        run: |
+          c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Ithird_party/yamaha-smaf-player/src tools/fm-clipped-sine-carrier-test.cpp build/native-sanitizer/libsmaf.a -o fm-clipped-sine-carrier-test
+          ./fm-clipped-sine-carrier-test
+
       - name: Build and run rectified-carrier tests
         run: |
           c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Ithird_party/yamaha-smaf-player/src tools/fm-rectified-carrier-test.cpp build/native-sanitizer/libsmaf.a -o fm-rectified-carrier-test

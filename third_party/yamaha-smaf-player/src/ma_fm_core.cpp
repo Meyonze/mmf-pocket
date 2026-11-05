@@ -394,6 +394,29 @@ double rectifiedCarrier(uint8_t wave, double phase, double step) {
     const double mix = blend * blend * (3 - 2 * blend);
     return raw + mix * (target - raw);
 }
+// Coefficients of clamp(1.7*sin(theta),-1,1), from its piecewise integral.
+// alpha=asin(1/1.7): b1=2/pi*(1.7*alpha+cos(alpha));
+// half-wave DC=1/2-alpha/pi+1.7*(1-cos(alpha))/pi.
+double clippedSineCarrier(uint8_t wave, double phase, double step) {
+    constexpr double fundamental = 1.1954300948071888;
+    constexpr double halfDc = 0.40334595618727476;
+    const double position = phase - std::floor(phase);
+    const auto rawShape = [&] {
+        const double clipped = std::clamp(1.7 * std::sin(kTwoPi * position), -1.0, 1.0);
+        return double(float(wave == 8 ? clipped : wave == 9
+            ? (clipped > 0 ? clipped : 0.0) : std::fabs(clipped)));
+    };
+    const double start = wave == 8 ? 1.0 / 6.0 : 0.25;
+    if (step <= start) return rawShape();
+    const double x = position >= 1.0 ? 0.0 : position;
+    const double target = wave == 10 ? 2 * halfDc
+        : (wave == 9 ? halfDc : 0.0)
+            + (wave == 9 ? fundamental * 0.5 : fundamental) * pcmModulationSine(x);
+    const double blend = std::min(1.0, (step - start) * (wave == 8 ? 30.0 : 12.0));
+    if (blend >= 1.0) return target;
+    const double raw = rawShape(), mix = blend * blend * (3 - 2 * blend);
+    return raw + mix * (target - raw);
+}
 } // namespace
 
 void FmOperator::configure(const FmOpPatch& p, double sampleRate, int rateOffset,
@@ -419,8 +442,8 @@ void FmOperator::configure(const FmOpPatch& p, double sampleRate, int rateOffset
 }
 
 void FmOperator::setBandlimited(bool enabled) {
-    blepEnabled_ = enabled && modernTimbre_ && (wave_ == 1 || wave_ == 2 || wave_ == 6 || wave_ == 16 || wave_ == 24);
-    if (blepEnabled_ && (wave_ == 1 || wave_ == 16)) (void)pcmModulationSine(0.0);
+    blepEnabled_ = enabled && modernTimbre_ && (wave_ == 1 || wave_ == 2 || wave_ == 6 || wave_ == 8 || wave_ == 9 || wave_ == 10 || wave_ == 16 || wave_ == 24);
+    if (blepEnabled_ && (wave_ == 1 || wave_ == 8 || wave_ == 9 || wave_ == 16)) (void)pcmModulationSine(0.0);
     if (blepEnabled_ && phaseInc_ >= std::numeric_limits<double>::min() && phaseInc_ < 0.5) {
         blepGain_ = blepGain(phaseInc_);
         blepInverse_ = 1 / phaseInc_;
@@ -568,6 +591,7 @@ float FmOperator::tick(double modCycles, double lfoSin, double vibratoScale) {
     if (blepEnabled_ && inc >= std::numeric_limits<double>::min()) {
         const double step=std::min(inc,0.5);
         if (wave_ == 1 || wave_ == 2) out = rectifiedCarrier(wave_, effectivePhase, step);
+        else if (wave_ >= 8 && wave_ <= 10) out = clippedSineCarrier(wave_, effectivePhase, step);
         else if (wave_ == 16) out = triangleCarrier(effectivePhase, step);
         else {
             const bool constant = step == phaseInc_;
