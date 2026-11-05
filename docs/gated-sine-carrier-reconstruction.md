@@ -51,3 +51,5 @@ Androidの3 ABIのDebug・Releaseとlintも通過しました。
 
 移行域には折り返し成分が残ります。元の波形の校正、他の波形、低・中音域、
 動的なFM変調・フィードバックと、Android実機での負荷・消費電力は引き続き別の課題です。
+
+r72のコミット`8ca0733`は[GitHub Actions全体](https://github.com/Meyonze/mmf-pocket/actions/runs/42074045798)も通過しました。

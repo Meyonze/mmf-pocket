@@ -2,7 +2,7 @@
 
 ## Unreleased: current DSP and comparison workflow
 
-The current batch uses render cache **r72**, invalidating older rendered audio.
+The current batch uses render cache **r73**, invalidating older rendered audio.
 It combines bounded high-rate PCM reconstruction, corrected Yamaha ADPCM
 rounding, continuous FM phase during Nyquist suppression, complete HPS/VMA bank
 identity, completed-carrier release classification and provably silent-tail
@@ -10,6 +10,16 @@ completion. The changes below
 are software improvements; they do not establish handset-calibrated timbres or
 perceptual equivalence. Detailed probes and limits are in
 [DSP review evidence](dsp-review.md).
+
+### Remaining high fixed-wave carriers (r73)
+
+Fourteen polynomial/pulse/triangle/saw derivatives use analytic DC/sine/cosine
+moments above the first aliasing boundary. WS14 transitions over Fs/6..Fs/5;
+the other thirteen over Fs/4..Fs/3. A 1,820-case independent quadrature sweep
+has post-transition RMS below 1.31e-7. All 1,253 prior WAVs remain exact;
+276 of 868 new scores change, with 592 exact controls and all formats/frame
+counts retained. Modern WS30 retains its quarter pulse, separately from legacy
+half-pulse behavior. See [remaining fixed-wave reconstruction](remaining-carrier-reconstruction.md).
 
 ### High gated-sine carriers (r72)
 

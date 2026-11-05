@@ -440,6 +440,39 @@ double gatedSineCarrier(uint8_t wave, double phase, double step, Raw&& raw) {
     const double mix = blend * blend * (3 - 2 * blend);
     return value + mix * (target - value);
 }
+// Closed-form moments of the remaining fixed polynomial/pulse shapes.
+// Only modern, unmodulated final outputs enter this reconstruction.
+template<class Raw>
+double remainingCarrier(uint8_t wave, double phase, double step, Raw&& raw) {
+    struct Moment { double dc=0,sine=0,cosine=0,start=0.25; };
+    static constexpr std::array<Moment,32> moments=[] {
+        std::array<Moment,32> m{};constexpr double p=kTwoPi*0.5;
+        constexpr double triangle=8*(1.4142135623730951-1)/(p*p);
+        m[7]={0,2/p-12/(p*p*p),0};
+        m[14]={0.5,2/p,0,1.0/6};
+        m[17]={0.25,4/(p*p),0};m[18]={0.5,0,0};m[19]={0.25,0,0};
+        m[20]={0,0,triangle};m[21]={0.25,triangle,0};m[22]={0.5,0,0};
+        m[25]={0.25,1/p,-2/(p*p)};m[26]={0.5,0,0};m[27]={0.125,0,0};
+        m[28]={0,0,2/p-4/(p*p)};m[29]={0.25,1/p,1/p-4/(p*p)};
+        m[30]={0.25,1/p,1/p}; // modern quarter pulse, not legacy half pulse
+        return m;
+    }();
+    static_assert(sizeof(moments)<=1024,"shared carrier moments exceed1KiB");
+    const auto& m=moments[wave];
+    if(step<=m.start)return double(raw());
+    double target=m.dc;
+    if(m.sine!=0 || m.cosine!=0) {
+        const double position=phase-std::floor(phase);
+        const double x=position>=1?0:position;
+        if(m.sine!=0)target+=m.sine*pcmModulationSine(x);
+        if(m.cosine!=0){double shifted=x+0.25;if(shifted>=1)shifted-=1;
+            target+=m.cosine*pcmModulationSine(shifted);}
+    }
+    const double blend=std::min(1.0,(step-m.start)*(wave==14?30.0:12.0));
+    if(blend>=1)return target;
+    const double value=double(raw()),mix=blend*blend*(3-2*blend);
+    return value+mix*(target-value);
+}
 } // namespace
 
 void FmOperator::configure(const FmOpPatch& p, double sampleRate, int rateOffset,
@@ -465,9 +498,9 @@ void FmOperator::configure(const FmOpPatch& p, double sampleRate, int rateOffset
 }
 
 void FmOperator::setBandlimited(bool enabled) {
-    const bool sineDerived = (wave_ >= 1 && wave_ <= 5) || (wave_ >= 8 && wave_ <= 13);
-    blepEnabled_ = enabled && modernTimbre_ && (sineDerived || wave_ == 6 || wave_ == 16 || wave_ == 24);
-    if (blepEnabled_ && (wave_ == 1 || wave_ == 4 || wave_ == 5 || wave_ == 8 || wave_ == 9 || wave_ == 12 || wave_ == 13 || wave_ == 16)) (void)pcmModulationSine(0.0);
+    blepEnabled_ = enabled && modernTimbre_ && wave_ > 0 && wave_ < 31 && wave_ != 15 && wave_ != 23;
+    constexpr uint32_t lookupShapes = (1u << 1) | (1u << 4) | (1u << 5) | (1u << 7) | (1u << 8) | (1u << 9) | (1u << 12) | (1u << 13) | (1u << 14) | (1u << 16) | (1u << 17) | (1u << 20) | (1u << 21) | (1u << 25) | (1u << 28) | (1u << 29) | (1u << 30);
+    if (blepEnabled_ && (lookupShapes & (1u << wave_))) (void)pcmModulationSine(0.0);
     if (blepEnabled_ && phaseInc_ >= std::numeric_limits<double>::min() && phaseInc_ < 0.5) {
         blepGain_ = blepGain(phaseInc_);
         blepInverse_ = 1 / phaseInc_;
@@ -614,16 +647,24 @@ float FmOperator::tick(double modCycles, double lfoSin, double vibratoScale) {
     double out;
     if (blepEnabled_ && inc >= std::numeric_limits<double>::min()) {
         const double step=std::min(inc,0.5);
-        if (wave_ == 1 || wave_ == 2) out = rectifiedCarrier(wave_, effectivePhase, step);
-        else if (wave_ >= 8 && wave_ <= 10) out = clippedSineCarrier(wave_, effectivePhase, step);
-        else if ((wave_ >= 3 && wave_ <= 5) || (wave_ >= 11 && wave_ <= 13))
-            out = gatedSineCarrier(wave_, effectivePhase, step,
-                [&] { return waveform_(wave_, effectivePhase); });
-        else if (wave_ == 16) out = triangleCarrier(effectivePhase, step);
-        else {
-            const bool constant = step == phaseInc_;
-            out = blepWave(wave_, effectivePhase, step,
-                constant ? blepInverse_ : 0, constant ? blepGain_ : blepGain(step));
+        switch(wave_) {
+            case 1:case 2:out=rectifiedCarrier(wave_,effectivePhase,step);break;
+            case 8:case 9:case 10:out=clippedSineCarrier(wave_,effectivePhase,step);break;
+            case 3:case 4:case 5:case 11:case 12:case 13:
+                out=gatedSineCarrier(wave_,effectivePhase,step,
+                    [&]{return waveform_(wave_,effectivePhase);});break;
+            case 16:out=triangleCarrier(effectivePhase,step);break;
+            case 7:case 14:case 17:case 18:case 19:case 20:case 21:case 22:
+            case 25:case 26:case 27:case 28:case 29:case 30:
+                out=remainingCarrier(wave_,effectivePhase,step,[&]{
+                    return modernTimbre_ && wave_==30
+                        ? ((effectivePhase-std::floor(effectivePhase))<0.25?1.0:0.0)
+                        : double(waveform_(wave_,effectivePhase));});break;
+            default: {
+                const bool constant=step==phaseInc_;
+                out=blepWave(wave_,effectivePhase,step,
+                    constant?blepInverse_:0,constant?blepGain_:blepGain(step));
+            }break;
         }
     } else out = modernTimbre_ && wave_ == 30
         ? ((effectivePhase - std::floor(effectivePhase)) < 0.25 ? 1.0 : 0.0)
