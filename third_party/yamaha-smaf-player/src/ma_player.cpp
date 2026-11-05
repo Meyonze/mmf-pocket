@@ -1431,6 +1431,7 @@ bool MaPlayer::startPcm_(int ch, int rawNote, int soundingNote, const ParsedVoic
     if (pv.qualityInterpolation) {
         (void)pcm_detail::interpolationKernels();
         pcm_detail::prepareDownsamplingKernels();
+        (void)pcm_detail::nearUnityKernels(); // later bend/vibrato may enter1..1.1
     }
     // Share the existing FM approximation rather than invent a different
     // WT vibrato curve. The hardware LFO rate/shape remains uncalibrated.
@@ -1506,6 +1507,7 @@ void MaPlayer::startAudio_(int ch, int note, float velocity, uint64_t noteId, bo
     if (modern && slot->rate < 1.0) (void)pcm_detail::interpolationKernels();
     if (modern && slot->rate > 0.8 && slot->rate < 1.0) (void)pcm_detail::downsamplingKernels();
     if (modern && slot->rate > 1.0) pcm_detail::prepareDownsamplingKernels();
+    if (modern && slot->rate > 1.0 && slot->rate < 1.1) (void)pcm_detail::nearUnityKernels();
     slot->vel = velocity; slot->pan = chans_[ch & 127].pan;
     channelPanGains(slot->pan, chans_[ch & 127].squaredControllers, slot->panLeft, slot->panRight);
     slot->channel = ch; slot->keyNote = note; slot->noteId = noteId;
@@ -1854,6 +1856,7 @@ void MaPlayer::fireEvent_(const Ev& e) {
             if (pv.rate < 1.0) (void)pcm_detail::interpolationKernels();
             if (pv.rate > 0.8 && pv.rate < 1.0) (void)pcm_detail::downsamplingKernels();
             if (pv.rate > 1.0) pcm_detail::prepareDownsamplingKernels();
+            if (pv.rate > 1.0 && pv.rate < 1.1) (void)pcm_detail::nearUnityKernels();
             pv.lfoPhase = pv.lfoInc = pv.vibDepth = pv.baseVibDepth = 0.0;
             pv.amDepth = 0.0f; // ATR must not inherit a stolen WT slot's LFO
             pv.pos = 0.0; pv.loopStart = 0; pv.loopEnd = pv.len; pv.loop = false;

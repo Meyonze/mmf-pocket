@@ -19,17 +19,18 @@ constexpr int kCutoffSteps = 32;
 // Shared bounded storage; constructing in-place avoids a large initializer
 // temporary on Android worker stacks. No per-voice or per-sample allocation.
 template<int Taps, int CutoffSteps, int MaxCutoff = CutoffSteps,
-         int Phases = kDownsamplePhases, int CutoffScale = 1>
+         int Phases = kDownsamplePhases, int CutoffScale = 1, int MinCutoff = 0>
 struct DownsampleKernelBank {
     static_assert(MaxCutoff > 0 && MaxCutoff <= CutoffSteps && Phases > 0 && CutoffScale > 0);
+    static_assert(MinCutoff >= 0 && MinCutoff < MaxCutoff);
     using PhaseRows = std::array<std::array<float, Taps>, Phases + 1>;
-    std::array<PhaseRows, MaxCutoff + 1> weights{};
+    std::array<PhaseRows, MaxCutoff - MinCutoff + 1> weights{};
     DownsampleKernelBank() {
         constexpr double pi = 3.14159265358979323846;
-        for (int cutoff = 0; cutoff <= MaxCutoff; ++cutoff) {
+        for (int cutoff = MinCutoff; cutoff <= MaxCutoff; ++cutoff) {
             const double bandwidth = double(cutoff) / (CutoffSteps * CutoffScale);
             for (int phase = 0; phase <= Phases; ++phase) {
-                auto& row = weights[cutoff][phase];
+                auto& row = weights[cutoff - MinCutoff][phase];
                 double sum = 0;
                 for (int tap = 0; tap < Taps; ++tap) {
                     const double distance = double(tap - (Taps / 2 - 1)) - double(phase) / Phases;
@@ -58,6 +59,10 @@ using HighRateBank = DownsampleKernelBank<64, 64, 17>;
 constexpr int kExtremeRateTaps = 128;
 constexpr int kMaxPastSamples = kExtremeRateTaps / 2 - 1;
 using ExtremeRateBank = DownsampleKernelBank<kExtremeRateTaps, 32, 32, 8, 8>;
+// Only1..1.1 source advances use this bank. Keep cutoff rows58..64 instead
+// of all cutoff rows; row58 brackets64/1.1 and row64 guards the upper end.
+using NearUnityBank = DownsampleKernelBank<64, 64, 64, kDownsamplePhases, 1, 58>;
+static_assert(sizeof(NearUnityBank) <= 256 * 1024, "Keep near-native kernel storage bounded");
 
 inline const DownsampleBank& downsamplingKernels() {
     static const DownsampleBank bank;
@@ -74,6 +79,11 @@ inline const HighRateBank& highRateKernels() {
 
 inline const ExtremeRateBank& extremeRateKernels() {
     static const ExtremeRateBank bank;
+    return bank;
+}
+
+inline const NearUnityBank& nearUnityKernels() {
+    static const NearUnityBank bank;
     return bank;
 }
 
@@ -142,8 +152,8 @@ struct PcmBoundaryCursor {
     }
 };
 
-template<int Taps, int CutoffSteps, int MaxCutoff, int Phases, int CutoffScale>
-inline float filterPcm(const DownsampleKernelBank<Taps, CutoffSteps, MaxCutoff, Phases, CutoffScale>& kernels,
+template<int Taps, int CutoffSteps, int MaxCutoff, int Phases, int CutoffScale, int MinCutoff>
+inline float filterPcm(const DownsampleKernelBank<Taps, CutoffSteps, MaxCutoff, Phases, CutoffScale, MinCutoff>& kernels,
                           const int16_t* pcm, size_t end, size_t index,
                           float fraction, bool loop, size_t loopStart,
                           size_t loopTravel, double advance) {
@@ -151,8 +161,9 @@ inline float filterPcm(const DownsampleKernelBank<Taps, CutoffSteps, MaxCutoff, 
     const int phaseRow = std::min(Phases - 1, int(phase));
     const float phaseBlend = phase - phaseRow;
     const float cutoff = float((CutoffSteps * CutoffScale) / advance);
-    const int cutoffRow = std::min(CutoffSteps - 1, int(cutoff));
-    const float cutoffBlend = cutoff - cutoffRow;
+    const int absoluteRow = std::min(CutoffSteps - 1, int(cutoff));
+    const int cutoffRow = absoluteRow - MinCutoff;
+    const float cutoffBlend = cutoff - absoluteRow;
     const auto& bank = kernels.weights;
     const auto& a = bank[cutoffRow][phaseRow];
     const auto& b = bank[cutoffRow][phaseRow + 1];
@@ -229,6 +240,18 @@ inline float downsamplePcm(const int16_t* pcm, size_t end, size_t index,
         const float low = filterPcm(downsamplingKernels(), pcm, end, index,
             fraction, loop, loopStart, loopTravel, advance);
         const double t = advance - 4.0;
+        return low + float(t * t * (3.0 - 2.0 * t)) * (high - low);
+    }
+    if (advance < 1.1) {
+        // A narrow transition band needs more source taps near unity. Blend
+        //64 taps in over1..1.02 and out over1.05..1.1; source time is unchanged.
+        const float high = filterPcm(nearUnityKernels(), pcm, end, index,
+            fraction, loop, loopStart, loopTravel, advance);
+        const double t = std::min(1.0, std::min((advance - 1.0) / 0.02,
+                                               (1.1 - advance) / 0.05));
+        if (t >= 1.0) return high;
+        const float low = filterPcm(downsamplingKernels(), pcm, end, index,
+            fraction, loop, loopStart, loopTravel, advance);
         return low + float(t * t * (3.0 - 2.0 * t)) * (high - low);
     }
     const float filtered = filterPcm(downsamplingKernels(), pcm, end, index,

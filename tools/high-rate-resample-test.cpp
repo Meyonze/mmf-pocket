@@ -209,10 +209,12 @@ void extremeTableAccuracy() {
 }
 #include "pcm-silent-loop-regression.h"
 #include "pcm-unity-regression.h"
+#include "pcm-near-nyquist-regression.h"
 int main() {
     spectral(); boundaries(); extremeRatios(); tableEdges(); extremeTableAccuracy();
     pcm_dynamic_regression::run(); pcm_boundary_cursor_regression::run();
     pcm_silent_loop_regression::run();
     pcm_unity_regression::run();
+    pcm_near_nyquist_regression::run();
     std::cout << "High-rate resampling tests PASS\n";
 }

@@ -2,7 +2,7 @@
 
 ## Unreleased: current DSP and comparison workflow
 
-The current batch uses render cache **r66**, invalidating older rendered audio.
+The current batch uses render cache **r67**, invalidating older rendered audio.
 It combines bounded high-rate PCM reconstruction, corrected Yamaha ADPCM
 rounding, continuous FM phase during Nyquist suppression, complete HPS/VMA bank
 identity, completed-carrier release classification and provably silent-tail
@@ -10,6 +10,17 @@ completion. The changes below
 are software improvements; they do not establish handset-calibrated timbres or
 perceptual equivalence. Detailed probes and limits are in
 [DSP review evidence](dsp-review.md).
+
+### Near-native PCM stopband (r67)
+
+A compact64-tap bank supplements modern advances strictly between1 and1.1,
+with smooth32/64-tap transitions. Cutoff rows58..64 use231,168 shared bytes.
+Native-rate and legacy paths, allocation samples, source positions and endpoints
+retain their previous rules. Of303 previous scores,10 in-scope inputs change
+while293 retain exact WAVs;41 of54 new scores change intentionally with13 exact
+controls and all frame counts retained. Native-rate bend-recovery intervals stay
+exact. See [near-native antialiasing](near-native-antialias.md) for measurements,
+computational cost and the remaining transition-band limits.
 
 ### Near-native PCM fractional delay (r66)
 
