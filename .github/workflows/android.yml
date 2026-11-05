@@ -249,6 +249,13 @@ jobs:
           c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Ithird_party/yamaha-smaf-player/src tools/high-rate-resample-test.cpp build/native-sanitizer/libsmaf.a -o build/high-rate-tests/high-rate-resample-test
           ./build/high-rate-tests/high-rate-resample-test
 
+      - name: Check rendered mix pressure timeline
+        run: |
+          c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Ithird_party/yamaha-smaf-player/src tools/render-pressure-audit.cpp build/native-sanitizer/libsmaf.a -o render-pressure-audit
+          c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Ithird_party/yamaha-smaf-player/src tools/render-pressure-audit-test.cpp build/native-sanitizer/libsmaf.a -o render-pressure-audit-test
+          ./render-pressure-audit-test
+          PYTHONDONTWRITEBYTECODE=1 python3 tools/render-pressure-audit-cli-test.py ./render-pressure-audit
+
       - name: Build and run scheduled tone inventory tests
         run: |
           c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Ithird_party/yamaha-smaf-player/src tools/tone-usage-audit.cpp build/native-sanitizer/libsmaf.a -o tone-usage-audit
