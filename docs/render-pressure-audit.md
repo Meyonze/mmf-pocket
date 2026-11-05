@@ -32,7 +32,7 @@ JSONに含めません。正常終了は終了コード0、引数エラーは2�
 | `stolen_held_fm`・`stolen_held_pcm` | 押鍵中の枠をラウンドロビンで置き換えた回数 |
 | `fallback_notes` | 実際のレンダリング中に代替音色へ回った音符数 |
 | `audio_notes`・`missing_audio`・`stolen_audio` | 録音Audioの開始、不足、2枠内での置換 |
-| `fm_notes`・`pcm_notes` | 既存のFM・鍵盤PCM発音カウンター。`fallback_notes`はFMの内数 |
+| `fm_notes`・`pcm_notes` | 既存のFM・PCM全体の発音数。PCMには鍵盤PCM・ATR・録音Audioを含み、`audio_notes`はPCMの内数。`fallback_notes`はFMの内数 |
 | `suppressed_silent_notes` | r68の固定無音音符の抑制。r74の無音エンベロープ再利用の専用件数ではない |
 
 `windows`内のカウンターは区間中の増分、`totals`は検査範囲全体の値です。
