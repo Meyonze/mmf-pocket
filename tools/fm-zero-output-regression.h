@@ -48,18 +48,26 @@ void carriersAndControls() {
             v.setVolume(1);
         }
     }
-    // Instantaneous waveform zeros and vibrato crossing fs/2 are not a
-    // certificate. The engine's guard follows the nominal base increment.
-    auto p=voice(1,0);
+    // Instantaneous waveform zeros do not prove silence throughout a future
+    // vibrato cycle. Legacy retains its nominal-frequency suppression policy.
+    for(bool modern:{false,true}) {
+    auto p=voice(1,0);p.modernTimbre=modern;
     for(auto& op:p.ops){op.multi=1;op.wave=25;op.vib=true;op.dvb=3;}
     FmVoice v;v.setSampleRate(8000);v.noteOn(p,3990,1);v.setVibratoScale(8);
     bool zero=false,nonzero=false;
     for(int i=0;i<1000;++i){check(!v.muted(),"local vibrato or a zero sample cannot prove silence");
         const auto s=v.tick();zero=zero||s==0;nonzero=nonzero||s!=0;}
     check(zero&&nonzero,"vibrato control fixture spans zero and nonzero waveform regions");
-    v.setPitch(4000);check(v.muted(),"nominal exact Nyquist boundary is suppressed");
-    for(int i=0;i<1000;++i)check(v.tick()==0,"vibrato cannot clear nominal Nyquist suppression");
+    v.setPitch(4000);check(v.muted()==!modern,"modern vibrato can return below nominal Nyquist");
+    bool recovered=false;
+    for(int i=0;i<8000;++i) {
+        const float s=v.tick();recovered=recovered||s!=0;
+        if(!modern)check(s==0,"legacy vibrato retains nominal Nyquist suppression");
+    }
+    check(recovered==modern,"modern vibrato actually resumes within its LFO cycle");
+    v.setVibratoScale(0);check(v.muted(),"CC1 OFF makes nominal Nyquist silence permanent");
     v.setPitch(3990);check(!v.muted(),"later base pitch clears suppression");
+    }
 }
 
 void outputGraphAndSelectors() {

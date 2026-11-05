@@ -2,7 +2,7 @@
 
 ## Unreleased: current DSP and comparison workflow
 
-The current batch uses render cache **r68**, invalidating older rendered audio.
+The current batch uses render cache **r69**, invalidating older rendered audio.
 It combines bounded high-rate PCM reconstruction, corrected Yamaha ADPCM
 rounding, continuous FM phase during Nyquist suppression, complete HPS/VMA bank
 identity, completed-carrier release classification and provably silent-tail
@@ -10,6 +10,16 @@ completion. The changes below
 are software improvements; they do not establish handset-calibrated timbres or
 perceptual equivalence. Detailed probes and limits are in
 [DSP review evidence](dsp-review.md).
+
+### Intrinsic vibrato and Nyquist suppression (r69)
+
+Modern FM operators use the instantaneous increment for Nyquist suppression,
+after advancing source phase and envelope. Nominal pitch alone previously kept
+some recoverable notes silent and let others through above Nyquist. EOF silence
+certificates now consider the full intrinsic vibrato range at the current CC1
+scale. Legacy and non-vibrating paths keep their previous policy. All357 existing
+WAVs stay exact;34 of70 new scores change as intended, with36 exact controls and
+every format/frame count retained. See [vibrato Nyquist evidence](vibrato-nyquist.md).
 
 ### Fallback level and release profiling (no DSP change)
 

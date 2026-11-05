@@ -538,7 +538,11 @@ float FmOperator::tick(double modCycles, double lfoSin, double vibratoScale) {
     if (phase_ >= 1.0) phase_ -= std::floor(phase_);
     // Nyquist suppression mutes output, not source time. Keep the oscillator
     // moving so a pitch bend back into range resumes the integrated phase.
-    if (nyMute_) return 0.0f;
+    // Modern intrinsic vibrato can cross Nyquist in either direction. Use
+    // the increment already applied to source time, not its nominal pitch.
+    // Preserve the legacy profile and non-vibrating paths exactly.
+    const bool nyquistMute = modernTimbre_ && vibAmt_ != 0.0 ? inc >= 0.5 : nyMute_;
+    if (nyquistMute) return 0.0f;
     const double effectivePhase = phase_ + modCycles;
     // Related Yamaha waveform chart and independent MA3 model agree that
     // WS30 is quarter-square, unlike WS14 half-square. Legacy stays exact.
@@ -646,7 +650,7 @@ bool FmVoice::muted() const {
     if (velocity_ == 0.0f || volume_ == 0.0f) return true;
     const int nops = fourOp_ ? 4 : 2;
     for (int i = 0; i < nops; ++i)
-        if ((kCarrierMasks[algo_] & (1u << i)) && !ops_[i].muted()) return false;
+        if ((kCarrierMasks[algo_] & (1u << i)) && !ops_[i].muted(vibratoScale_)) return false;
     // Feedback only changes phase; it cannot bypass a carrier's zero output.
     // There is no voice-local output filter. The player's shared LP history
     // is still drained by its existing EOF condition.

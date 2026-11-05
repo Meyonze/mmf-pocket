@@ -143,12 +143,17 @@ public:
     float tick(double modIn, double lfoSin = 0.0, double vibratoScale = 1.0);
     bool  finished() const { return env_.isFinished(); }
     bool silentForCurrentNote() const { return env_.silentForCurrentNote(); }
-    // Exact zero output with current controls. Pitch changes may clear the
-    // Nyquist guard, so use only after future score events are exhausted.
+    // Exact zero output throughout the intrinsic LFO cycle at current controls.
+    // Pitch/CC1 changes may clear it: use only after future events are exhausted.
     // Keep ticking this operator during the score to preserve phase/envelope.
-    bool muted() const {
+    bool muted(double vibratoScale = 1.0) const {
         const auto wave = wave_ & 31;
-        return nyMute_ || wave == 15 || wave == 23 || wave == 31
+        bool pitchMuted = nyMute_;
+        if (pitchMuted && modernTimbre_ && vibAmt_ != 0.0) {
+            const double depth = vibAmt_ * (vibratoScale < 0 ? -vibratoScale : vibratoScale);
+            pitchMuted = phaseInc_ * (1.0 - depth) >= 0.5;
+        }
+        return pitchMuted || wave == 15 || wave == 23 || wave == 31
             || silentForCurrentNote();
     }
     void  setBaseFreq(double f) { freqHz_ = f; recalc_(); }
@@ -165,7 +170,7 @@ private:
     double kslGain_    = 1.0;   // key-scale level attenuation (freq-dependent)
     double vibAmt_     = 0.0;   // vibrato depth as a phase-inc factor
     float  amAmt_      = 0.0f;  // tremolo depth as a linear gain span
-    bool   nyMute_     = false; // operator lands above fs/2 -> silent, no alias
+    bool   nyMute_     = false; // nominal increment>=0.5; modern EVB checks actual increment
     uint8_t wave_      = 0;
     bool modernTimbre_ = false;
     bool blepEnabled_ = false;
