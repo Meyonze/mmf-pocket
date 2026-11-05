@@ -94,6 +94,13 @@ class ReleaseTests(unittest.TestCase):
                  self.assertRaises(R.ReleaseError):
                 R.find_release('v1.6.5')
 
+    def test_api_preserves_json_boolean_types(self):
+        result = type('Result', (), {'returncode': 0, 'stdout': '{"id":123}', 'stderr': ''})()
+        with patch.object(R.subprocess, 'run', return_value=result) as native:
+            self.assertEqual(R.api('releases', fields={'draft': True}), {'id': 123})
+        self.assertEqual(json.loads(native.call_args.kwargs['input']), {'draft': True})
+        self.assertIn('--input', native.call_args.args[0])
+
     def signing_environment(self):
         return {'RUNNER_TEMP': str(self.root), 'MMF_RELEASE_KEYSTORE_BASE64': base64.b64encode(b'fixture key').decode(),
                 'MMF_RELEASE_STORE_PASSWORD': 'fixture password'}
@@ -216,13 +223,15 @@ class ReleaseTests(unittest.TestCase):
         out = self.release_files(); remote = {}; created = []; edits = []
         def api(path, **_):
             if path.startswith('actions/'): return self.green
+            if path == 'releases':
+                self.assertIs(_['fields']['draft'], True)
+                self.assertEqual(_['fields']['target_commitish'], COMMIT)
+                created.append(True)
             if not created: return None
             return {'id': 123, 'draft': True, 'target_commitish': COMMIT,
                     'assets':[{'name':n} for n in remote], 'html_url':'https://example.invalid/draft'}
         def command(args, **_):
-            if args[:3] == ['gh','release','create']:
-                self.assertIn('--draft', args);self.assertIn('--verify-tag', args);created.append(True)
-            elif args[:3] == ['gh','release','upload']:
+            if args[:3] == ['gh','release','upload']:
                 p=Path(args[4]);remote[p.name]=p.read_bytes()
             elif args[:3] == ['gh','release','download']:
                 name=args[args.index('--pattern')+1];directory=Path(args[args.index('--dir')+1])
@@ -231,10 +240,11 @@ class ReleaseTests(unittest.TestCase):
                 self.assertNotIn('--draft=false', args);self.assertNotIn('--latest', args);edits.append(True)
             return ''
         with patch.object(R,'verify_apk'), patch.object(R,'ensure_tag') as tag, \
-             patch.object(R,'find_release',side_effect=lambda _: api('releases/find')), \
+             patch.object(R,'find_release',return_value=None) as find, \
              patch.object(R,'api',side_effect=api), patch.object(R,'run',side_effect=command):
             self.assertEqual(R.publish(self.state,out,False),'https://example.invalid/draft')
         tag.assert_called_once_with(self.state);self.assertEqual(len(edits),1)
+        find.assert_called_once_with('v1.6.5')
 
     def test_existing_expected_asset_is_never_replaced_if_different(self):
         out=self.release_files();commands=[]

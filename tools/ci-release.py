@@ -37,10 +37,9 @@ def run(args, cwd=None, env=None, allowed=(0,)):
 def api(path, fields=None, missing_ok=False):
     args = ['gh', 'api', f'repos/{REPOSITORY}/{path}']
     if fields is not None:
-        args += ['--method', 'POST']
-        for key, value in fields.items():
-            args += ['-f', f'{key}={value}']
-    result = subprocess.run(args, capture_output=True, text=True)
+        args += ['--method', 'POST', '--input', '-']
+    result = subprocess.run(args, input=json.dumps(fields) if fields is not None else None,
+                            capture_output=True, text=True)
     if missing_ok and result.returncode and 'HTTP 404' in result.stderr:
         return None
     status = re.search(r'HTTP ([0-9]{3})', result.stderr)
@@ -216,10 +215,11 @@ def publish(state, output, make_public):
     notes_path = output / 'release-notes.md'
     notes_path.write_text(notes)
     if release is None:
-        run(['gh', 'release', 'create', state['tag'], '--repo', REPOSITORY, '--draft',
-             '--verify-tag', '--target', state['commit'], '--title', f"MMF Pocket {state['version']}",
-             '--notes-file', notes_path])
-        release = find_release(state['tag'])
+        # Use the creation response directly: a newly created draft can take
+        # time to appear in the release list.
+        release = api('releases', fields={'tag_name': state['tag'],
+                      'target_commitish': state['commit'], 'name': f"MMF Pocket {state['version']}",
+                      'body': notes, 'draft': True, 'prerelease': False})
         require(release is not None and release['draft']
                 and release['target_commitish'] == state['commit']
                 and not release['assets'], 'New draft does not match this release')
