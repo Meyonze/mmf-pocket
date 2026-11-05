@@ -25,6 +25,9 @@
 namespace fxchain::smaf {
 
 namespace {
+bool allZeroPcm(const std::vector<int16_t>& pcm) {
+    return !pcm.empty() && std::all_of(pcm.begin(),pcm.end(),[](int16_t s){return s==0;});
+}
 constexpr double kSafetySeconds = 600.0;   // hard cap so a broken loop can't hang
 constexpr size_t kMaxEvents     = 400000;  // total decoded-event ceiling (anti-DoS)
 constexpr size_t kMaxCustomVoices = 2048;  // cap malformed exclusive-message floods
@@ -531,6 +534,7 @@ void MaPlayer::buildWaveBank_(const SmafFile& file) {
                         ? (int(w.data[i]) < 128 ? int(w.data[i]) : int(w.data[i]) - 256)
                         : int(w.data[i]) - 128) * 256);
             }
+            ps.allZero = allZeroPcm(ps.pcm);
             if (!t.isAudioTrack) {
                 if (size_t(w.number) >= waveBank_.size()) waveBank_.resize(w.number + 1);
                 waveBank_[w.number] = ps;
@@ -628,6 +632,7 @@ bool MaPlayer::decodeVoiceWave_(const uint8_t* p, size_t n, PcmSample& out,
             out.pcm = std::move(pcm);
             out.retireSilentLoop = p[6] == 3;
         }
+        out.allZero = allZeroPcm(out.pcm);
         return !out.pcm.empty();
     }
     // MA-3 voice waves use seven-bit transport for ADPCM or unsigned PCM8.
@@ -650,6 +655,7 @@ bool MaPlayer::decodeVoiceWave_(const uint8_t* p, size_t n, PcmSample& out,
         out.pcm = std::move(pcm);
     }
     out.retireSilentLoop = false;
+    out.allZero = allZeroPcm(out.pcm);
     // Playback rate belongs to the selecting PCM patch's Fs, not this block.
     return !out.pcm.empty();
 }
@@ -1249,7 +1255,7 @@ int MaPlayer::allocatePcmSlot_() {
     // or held parts. ATR and recorded Audio have independent lifetimes.
     for (int i=0;i<pcmLimit_;++i)
         if (pcmPool_[i].keyNote >= 0 && !pcmPool_[i].streamAudio &&
-            pcmPool_[i].env.silentForCurrentNote()) { slot=i; break; }
+            (pcmPool_[i].zeroSource || pcmPool_[i].env.silentForCurrentNote())) { slot=i; break; }
     if (slot<0) {
         for (int i=0;i<pcmLimit_;++i)
             if (pcmPool_[i].released && (slot<0 || pcmPool_[i].recentLevel<pcmPool_[slot].recentLevel)) slot=i;
@@ -1458,6 +1464,7 @@ bool MaPlayer::startPcm_(int ch, int rawNote, int soundingNote, const ParsedVoic
     pv.loopEnd   = (v.pcm.endPt > 0 && size_t(v.pcm.endPt) <= pv.len) ? size_t(v.pcm.endPt) : pv.len;
     pv.loopStart = (size_t(v.pcm.loopPt) < pv.loopEnd) ? size_t(v.pcm.loopPt) : 0;
     pv.loop = v.pcm.loop && v.pcm.loopPt >= 0 && size_t(v.pcm.loopPt) < pv.loopEnd;
+    pv.zeroSource = ws->allZero;
     pv.silentLoop = ws->retireSilentLoop && pv.loop &&
         std::all_of(ws->pcm.begin() + pv.loopStart, ws->pcm.begin() + pv.loopEnd,
                     [](int16_t sample) { return sample == 0; });
@@ -1867,6 +1874,7 @@ void MaPlayer::fireEvent_(const Ev& e) {
             pv.lfoPhase = pv.lfoInc = pv.vibDepth = pv.baseVibDepth = 0.0;
             pv.amDepth = 0.0f; // ATR must not inherit a stolen WT slot's LFO
             pv.pos = 0.0; pv.loopStart = 0; pv.loopEnd = pv.len; pv.loop = false;
+            pv.zeroSource = false;
             pv.silentLoop = false;
             FmOpPatch flat{};                      // full-open sustaining envelope
             flat.ar = 15; flat.sl = 0; flat.sr = 0; flat.egType = true;

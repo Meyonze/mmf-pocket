@@ -217,5 +217,28 @@ void unboundWaveAllocation() {
     }
     std::cout<<"Unbound waveform allocation PASS: "<<cases<<" cases\n";
 }
-int main(){unboundWaveCertificate();unboundWaveAllocation();allocation();envelopeCertificate();reversibleSuppression();}
+void zeroPcmAllocation() {
+    for(int format:{2,3})for(bool future:{false,true})for(bool released:{false,true}) {
+        auto fixture=[&](bool includeSilent){auto f=dense(true,format,false,includeSilent,future,released);
+            auto& setup=f.tracks[0].setupData;const size_t second=2+setup[1];
+            setup[second+2+16]=0xf0;setup[second+2+25]=2;
+            auto zero=f.tracks[0].waves[0];zero.number=2;zero.adpcm=false;std::fill(zero.data.begin(),zero.data.end(),0);f.tracks[0].waves.push_back(zero);return f;};
+        MaPlayer reference;require(reference.init(fixture(false),8000),"zero PCM reference initializes");const auto expected=drain(reference,257);
+        for(int block:{1,257,1024}){MaPlayer actual;require(actual.init(fixture(true),8000),"zero PCM pressure initializes");
+            require(drain(actual,block)==expected,"whole-zero PCM must not displace audible held notes or release tails");
+            require(actual.diagnostics().stolenHeldPcm==unsigned(future&&!released),"zero PCM preserves held round-robin order");
+            if(block==257){actual.seekToStart();require(drain(actual,block)==expected,"zero PCM reclaim survives seek");}}
+    }
+    for(int format:{2,3}) {
+        auto file=dense(true,format,false,true,false,false);
+        auto& setup=file.tracks[0].setupData;const size_t second=2+setup[1];
+        setup[second+2+16]=0xf0;setup[second+2+25]=2;
+        auto tiny=file.tracks[0].waves[0];tiny.number=2;tiny.adpcm=false;std::fill(tiny.data.begin(),tiny.data.end(),0);tiny.data.back()=1;
+        file.tracks[0].waves.push_back(tiny);
+        MaPlayer actual;require(actual.init(file,8000),"tiny nonzero PCM pressure initializes");drain(actual,257);
+        require(actual.diagnostics().stolenHeldPcm==1,"one nonzero PCM sample protects the slot without a silence threshold");
+    }
+    std::cout<<"Whole-zero PCM allocation PASS:24 cases\n";
+}
+int main(){zeroPcmAllocation();unboundWaveCertificate();unboundWaveAllocation();allocation();envelopeCertificate();reversibleSuppression();}
 
