@@ -17,7 +17,7 @@ void exclusive(SmafFile& file,const Bytes& voice) {
     out.push_back(0xf0);out.push_back(uint8_t(voice.size()+1));
     out.insert(out.end(),voice.begin(),voice.end());out.push_back(0xf7);
 }
-SmafFile base(bool pcm,int format) {
+SmafFile base(bool pcm,int format,int silentWave=0) {
     SmafFile file;TrackChunk track;track.formatType=uint8_t(format);track.trackNumber=0;
     track.durationTimeBase=track.gateTimeBase=0x10;file.tracks.push_back(track);
     Bytes voice;
@@ -36,15 +36,16 @@ SmafFile base(bool pcm,int format) {
     }
     const auto audible=voice;
     exclusive(file,voice);
-    voice[7]=1;voice[pcm?16:22]=0; // Stopped attack; independently triggered PC1.
+    voice[7]=1;voice[pcm?16:22]=silentWave?0xf0:0;
+    if(silentWave)voice[26]=uint8_t(silentWave<<3); // Permanent-zero patch, independently triggered PC1.
     exclusive(file,voice);
     voice=audible;voice[7]=2;voice[pcm?15:21]=0x80;
     exclusive(file,voice); // Audibly ringing release tail.
     return file;
 }
 int capacity(bool pcm,int format){return pcm&&format==2?16:32;}
-SmafFile dense(bool pcm,int format,bool high,bool stopped,bool future,bool released=false) {
-    auto file=base(pcm,format);using Event=std::pair<int,Bytes>;std::vector<Event> events;
+SmafFile dense(bool pcm,int format,bool high,bool stopped,bool future,bool released=false,int silentWave=0) {
+    auto file=base(pcm,format,silentWave);using Event=std::pair<int,Bytes>;std::vector<Event> events;
     const auto status=[&](int kind,int channel){return uint8_t(format==2
         ? (kind==1?0x90:kind==3?0xb0:0xc0)+channel
         : kind*16+(channel&15)+(channel>=16?128:0));};
@@ -181,5 +182,40 @@ void reversibleSuppression() {
     std::cout<<"Reversible suppression PASS: FM/WT volume/expression and FM Nyquist revival under pool pressure\n";
 }
 
-int main(){allocation();envelopeCertificate();reversibleSuppression();}
+void unboundWaveCertificate() {
+    constexpr unsigned carriers[]={2,3,15,8,8,10,9,13};
+    for(bool modern:{false,true})for(int algorithm=0;algorithm<8;++algorithm)for(int wave:{15,23,31,47,55,63}) {
+        FmVoicePatch patch;patch.modernTimbre=modern;patch.algorithm=uint8_t(algorithm);patch.fourOp=algorithm>=2;
+        const int count=patch.fourOp?4:2;
+        for(int i=0;i<count;++i){patch.ops[i].ar=15;patch.ops[i].wave=uint8_t(carriers[algorithm]&(1u<<i)?wave:0);patch.ops[i].fb=7;}
+        FmVoice voice;voice.setSampleRate(8000);voice.noteOn(patch,220,1);
+        require(voice.silentForCurrentNote(),"unbound carrier waveforms cannot revive during this note");
+        voice.setPitch(440);voice.setVibratoScale(8);voice.setVolume(0);voice.setVolume(1);voice.noteOff(true);
+        for(int i=0;i<128;++i)require(voice.tick()==0&&voice.silentForCurrentNote(),"live modulation, feedback, pitch and Hold cannot bypass zero carrier waveforms");
+        for(int live=0;live<count;++live)if(carriers[algorithm]&(1u<<live)){
+            auto mixed=patch;mixed.ops[live].wave=0;
+            voice.noteOn(mixed,220,1);require(!voice.silentForCurrentNote(),"one sounding carrier protects mixed unbound graphs");
+            float peak=0;for(int i=0;i<128;++i)peak=std::max(peak,std::abs(voice.tick()));
+            require(peak>0,"protected mixed graph actually sounds");
+        }
+    }
+    std::cout<<"Unbound waveform certificate PASS: all algorithms, legacy/modern, masked selectors and live-carrier guards\n";
+}
+void unboundWaveAllocation() {
+    unsigned cases=0;
+    for(int format:{2,3})for(int wave:{15,23,31})for(bool future:{false,true})for(bool released:{false,true}) {
+        MaPlayer reference;require(reference.init(dense(false,format,false,false,future,released),8000),"unbound-wave reference initializes");
+        const auto expected=drain(reference,257);
+        for(int block:{1,257,1024}){
+            MaPlayer actual;require(actual.init(dense(false,format,false,true,future,released,wave),8000),"unbound-wave pressure initializes");
+            require(drain(actual,block)==expected,"unbound user-wave slots must not displace audible held notes or release tails");
+            const auto& d=actual.diagnostics();require(d.fmNotes==unsigned(33+int(future))&&d.suppressedSilentNotes==0,"unbound waveform still registers its note");
+            require(d.stolenHeldFm==unsigned(future&&!released),"unbound waveform reclamation preserves held round-robin state");
+            if(block==257){actual.seekToStart();require(drain(actual,block)==expected,"unbound waveform reclamation survives seek");}
+            ++cases;
+        }
+    }
+    std::cout<<"Unbound waveform allocation PASS: "<<cases<<" cases\n";
+}
+int main(){unboundWaveCertificate();unboundWaveAllocation();allocation();envelopeCertificate();reversibleSuppression();}
 

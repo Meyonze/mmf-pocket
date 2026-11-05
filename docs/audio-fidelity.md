@@ -2,7 +2,7 @@
 
 ## Unreleased: current DSP and comparison workflow
 
-The current batch uses render cache **r74**, invalidating older rendered audio.
+The current batch uses render cache **r75**, invalidating older rendered audio.
 It combines bounded high-rate PCM reconstruction, corrected Yamaha ADPCM
 rounding, continuous FM phase during Nyquist suppression, complete HPS/VMA bank
 identity, completed-carrier release classification and provably silent-tail
@@ -10,6 +10,15 @@ completion. The changes below
 are software improvements; they do not establish handset-calibrated timbres or
 perceptual equivalence. Detailed probes and limits are in
 [DSP review evidence](dsp-review.md).
+
+### Reclaim zero-output unbound user-wave slots (r75)
+
+The same pressure-only policy covers operators whose current unbound user-wave
+selectors (15/23/31, including masked aliases) always synthesize zero. Every
+actual output carrier must have a stopped/finished envelope or a zero waveform;
+one live carrier protects the voice. The envelope-only dependency certificate
+for FM reconstruction stays unchanged, as do EOF behavior and note routing.
+This does not implement user waveform playback. See [silent voice allocation](silent-voice-allocation.md).
 
 ### Reclaim permanently zero envelopes under voice pressure (r74)
 

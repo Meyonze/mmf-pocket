@@ -143,17 +143,22 @@ public:
     float tick(double modIn, double lfoSin = 0.0, double vibratoScale = 1.0);
     bool  finished() const { return env_.isFinished(); }
     bool silentForCurrentNote() const { return env_.silentForCurrentNote(); }
+    // These unbound user selectors currently synthesize exact zero. No
+    // controller changes their binding during an allocated note's lifetime.
+    bool hasZeroWaveform() const {
+        const auto wave = wave_ & 31;
+        return wave == 15 || wave == 23 || wave == 31;
+    }
     // Exact zero output throughout the intrinsic LFO cycle at current controls.
     // Pitch/CC1 changes may clear it: use only after future events are exhausted.
     // Keep ticking this operator during the score to preserve phase/envelope.
     bool muted(double vibratoScale = 1.0) const {
-        const auto wave = wave_ & 31;
         bool pitchMuted = nyMute_;
         if (pitchMuted && modernTimbre_ && vibAmt_ != 0.0) {
             const double depth = vibAmt_ * (vibratoScale < 0 ? -vibratoScale : vibratoScale);
             pitchMuted = phaseInc_ * (1.0 - depth) >= 0.5;
         }
-        return pitchMuted || wave == 15 || wave == 23 || wave == 31
+        return pitchMuted || hasZeroWaveform()
             || silentForCurrentNote();
     }
     void  setBaseFreq(double f) { freqHz_ = f; recalc_(); }
@@ -194,7 +199,7 @@ public:
     // Used only at score EOF, after future controllers/notes are exhausted;
     // this query does not retire slots or change voice-allocation policy.
     bool  muted() const;
-    // All output envelopes are permanently zero until another noteOn.
+    // All output envelopes/waveforms are permanently zero until another noteOn.
     // Unlike muted(), this excludes reversible channel gain/pitch suppression.
     bool silentForCurrentNote() const;
     bool  released() const { return released_; }

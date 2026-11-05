@@ -763,8 +763,9 @@ bool FmVoice::silentForCurrentNote() const {
     // Never certify such an incomplete graph as permanently silent.
     if (nops < (algo_ < 2 ? 2 : 4)) return false;
     for (int i = 0; i < nops; ++i)
-        if ((kCarrierMasks[algo_] & (1u << i)) && !ops_[i].silentForCurrentNote()) return false;
-    // Modulation/feedback cannot bypass a zero carrier envelope. This voice
+        if ((kCarrierMasks[algo_] & (1u << i)) &&
+            !ops_[i].silentForCurrentNote() && !ops_[i].hasZeroWaveform()) return false;
+    // Modulation/feedback cannot bypass a zero carrier output. This voice
     // has no independent output filter; shared player history is left intact.
     return true;
 }
