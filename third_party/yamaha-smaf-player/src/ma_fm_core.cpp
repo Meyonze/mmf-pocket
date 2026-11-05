@@ -349,6 +349,25 @@ double blepTerm(double phase, double step, double inverse) {
     if (phase > 1-step) { const double v=(inverse != 0 ? (phase-1)*inverse : (phase-1)/step); return v*v+2*v+1; }
     return 0;
 }
+// Keep the additional quality path out of the ordinary operator's stack and
+// instruction footprint. GCC and Android Clang both support this attribute.
+[[gnu::noinline]] double triangleCarrier(double phase, double step) {
+    double x=phase-std::floor(phase);
+    // Subtracting floor from a tiny negative phase can round to exactly one.
+    // The shared sine table expects [0,1), so preserve the periodic endpoint.
+    if (x >= 1.0) x = 0.0;
+    if (step >= 0.2)
+        return (32.0 / (kTwoPi * kTwoPi)) * pcmModulationSine(x);
+    const double shape = x < 0.25 ? x * 4 : x < 0.75 ? 2 - x * 4 : x * 4 - 4;
+    // Preserve the original float rounding below the third-harmonic Nyquist
+    // crossing; above it only the fundamental belongs in the output band.
+    const double raw = double(float(shape));
+    if (step <= 1.0 / 6.0) return raw;
+    const double blend = std::min(1.0, (step - 1.0 / 6.0) * 30.0);
+    const double mix = blend * blend * (3 - 2 * blend);
+    const double fundamental = (32.0 / (kTwoPi * kTwoPi)) * pcmModulationSine(x);
+    return raw + mix * (fundamental - raw);
+}
 double blepWave(uint8_t wave, double phase, double step, double inverse, double gain) {
     const double x=phase-std::floor(phase);
     const double half=x<0.5?x+0.5:x-0.5;
@@ -382,7 +401,8 @@ void FmOperator::configure(const FmOpPatch& p, double sampleRate, int rateOffset
 }
 
 void FmOperator::setBandlimited(bool enabled) {
-    blepEnabled_ = enabled && modernTimbre_ && (wave_ == 6 || wave_ == 24);
+    blepEnabled_ = enabled && modernTimbre_ && (wave_ == 6 || wave_ == 16 || wave_ == 24);
+    if (blepEnabled_ && wave_ == 16) (void)pcmModulationSine(0.0);
     if (blepEnabled_ && phaseInc_ >= std::numeric_limits<double>::min() && phaseInc_ < 0.5) {
         blepGain_ = blepGain(phaseInc_);
         blepInverse_ = 1 / phaseInc_;
@@ -525,9 +545,12 @@ float FmOperator::tick(double modCycles, double lfoSin, double vibratoScale) {
     double out;
     if (blepEnabled_ && inc >= std::numeric_limits<double>::min()) {
         const double step=std::min(inc,0.5);
-        const bool constant = step == phaseInc_;
-        out = blepWave(wave_, effectivePhase, step,
-            constant ? blepInverse_ : 0, constant ? blepGain_ : blepGain(step));
+        if (wave_ == 16) out = triangleCarrier(effectivePhase, step);
+        else {
+            const bool constant = step == phaseInc_;
+            out = blepWave(wave_, effectivePhase, step,
+                constant ? blepInverse_ : 0, constant ? blepGain_ : blepGain(step));
+        }
     } else out = modernTimbre_ && wave_ == 30
         ? ((effectivePhase - std::floor(effectivePhase)) < 0.25 ? 1.0 : 0.0)
         : waveform_(wave_, effectivePhase);

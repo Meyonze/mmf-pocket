@@ -20,8 +20,9 @@ void require(bool ok,const char* message) {
 double fourier(unsigned wave,double phase,unsigned bin,unsigned frames) {
     double sum=0;
     for(unsigned harmonic=1;harmonic*bin<frames/2;++harmonic) {
-        if(wave==6 && harmonic%2==0)continue;
-        const double coefficient=wave==6?4/(pi*harmonic)
+        if((wave==6 || wave==16) && harmonic%2==0)continue;
+        const double coefficient=wave==16 ? 8*((harmonic%4==1)?1.0:-1.0)/(pi*pi*harmonic*harmonic)
+            :wave==6?4/(pi*harmonic)
             :(harmonic%2?2:-2)/(pi*harmonic);
         sum+=coefficient*std::sin(tau*harmonic*phase);
     }
@@ -29,8 +30,9 @@ double fourier(unsigned wave,double phase,unsigned bin,unsigned frames) {
 }
 void stationary() {
     constexpr unsigned frames=2048;
-    for(double rate:{8000.0,44100.0})for(unsigned wave:{6u,24u})
-    for(unsigned bin:{17u,127u,401u}) {
+    for(double rate:{8000.0,44100.0})for(unsigned wave:{6u,16u,24u})
+    for(unsigned bin:{17u,127u,401u,512u,701u,1001u}) {
+        if(wave!=16 && bin>401)continue;
         FmOpPatch patch;patch.wave=uint8_t(wave);
         FmOperator plain,filtered;
         plain.configure(patch,rate,0,true);filtered.configure(patch,rate,0,true);
@@ -46,12 +48,66 @@ void stationary() {
             before+=(a-reference)*(a-reference);after+=(b-reference)*(b-reference);
             sine+=b*std::sin(tau*phase);cosine+=b*std::cos(tau*phase);dc+=b;
         }
-        require(after<before*0.25,"stationary error to independent Fourier series drops by at least 75 percent");
+        if(wave==16 && double(bin)/frames<=1.0/6.0)
+            require(before==after,"low/middle triangle output remains exact");
+        else require(after<before*0.25,"stationary error to independent Fourier series drops by at least 75 percent");
         const double amplitude=2*std::hypot(sine,cosine)/frames;
-        const double target=(wave==6?4:2)/pi;
-        require(std::abs(amplitude/target-1)<0.001,"fundamental amplitude preserved within 0.1 percent");
+        const double target=wave==16?8/(pi*pi):(wave==6?4:2)/pi;
+        if(wave!=16 || bin>frames/6)
+            require(std::abs(amplitude/target-1)<0.001,"fundamental amplitude preserved within 0.1 percent");
         require(std::abs(dc/frames)<1e-6,"symmetric filtered carrier has no appreciable DC");
     }
+}
+void triangleSweep() {
+    constexpr unsigned frames=2048;
+    unsigned cases=0;
+    double worstRatio=0,maxFullBandError=0;
+    for(unsigned bin=342;bin<1024;bin+=7)for(double offset:{0.0,0.137,0.49}) {
+        FmOpPatch p;p.wave=16;
+        FmOperator plain,filtered;
+        plain.configure(p,44100,0,true);filtered.configure(p,44100,0,true);
+        plain.noteOn(44100.0*bin/frames);filtered.noteOn(44100.0*bin/frames);
+        filtered.setBandlimited(true);
+        for(unsigned n=0;n<16;++n){(void)plain.tick(0);(void)filtered.tick(0);}
+        plain.phase_=filtered.phase_=offset;
+        double before=0,after=0;
+        for(unsigned n=0;n<frames;++n) {
+            // Above Fs/6 every higher (odd) triangle harmonic exceeds
+            // Nyquist. This analytic sine is the independent ideal output.
+            const double phase=offset+double(bin)*(n+1)/frames;
+            const double target=8/(pi*pi)*std::sin(tau*phase);
+            const double a=plain.tick(0)-target,b=filtered.tick(0)-target;
+            before+=a*a;after+=b*b;
+        }
+        require(after<=before+1e-12,"high-triangle sweep never increases independent Fourier error");
+        worstRatio=std::max(worstRatio,after/before);
+        if(double(bin)/frames>=0.2) {
+            const double rms=std::sqrt(after/frames);
+            maxFullBandError=std::max(maxFullBandError,rms);
+            require(rms<3e-7,"full high-triangle correction matches the independent fundamental");
+        }
+        ++cases;
+    }
+    for(double boundary:{1.0/6.0,0.2})for(double phase:{0.0,0.17,0.25,0.49,0.75}) {
+        FmOpPatch p;p.wave=16;FmOperator op;
+        op.configure(p,44100,0,true);op.noteOn(440);op.setBandlimited(true);
+        for(unsigned n=0;n<16;++n)(void)op.tick(0);
+        float values[2];
+        for(unsigned side=0;side<2;++side) {
+            const double step=boundary+(side?1:-1)*1e-8;
+            op.setBaseFreq(44100*step);op.phase_=phase-step;
+            values[side]=op.tick(0);
+        }
+        require(std::abs(values[0]-values[1])<1e-6,"triangle correction has continuous transition endpoints");
+    }
+    // The public operator interface permits phase offsets. Normalizing this
+    // tiny negative result can round to the periodic endpoint exactly one.
+    FmOpPatch p;p.wave=16;FmOperator endpoint;
+    endpoint.configure(p,44100,0,true);endpoint.noteOn(44100*0.25);endpoint.setBandlimited(true);
+    const float edge=endpoint.tick(-std::nextafter(0.25,1.0));
+    require(std::isfinite(edge) && std::abs(edge)<1e-10,"rounded periodic endpoint stays within the shared table");
+    std::cout<<"Triangle sweep PASS: "<<cases<<" phases/frequencies, worst error ratio="<<worstRatio
+             <<", full-band maximum RMS error="<<maxFullBandError<<'\n';
 }
 FmVoicePatch patch(unsigned algorithm,unsigned wave) {
     FmVoicePatch p;p.modernTimbre=true;p.algorithm=uint8_t(algorithm);p.fourOp=algorithm>=2;
@@ -67,7 +123,7 @@ void policy() {
     // Independent documented direct-output lists for all eight algorithms.
     constexpr unsigned carriers[8]={2,3,15,8,8,10,9,13};
     FmVoice voice;voice.setSampleRate(44100);
-    for(unsigned wave:{6u,24u})for(unsigned algorithm=0;algorithm<8;++algorithm) {
+    for(unsigned wave:{6u,16u,24u})for(unsigned algorithm=0;algorithm<8;++algorithm) {
         auto p=patch(algorithm,wave);
         // Only the final outputs sound; every upstream modulator is AR0.
         for(unsigned i=0;i<4;++i)if(carriers[algorithm]&(1u<<i))p.ops[i].ar=15;
@@ -105,7 +161,7 @@ void policy() {
 void unchangedModulation() {
     // A second voice with all quality flags explicitly disabled is an exact
     // oracle for paths that must retain the original nonlinear FM synthesis.
-    for(unsigned algorithm=0;algorithm<8;++algorithm)for(unsigned wave:{0u,6u,24u})
+    for(unsigned algorithm=0;algorithm<8;++algorithm)for(unsigned wave:{0u,6u,16u,24u})
     for(bool feedback:{false,true}) {
         auto p=patch(algorithm,wave);
         for(auto& op:p.ops){op.ar=15;op.tl=24;op.am=op.vib=true;op.dam=op.dvb=3;}
@@ -115,7 +171,7 @@ void unchangedModulation() {
         for(auto& op:oracle.ops_)op.setBandlimited(false);
         // Compare only cases with no eligible direct output. Additive outputs
         // deliberately change, and are covered by the independent Fourier test.
-        if(enabled(actual)!=0)continue;
+        if(enabled(actual)!=0 && wave!=16)continue;
         for(unsigned n=0;n<1024;++n) {
             if(n==257){actual.setPitch(880);oracle.setPitch(880);}
             if(n==513){actual.noteOff();oracle.noteOff();}
@@ -124,7 +180,7 @@ void unchangedModulation() {
     }
 }
 void boundaries() {
-    for(unsigned wave:{6u,24u}) {
+    for(unsigned wave:{6u,16u,24u}) {
         FmOpPatch p;p.wave=uint8_t(wave);p.vib=true;p.dvb=3;
         FmOperator op;op.configure(p,44100,0,true);op.noteOn(44100*0.49);op.setBandlimited(true);
         for(unsigned n=0;n<2048;++n) {
@@ -146,7 +202,7 @@ void boundaries() {
     }
 }
 void retrigger() {
-    for(double rate:{8000.0,44100.0})for(unsigned wave:{6u,24u}) {
+    for(double rate:{8000.0,44100.0})for(unsigned wave:{6u,16u,24u}) {
         FmVoice reused;reused.setSampleRate(rate);
         for(unsigned stage=0;stage<4;++stage) {
             auto p=patch(stage==0?2:stage==1?0:stage==2?7:1,wave);
@@ -166,6 +222,6 @@ void retrigger() {
 }
 }
 int main() {
-    stationary();policy();unchangedModulation();boundaries();retrigger();
+    stationary();triangleSweep();policy();unchangedModulation();boundaries();retrigger();
     std::cout<<"PASS: bandlimited carrier Fourier, scope, nonlinear isolation and boundary tests\n";
 }

@@ -2,7 +2,7 @@
 
 ## Unreleased: current DSP and comparison workflow
 
-The current batch uses render cache **r64**, invalidating older rendered audio.
+The current batch uses render cache **r65**, invalidating older rendered audio.
 It combines bounded high-rate PCM reconstruction, corrected Yamaha ADPCM
 rounding, continuous FM phase during Nyquist suppression, complete HPS/VMA bank
 identity, completed-carrier release classification and provably silent-tail
@@ -10,6 +10,18 @@ completion. The changes below
 are software improvements; they do not establish handset-calibrated timbres or
 perceptual equivalence. Detailed probes and limits are in
 [DSP review evidence](dsp-review.md).
+
+### High unmodulated triangle carriers (r65)
+
+Modern final WS16 carriers reuse the r60 eligibility graph. Above Fs/6 all
+higher triangle harmonics exceed Nyquist; a smooth transition reaches the
+analytic8/pi² fundamental at Fs/5. Lower tones preserve float rounding and
+nonlinear/legacy paths retain their original output. A shared sine table avoids
+per-sample trigonometry, with periodic endpoint rounding handled explicitly.
+All222 previous WAVs remain exact. Of37 original scores,18 change intentionally
+while19 controls and all frame counts remain exact. See [the triangle study](triangle-carrier-reconstruction.md)
+for Fourier tests, rejected full-range BLAMP, spectral measurements and the
+limits of noisy host performance data.
 
 ### Zero-loop PCM reconstruction (r64)
 
