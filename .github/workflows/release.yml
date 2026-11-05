@@ -6,11 +6,10 @@ on:
       commit:
         description: Full commit SHA with successful Android CI
         required: true
-        default: '42e74ee5e0f3dd80ee4c8be58b387071c61194a8'
       tag:
         description: Stable release tag matching versionName
         required: true
-        default: 'v1.6.5'
+        default: 'v1.6.6'
       publish:
         description: Publish after verification (off keeps a signed draft)
         type: boolean

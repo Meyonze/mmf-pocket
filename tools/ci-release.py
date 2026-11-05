@@ -43,8 +43,25 @@ def api(path, fields=None, missing_ok=False):
     result = subprocess.run(args, capture_output=True, text=True)
     if missing_ok and result.returncode and 'HTTP 404' in result.stderr:
         return None
-    require(result.returncode == 0, 'GitHub API request failed')
+    status = re.search(r'HTTP ([0-9]{3})', result.stderr)
+    require(result.returncode == 0,
+            f"GitHub API request failed: {path.split('?')[0]}"
+            + (f' (HTTP {status[1]})' if status else ''))
     return json.loads(result.stdout)
+
+
+def find_release(tag):
+    # The by-tag endpoint returns published releases only. List releases to
+    # include drafts, and reject duplicate tags before any changes or uploads.
+    matches = []
+    page = 1
+    while True:
+        releases = api(f'releases?per_page=100&page={page}')
+        matches.extend(r for r in releases if r['tag_name'] == tag)
+        require(len(matches) <= 1, 'Multiple releases use this tag; refusing ambiguous changes')
+        if len(releases) < 100:
+            return matches[0] if matches else None
+        page += 1
 
 
 def validate_ref(commit, tag):
@@ -183,7 +200,7 @@ def publish(state, output, make_public):
     checksums = output / 'SHA256SUMS.txt'
     verify_apk(apk, state)
     require(checksums.read_text() == f'{digest(apk)}  {apk.name}\n', 'Checksum does not match APK')
-    release = api(f"releases/tags/{state['tag']}", missing_ok=True)
+    release = find_release(state['tag'])
     if release is not None:
         require(release['draft'], 'Release is already public; refusing modification')
         require(release['target_commitish'] == state['commit'], 'Draft points to another commit')
@@ -196,15 +213,16 @@ def publish(state, output, make_public):
             'Android CI is not successful for the release commit')
     ensure_tag(state)
     notes = (Path(state['source']) / 'docs' / f"release-notes-{state['version']}.md").read_text()
-    notes += f"\nAPK SHA-256: `{digest(apk)}`\n\nSource commit: `{state['commit']}`\n"
-    if CERTIFICATE not in notes.upper():
-        notes += f'\nSigning certificate SHA-256: `{CERTIFICATE}`\n'
     notes_path = output / 'release-notes.md'
     notes_path.write_text(notes)
     if release is None:
         run(['gh', 'release', 'create', state['tag'], '--repo', REPOSITORY, '--draft',
              '--verify-tag', '--target', state['commit'], '--title', f"MMF Pocket {state['version']}",
              '--notes-file', notes_path])
+        release = find_release(state['tag'])
+        require(release is not None and release['draft']
+                and release['target_commitish'] == state['commit']
+                and not release['assets'], 'New draft does not match this release')
     existing = {a['name'] for a in release['assets']} if release else set()
     for asset in (apk, checksums):
         if asset.name in existing:
@@ -221,7 +239,7 @@ def publish(state, output, make_public):
             run(['gh', 'release', 'download', state['tag'], '--repo', REPOSITORY,
                  '--pattern', asset.name, '--dir', temporary])
             require(digest(Path(temporary) / asset.name) == digest(asset), 'Uploaded asset hash mismatch')
-    current = api(f"releases/tags/{state['tag']}")
+    current = api(f"releases/{release['id']}")
     require(current['draft'] and current['target_commitish'] == state['commit']
             and {a['name'] for a in current['assets']} == {apk.name, checksums.name},
             'Draft changed during verification; refusing to publish')
@@ -230,7 +248,7 @@ def publish(state, output, make_public):
     if make_public:
         args += ['--draft=false', '--prerelease=false', '--latest']
     run(args)
-    final = api(f"releases/tags/{state['tag']}")
+    final = api(f"releases/{release['id']}")
     require(final['draft'] == (not make_public), 'Unexpected release visibility')
     require({a['name'] for a in final['assets']} == {apk.name, checksums.name}, 'Unexpected release assets')
     with tempfile.TemporaryDirectory(prefix='mmf-verify-') as temporary:

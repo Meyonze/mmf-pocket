@@ -77,6 +77,23 @@ class ReleaseTests(unittest.TestCase):
         with patch.dict(os.environ, MMF_RELEASE_KEYSTORE_BASE64='not printed', MMF_RELEASE_STORE_PASSWORD='not printed'):
             R.check_secrets()
 
+    def test_find_release_includes_drafts_and_paginates(self):
+        first = [{'id': n, 'tag_name': 'v0.0.0'} for n in range(100)]
+        draft = {'id': 123, 'tag_name': 'v1.6.5', 'draft': True}
+        with patch.object(R, 'api', side_effect=[first, [draft]]) as api:
+            self.assertEqual(R.find_release('v1.6.5'), draft)
+        self.assertEqual(api.call_args_list[1].args[0], 'releases?per_page=100&page=2')
+        with patch.object(R, 'api', return_value=[]):
+            self.assertIsNone(R.find_release('v1.6.5'))
+
+    def test_find_release_rejects_duplicate_drafts_or_public_release(self):
+        for public in (False, True):
+            duplicates = [{'id': 1, 'tag_name': 'v1.6.5', 'draft': True},
+                          {'id': 2, 'tag_name': 'v1.6.5', 'draft': not public}]
+            with self.subTest(public=public), patch.object(R, 'api', return_value=duplicates), \
+                 self.assertRaises(R.ReleaseError):
+                R.find_release('v1.6.5')
+
     def signing_environment(self):
         return {'RUNNER_TEMP': str(self.root), 'MMF_RELEASE_KEYSTORE_BASE64': base64.b64encode(b'fixture key').decode(),
                 'MMF_RELEASE_STORE_PASSWORD': 'fixture password'}
@@ -152,7 +169,7 @@ class ReleaseTests(unittest.TestCase):
         out = self.release_files()
         for draft in [{'draft': False}, {'draft': True, 'target_commitish': 'b'*40},
                       {'draft': True, 'target_commitish': COMMIT, 'assets': [{'name': 'private.jks'}]}]:
-            with self.subTest(draft=draft), patch.object(R, 'verify_apk'), patch.object(R, 'api', return_value=draft), \
+            with self.subTest(draft=draft), patch.object(R, 'verify_apk'), patch.object(R, 'find_release', return_value=draft), \
                  patch.object(R, 'ensure_tag') as tag, patch.object(R, 'run') as commands, self.assertRaises(R.ReleaseError):
                 R.publish(self.state, out, True)
             tag.assert_not_called();commands.assert_not_called()
@@ -163,7 +180,7 @@ class ReleaseTests(unittest.TestCase):
             remote = {}; edited = []; downloaded = set()
             def api(path, **_):
                 if path.startswith('actions/'): return self.green
-                return {'draft': not edited, 'target_commitish': COMMIT,
+                return {'id': 123, 'draft': not edited, 'target_commitish': COMMIT,
                         'assets': [{'name': n} for n in remote], 'html_url': 'https://example.invalid/release'}
             def command(args, **_):
                 if args[:3] == ['gh','release','upload']:
@@ -174,8 +191,10 @@ class ReleaseTests(unittest.TestCase):
                 elif args[:3] == ['gh','release','edit']:
                     self.assertEqual(downloaded, {'MMF-Pocket-1.6.5.apk','SHA256SUMS.txt'})
                     self.assertIn('--draft=false', args);edited.append(True)
+                    self.assertEqual((out/'release-notes.md').read_text(), 'Release notes\n')
                 return ''
             with self.subTest(corrupt=corrupt), patch.object(R, 'verify_apk'), patch.object(R, 'ensure_tag'), \
+                 patch.object(R, 'find_release', side_effect=lambda _: api('releases/find')), \
                  patch.object(R, 'api', side_effect=api), patch.object(R, 'run', side_effect=command):
                 if corrupt:
                     with self.assertRaises(R.ReleaseError): R.publish(self.state, out, True)
@@ -198,7 +217,7 @@ class ReleaseTests(unittest.TestCase):
         def api(path, **_):
             if path.startswith('actions/'): return self.green
             if not created: return None
-            return {'draft': True, 'target_commitish': COMMIT,
+            return {'id': 123, 'draft': True, 'target_commitish': COMMIT,
                     'assets':[{'name':n} for n in remote], 'html_url':'https://example.invalid/draft'}
         def command(args, **_):
             if args[:3] == ['gh','release','create']:
@@ -212,6 +231,7 @@ class ReleaseTests(unittest.TestCase):
                 self.assertNotIn('--draft=false', args);self.assertNotIn('--latest', args);edits.append(True)
             return ''
         with patch.object(R,'verify_apk'), patch.object(R,'ensure_tag') as tag, \
+             patch.object(R,'find_release',side_effect=lambda _: api('releases/find')), \
              patch.object(R,'api',side_effect=api), patch.object(R,'run',side_effect=command):
             self.assertEqual(R.publish(self.state,out,False),'https://example.invalid/draft')
         tag.assert_called_once_with(self.state);self.assertEqual(len(edits),1)
@@ -226,6 +246,7 @@ class ReleaseTests(unittest.TestCase):
                 (Path(args[args.index('--dir')+1])/'MMF-Pocket-1.6.5.apk').write_bytes(b'other APK')
             return ''
         with patch.object(R,'verify_apk'), patch.object(R,'ensure_tag'), \
+             patch.object(R,'find_release',return_value=draft), \
              patch.object(R,'api',side_effect=api), patch.object(R,'run',side_effect=command), \
              self.assertRaises(R.ReleaseError):
             R.publish(self.state,out,True)

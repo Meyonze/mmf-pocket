@@ -1162,7 +1162,9 @@ public final class MainActivity extends Activity {
                         : metadata.extras.getString(MmfPlayer.EXTRA_ARRANGER, ""));
         // Distinct views guarantee a line break and independent font weights,
         // including files that put the entire "title by author" in ST.
-        nowPlayingLabel.setText(text.title);
+        // Some ST fields contain only "by author / site". Keep the filename
+        // as the heading rather than displaying those credits in bold.
+        nowPlayingLabel.setText(TextUtils.isEmpty(text.title) ? metadata.title : text.title);
         nowPlayingLabel.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         songCredits.setText(text.byline);
         songCredits.setTypeface(Typeface.DEFAULT, Typeface.NORMAL);

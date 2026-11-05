@@ -26,10 +26,10 @@ If the key entry password differs, add `MMF_RELEASE_KEY_PASSWORD`; otherwise the
 workflow reuses the store password. The alias defaults to `mmf-pocket`; if yours
 differs, set the repository Actions variable `MMF_RELEASE_KEY_ALIAS`.
 
-For the prepared1.6.5 release, run Signed release from `main` using its defaults:
+Run Signed release from `main` with the intended source commit and version:
 
-- commit: `42e74ee5e0f3dd80ee4c8be58b387071c61194a8`
-- tag: `v1.6.5`
+- commit: the full commit SHA with successful Android CI.
+- tag: `v1.6.6` (must match that commit's versionName).
 - publish: enabled (disable to keep the signed release as a draft).
 
 The workflow checks main ancestry, version/tag agreement and successful Android
@@ -41,6 +41,9 @@ build type, alignment, v2 signing and the existing public certificate fingerprin
 Only the signed universal APK and SHA256SUMS.txt are attached. Both uploaded draft
 assets are downloaded and checked before publication. Existing public releases,
 different tag targets and conflicting draft assets are not replaced.
+Drafts are found through the release list and checked by ID; duplicate releases
+using the same tag stop publication. Release descriptions use the concise version
+notes; checksums remain in the attached SHA256SUMS.txt.
 
 After the one-time setup, the release can be dispatched from GitHub or by the
 assistant. No Windows signing or key transfer is needed for subsequent releases.

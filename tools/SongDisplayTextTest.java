@@ -61,6 +61,17 @@ public final class SongDisplayTextTest {
         expect("By the Way", "", "By the Way");
         expect("Title by", "", "Title by");
         expect("by Artist", "", "by Artist");
+        // Credits-only ST fields must leave room for the filename fallback.
+        expect("", "by \uFF8E\uFF9E\uFF9D\uFF7C\uFF9E\uFF6C\uFF6F\uFF78 /game-melody.com", "by \uFF8E\uFF9E\uFF9D\uFF7C\uFF9E\uFF6C\uFF6F\uFF78 /game-melody.com");
+        expect("", "by 作者 / game-melody.com", "　by 作者 / game-melody.com　");
+        expect("", "by 作者", "BY　作者");
+        expect("", "by Alice", "by Alice", "Alice");
+        expect("", "by Alice / Bob", "by Alice / Bob");
+        expect("", "by 作者 / サイト", "by 作者 / サイト", "作者", "サイト");
+        for (boolean optional : new boolean[]{false,true}) {
+            MmfMetadata metadata=MmfMetadata.read(score(optional,"by 作者 /game-melody.com",""));
+            expect("", "by 作者 /game-melody.com", metadata.title(),metadata.artist());
+        }
         expect("Title by", "", "Title by　".stripTrailing());
         expect("Title", "by Artist / Writer", "Title", "Artist", "Artist", "Writer", null, " ");
         expect("Track.mmf", "", "Track.mmf");

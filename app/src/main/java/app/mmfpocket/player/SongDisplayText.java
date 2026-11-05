@@ -23,14 +23,14 @@ final class SongDisplayText {
         // A standalone "by" is a credit marker only with supporting evidence.
         // In particular, do not turn an ordinary title like "Stand by Me"
         // into a title/author pair merely because it contains the word "by".
-        for (int at = title.length() - 3; at >= 1; at--) {
+        for (int at = title.length() - 3; at >= 0; at--) {
             if ((title.charAt(at) != 'b' && title.charAt(at) != 'B')
                     || (title.charAt(at + 1) != 'y' && title.charAt(at + 1) != 'Y')
-                    || !space(title.charAt(at - 1))
+                    || (at > 0 && !space(title.charAt(at - 1)))
                     || !space(title.charAt(at + 2))) continue;
             String song = trimSpace(title.substring(0, at));
             String embedded = trimSpace(title.substring(at + 2));
-            if (song.isEmpty() || embedded.isEmpty() || !creditLike(embedded, names)) continue;
+            if (embedded.isEmpty() || !creditLike(embedded, names)) continue;
             List<String> combined = new ArrayList<>();
             // Split spaced separators, preserving URL path/scheme slashes.
             for (String part : embedded.split("\\s+/\\s+")) add(combined, part);
