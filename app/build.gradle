@@ -78,7 +78,7 @@ android {
 
 dependencies {
     // 1.10+ requires compileSdk 36; this project intentionally remains on SDK 35.
-    def media3Version = "1.9.3"
+    def media3Version = "1.11.1"
     //noinspection GradleDependency
     implementation "androidx.media3:media3-common:$media3Version"
     //noinspection GradleDependency
