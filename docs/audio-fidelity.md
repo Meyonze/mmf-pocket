@@ -2,7 +2,7 @@
 
 ## Unreleased: current DSP and comparison workflow
 
-The current batch uses render cache **r65**, invalidating older rendered audio.
+The current batch uses render cache **r66**, invalidating older rendered audio.
 It combines bounded high-rate PCM reconstruction, corrected Yamaha ADPCM
 rounding, continuous FM phase during Nyquist suppression, complete HPS/VMA bank
 identity, completed-carrier release classification and provably silent-tail
@@ -10,6 +10,17 @@ completion. The changes below
 are software improvements; they do not establish handset-calibrated timbres or
 perceptual equivalence. Detailed probes and limits are in
 [DSP review evidence](dsp-review.md).
+
+### Near-native PCM fractional delay (r66)
+
+Modern PCM keeps32-tap reconstruction when a bend returns to unity with a
+fractional cursor. A smooth16-to32-tap transition over0.8..1 joins the downsampling
+kernel without the previous linear fades. Native integer samples, legacy paths,
+allocation-level samples, source clocks, gates and EOF remain unchanged.
+All259 earlier WAVs remain exact;24 of44 new scores change as intended, with20
+controls and every frame count exact. See [native-rate reconstruction](native-rate-pcm-reconstruction.md)
+for amplitude measurements, additional loop-history tests, workload cost and
+the remaining near-Nyquist stopband tradeoff.
 
 ### High unmodulated triangle carriers (r65)
 

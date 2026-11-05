@@ -90,17 +90,14 @@ void testPcmInterpolation() {
             edgePhase, false, 0, 0, true, 0.95);
     const float modernNearUnity = interpolatePcm(edge.data(), edge.size(), edgeIndex,
             edgePhase, false, 0, 0, true, 0.999);
-    const float expectedNinety = linear + 0.5f * (modernAtBoundary - linear);
-    const float expectedNinetyFive = linear + 0.15625f * (modernAtBoundary - linear);
-    check(std::fabs(modernAtNinety - expectedNinety) < tolerance,
-            "PCM crossfade is halfway at advance 0.9");
-    check(std::fabs(modernAtNinetyFive - expectedNinetyFive) < tolerance,
-            "PCM crossfade uses a smooth curve near unity");
-    check(std::fabs(modernNearUnity - linear) < 1.0e-3f,
-            "PCM crossfade approaches exact linear interpolation at unity");
-    check(interpolatePcm(edge.data(), edge.size(), edgeIndex, edgePhase,
-                    false, 0, 0, true, 1.0) == linear,
-            "PCM crossfade reaches exact linear interpolation at unity");
+    const float modernAtUnity = interpolatePcm(edge.data(), edge.size(), edgeIndex,
+            edgePhase, false, 0, 0, true, 1.0);
+    for(float value:{modernAtNinety,modernAtNinetyFive,modernNearUnity})
+        check(value>=std::min(modernAtBoundary,modernAtUnity)-tolerance
+                && value<=std::max(modernAtBoundary,modernAtUnity)+tolerance,
+                "PCM near-unity kernel transition stays within its endpoint outputs");
+    check(std::fabs(modernNearUnity-modernAtUnity)<1.0e-3f,
+            "PCM interpolation joins native-rate reconstruction continuously");
 
     // A periodic 0.2-cycle/source sine stresses high-frequency upsampling.
     // The band-limited reconstruction should improve RMS error over linear.

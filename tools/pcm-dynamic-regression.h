@@ -42,10 +42,11 @@ inline void run() {
             voice.loop = true;
             voice.active = voice.streamAudio = voice.qualityInterpolation = true;
             double position = 0;
-            for (int frame = 0; frame < 3000; ++frame) {
+            for (int frame = 0; frame < 4000; ++frame) {
                 // Widen only after many slow wraps, narrow again, then cross
                 // the 4..5 and 8..10 filter-bank transitions repeatedly.
-                voice.rate = frame < 600 ? 0.3 : frame < 1000 ? 16.01
+                voice.rate = frame >= 3000 ? 1.0 + 0.15 * std::sin(frame * 0.173)
+                    : frame < 600 ? 0.3 : frame < 1000 ? 16.01
                     : frame < 1400 ? 0.5 : frame < 2200
                     ? 4.5 + 0.65 * std::sin(frame * 0.173)
                     : 9.0 + 1.3 * std::sin(frame * 0.173);
@@ -72,7 +73,7 @@ inline void run() {
             }
         }
     }
-    check(checks == 54000 && lateWidenings == 12, "all dynamic loop-history cases execute");
+    check(checks == 72000 && lateWidenings == 12, "all dynamic loop-history cases execute");
     std::cout << "Dynamic PCM loop tests PASS: " << checks << " samples, " << lateWidenings
               << " widenings after history cap, max error=" << maxError << '\n';
 }

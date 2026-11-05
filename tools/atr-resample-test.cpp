@@ -41,10 +41,8 @@ void start(MaPlayer& p) {
 // production phase/cutoff tables or index helpers. Exact rows in numeric tests.
 double reference(const std::vector<int16_t>& pcm,double pos,double rate) {
     const size_t i=size_t(pos);const double frac=double(float(pos-i));
-    const double linear=(pcm[i]+(pcm[std::min(i+1,pcm.size()-1)]-pcm[i])*frac)/32768.0;
-    if(rate==1)return linear;
-    const int taps=rate>1?32:16,half=taps/2,offset=half-1;
-    const double bandwidth=rate>1?1/rate:1;double sum=0,result=0;
+    auto fir=[&](int taps,double bandwidth) {
+    const int half=taps/2,offset=half-1;double sum=0,result=0;
     for(int tap=0;tap<taps;++tap) {
         const double d=tap-offset-frac;
         const double sinc=std::fabs(d)<1e-12?1:std::sin(pi*bandwidth*d)/(pi*bandwidth*d);
@@ -52,8 +50,13 @@ double reference(const std::vector<int16_t>& pcm,double pos,double rate) {
         const int64_t source=std::clamp(int64_t(i)+tap-offset,int64_t(0),int64_t(pcm.size()-1));
         result+=pcm[size_t(source)]/32768.0*weight;sum+=weight;
     }
-    const double blend=rate>1?std::min(1.0,(rate-1)/0.1):rate<=0.8?1:(1-rate)/0.2;
-    return linear+blend*blend*(3-2*blend)*(result/sum-linear);
+    return result/sum;
+    };
+    if(rate>=1)return fir(32,1/rate);
+    const double low=fir(16,1);
+    if(rate<=0.8)return low;
+    const double t=(rate-0.8)/0.2;
+    return low+t*t*(3-2*t)*(fir(32,1)-low);
 }
 std::vector<float> drain(MaPlayer& p,int block=257) {
     std::vector<float> out,b(size_t(block)*2);int n;
@@ -62,7 +65,7 @@ std::vector<float> drain(MaPlayer& p,int block=257) {
 }
 void numerical() {
     for(size_t length:{size_t(1),size_t(2),size_t(3),size_t(7),size_t(16),size_t(32),size_t(79)})
-    for(auto pair:{std::pair{4000,32000},std::pair{4000,16000},std::pair{4000,8000},std::pair{8000,8000},std::pair{44100,22050},std::pair{44100,11025}})
+    for(auto pair:{std::pair{4000,32000},std::pair{4000,16000},std::pair{4000,8000},std::pair{7000,8000},std::pair{8000,8000},std::pair{44100,22050},std::pair{44100,11025}})
     for(bool adpcm:{false,true}) {
         MaPlayer p;require(p.init(fixture(pair.first,tone(length),{0,1,100},adpcm),pair.second),"ATR numeric fixture initializes");start(p);
         auto v=p.pcmPool_[0];require(v.active&&v.qualityInterpolation&&!v.streamAudio&&!v.loop,"ATR actual trigger selects non-loop quality");

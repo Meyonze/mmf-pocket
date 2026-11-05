@@ -233,11 +233,9 @@ inline float downsamplePcm(const int16_t* pcm, size_t end, size_t index,
     }
     const float filtered = filterPcm(downsamplingKernels(), pcm, end, index,
         fraction, loop, loopStart, loopTravel, advance);
-    // Preserve the established unity boundary and smoothly engage AA over
-    //1..1.1. Near unity this compromise attenuates alias less than a full FIR.
-    const double t = std::min(1.0, (advance - 1.0) / 0.1);
-    const float mix = float(t * t * (3.0 - 2.0 * t));
-    return linear + mix * (filtered - linear);
+    // Preserve fractional-delay reconstruction instead of fading to linear.
+    // Keep the old float arithmetic above1.1, where the fade was already full.
+    return linear + (filtered - linear);
 }
 
 inline float interpolatePcm(const int16_t* pcm, size_t end, size_t index,
@@ -249,11 +247,16 @@ inline float interpolatePcm(const int16_t* pcm, size_t end, size_t index,
     const float s1 = pcm[next] * (1.0f / 32768.0f);
     const float linear = s0 + (s1 - s0) * fraction;
     if (linearOutput) *linearOutput = linear;
-    // Profiles not opting in remain exactly linear; unity is exact too.
+    // Legacy stays linear. A bend can leave a fractional native-rate cursor.
     if (!modern || !std::isfinite(advance)) return linear;
     if (advance > 1.0) return downsamplePcm(pcm, end, index, fraction,
         loop, loopStart, loopTravel, advance, linear);
-    if (advance == 1.0) return linear;
+    if (advance == 1.0) {
+        if (fraction == 0.0f) return linear;
+        const float filtered = filterPcm(downsamplingKernels(), pcm, end, index,
+            fraction, loop, loopStart, loopTravel, 1.0);
+        return linear + (filtered - linear);
+    }
     const float phase = fraction * kPhases;
     const int row = std::min(kPhases - 1, int(phase));
     const float blend = phase - row;
@@ -280,9 +283,13 @@ inline float interpolatePcm(const int16_t* pcm, size_t end, size_t index,
             cursor.advance();
         }
     }
-    const double t = advance <= 0.8 ? 1.0 : (1.0 - advance) / 0.2;
-    const double mix = t * t * (3.0 - 2.0 * t);
-    return linear + float(mix) * (reconstructed - linear);
+    if (advance <= 0.8) return linear + (reconstructed - linear);
+    // Widen the full-band interpolation kernel from16 to32 taps over0.8..1.
+    // At unity it joins the32-tap downsampling kernel continuously.
+    const float high = filterPcm(downsamplingKernels(), pcm, end, index,
+        fraction, loop, loopStart, loopTravel, 1.0);
+    const double t = (advance - 0.8) / 0.2;
+    return reconstructed + float(t * t * (3.0 - 2.0 * t)) * (high - reconstructed);
 }
 } // namespace pcm_detail
 } // namespace fxchain::smaf

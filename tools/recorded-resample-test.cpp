@@ -32,9 +32,9 @@ constexpr double pi=3.14159265358979323846;
 double reference(const std::vector<int16_t>& pcm,double pos,double rate,bool quality) {
     const size_t i=size_t(pos);const double frac=double(float(pos-i));
     double linear=(pcm[i]+(pcm[std::min(i+1,pcm.size()-1)]-pcm[i])*frac)/32768.0;
-    if(!quality || rate==1)return linear;
-    const int taps=rate>1?32:16,half=taps/2,offset=half-1;
-    const double bandwidth=rate>1?1/rate:1;
+    if(!quality)return linear;
+    auto fir=[&](int taps,double bandwidth) {
+    const int half=taps/2,offset=half-1;
     double sum=0,result=0;
     for(int t=0;t<taps;++t) {
         const double d=t-offset-frac;
@@ -44,8 +44,13 @@ double reference(const std::vector<int16_t>& pcm,double pos,double rate,bool qua
         const int64_t source=std::clamp(int64_t(i)+t-offset,int64_t(0),int64_t(pcm.size()-1));
         result+=pcm[size_t(source)]/32768.0*weight;sum+=weight;
     }
-    const double x=rate>1?std::min(1.0,(rate-1)/0.1):rate<=0.8?1:(1-rate)/0.2;
-    return linear+x*x*(3-2*x)*(result/sum-linear);
+    return result/sum;
+    };
+    if(rate>=1)return fir(32,1/rate);
+    const double low=fir(16,1);
+    if(rate<=0.8)return low;
+    const double t=(rate-0.8)/0.2;
+    return low+t*t*(3-2*t)*(fir(32,1)-low);
 }
 MaPlayer::PcmVoice voice(const std::vector<int16_t>& pcm,double rate,bool quality=true) {
     MaPlayer::PcmVoice v;v.pcm=pcm.data();v.len=pcm.size();v.rate=rate;
@@ -60,7 +65,7 @@ void numerical() {
     for(size_t length:{size_t(1),size_t(2),size_t(3),size_t(7),size_t(16),size_t(32),size_t(79)}) {
         std::vector<int16_t> pcm(length);
         for(size_t i=0;i<length;++i)pcm[i]=int16_t(int((i*7919)%24001)-12000);
-        for(double rate:{0.125,0.25,0.5,0.75,1.0,2.0,4.0})for(bool quality:{false,true}) {
+        for(double rate:{0.125,0.25,0.5,0.75,0.875,1.0,2.0,4.0})for(bool quality:{false,true}) {
             auto v=voice(pcm,rate,quality);size_t n=0;
             while(v.pos<double(length)) {
                 const double pos=v.pos,expected=reference(pcm,pos,rate,quality);

@@ -111,11 +111,11 @@ void testPcmDownsampling() {
                 "PCM legacy profile remains exact linear at reduction rates");
     }
     for (double rate : {1.0}) {
-        check(interpolatePcm(probe.data(), probe.size(), index, fraction,
-                        false, 0, 0, true, rate) == linear,
-                "PCM modern unity preserves beta9 linear baseline");
+        check(interpolatePcm(probe.data(), probe.size(), index, 0.0f,
+                        false, 0, 0, true, rate) == a,
+                "PCM modern native-rate integer samples stay exact");
     }
-    for(double rate:{1.05,1.1,1.5,2.,4.,100.}){
+    for(double rate:{0.9,1.0,1.05,1.1,1.5,2.,4.,100.}){
         float referenceLinear=123;
         (void)interpolatePcm(probe.data(),probe.size(),index,fraction,false,0,0,true,rate,&referenceLinear);
         check(referenceLinear==linear,"PCM allocator sees exact old linear sample, not filtered output");
@@ -137,7 +137,7 @@ void testPcmDownsampling() {
         const float phaseS0 = probe[index] * (1.0f / 32768.0f);
         const float phaseS1 = probe[index + 1] * (1.0f / 32768.0f);
         const float phaseLinear = phaseS0 + (phaseS1 - phaseS0) * phase;
-        for (double rate : {0.0, 0.5, 0.8, 0.9, 1.0}) {
+        for (double rate : {0.0, 0.5, 0.8}) {
             const double t = rate <= 0.8 ? 1.0 : (1.0 - rate) / 0.2;
             const float mix = float(t * t * (3.0 - 2.0 * t));
             const float expected = phaseLinear + mix * (reconstructed - phaseLinear);

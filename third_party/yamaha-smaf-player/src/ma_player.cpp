@@ -1504,6 +1504,7 @@ void MaPlayer::startAudio_(int ch, int note, float velocity, uint64_t noteId, bo
     // grammar (not shared channel setup) excludes HandyPhone and ATR.
     slot->qualityInterpolation = modern;
     if (modern && slot->rate < 1.0) (void)pcm_detail::interpolationKernels();
+    if (modern && slot->rate > 0.8 && slot->rate < 1.0) (void)pcm_detail::downsamplingKernels();
     if (modern && slot->rate > 1.0) pcm_detail::prepareDownsamplingKernels();
     slot->vel = velocity; slot->pan = chans_[ch & 127].pan;
     channelPanGains(slot->pan, chans_[ch & 127].squaredControllers, slot->panLeft, slot->panRight);
@@ -1851,6 +1852,7 @@ void MaPlayer::fireEvent_(const Ev& e) {
             // handset DSP. Position/EOF, authored gates and slot policy stay
             // unchanged. Unity remains exact; no reconstruction tail is added.
             if (pv.rate < 1.0) (void)pcm_detail::interpolationKernels();
+            if (pv.rate > 0.8 && pv.rate < 1.0) (void)pcm_detail::downsamplingKernels();
             if (pv.rate > 1.0) pcm_detail::prepareDownsamplingKernels();
             pv.lfoPhase = pv.lfoInc = pv.vibDepth = pv.baseVibDepth = 0.0;
             pv.amDepth = 0.0f; // ATR must not inherit a stolen WT slot's LFO
