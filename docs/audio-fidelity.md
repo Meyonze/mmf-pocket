@@ -11,6 +11,17 @@ are software improvements; they do not establish handset-calibrated timbres or
 perceptual equivalence. Detailed probes and limits are in
 [DSP review evidence](dsp-review.md).
 
+### Fallback level and release profiling (no DSP change)
+
+`tools/profile-fallback-balance.py` measures280 original Mobile/MA7 scores with
+fixed controls, attack/body/release windows, independent-channel DC removal and
+zero padding after natural EOF. Renderer/input/WAV hashes and a completion marker
+keep partial runs distinguishable. All280 scheduled routes and note times were
+checked with the native inventory tool. At note60, the16 representative MA7 GM
+families span approximately7.94dB in body AC RMS; this is an observation of the
+software recipes, not a calibration target. No timbre, gain or cache changes.
+See [fallback balance profiling](fallback-balance-profile.md) for commands and limits.
+
 ### Immutable silent notes and polyphony (r68)
 
 MA-7 velocity1 and bank121/6 notes no longer allocate FM/PCM voices. Their

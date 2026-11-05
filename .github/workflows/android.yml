@@ -157,6 +157,9 @@ jobs:
       - name: Check aligned WAV comparison tool
         run: PYTHONDONTWRITEBYTECODE=1 python3 tools/compare-wav-test.py
 
+      - name: Check fallback balance measurement tool
+        run: PYTHONDONTWRITEBYTECODE=1 python3 tools/profile-fallback-balance-test.py
+
       - name: Check FM carrier spectral measurements
         run: |
           c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Ithird_party/yamaha-smaf-player/src tools/fm-spectrum-audit.cpp third_party/yamaha-smaf-player/src/ma_fm_core.cpp -o fm-spectrum-audit
@@ -216,6 +219,7 @@ jobs:
           c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Ithird_party/yamaha-smaf-player/src tools/tone-usage-audit.cpp third_party/yamaha-smaf-player/src/smaf_file.cpp third_party/yamaha-smaf-player/src/ma_fm_core.cpp third_party/yamaha-smaf-player/src/smaf_voice.cpp third_party/yamaha-smaf-player/src/ma_player.cpp -o tone-usage-audit
           ./tone-usage-audit --self-test
           PYTHONDONTWRITEBYTECODE=1 python3 tools/tone-usage-audit-cli-test.py --binary ./tone-usage-audit
+          PYTHONDONTWRITEBYTECODE=1 python3 tools/profile-fallback-balance-test.py --audit-binary ./tone-usage-audit FixturesTest.test_native_routes_and_note_times
 
       - name: Check score inventory input protection
         run: |
