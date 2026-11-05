@@ -207,7 +207,9 @@ void selfTest() {
         mute.events_[0].b=bankMute?100:1;
         if(bankMute){mute.chans_[0].bankMsb=121;mute.chans_[0].bankLsb=6;mute.voiceTable_[0].key.bankMSB=121;mute.voiceTable_[0].key.bankLSB=6;}
         mute.voiceTable_[0].al.present=true;Details detail;u=measure(mute,true,&detail);
-        require(u.immutableSilent==1&&u.fm==1&&u.boundDefs==0&&u.bound.al==0,"immutable MA7 silence still fires but cannot count as gap use");
+        require(u.immutableSilent==1&&u.fm==0&&u.wt==0&&u.noInstance==1&&u.boundDefs==0&&u.bound.al==0,
+            "immutable MA7 silence retains a logical note without allocating a voice or counting gap use");
+        require(mute.diagnostics().suppressedSilentNotes==1,"runtime counts suppressed immutable silence");
         require(detail.groups.begin()->first.reason=="immutable_silent","detail does not treat silent MA7 allocation as sounding FM");
     }
     MaPlayer zero;require(zero.init(f,44100),"zero volume initializes");zero.chans_[0].volume=0;

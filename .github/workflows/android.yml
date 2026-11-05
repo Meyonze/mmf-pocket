@@ -134,6 +134,11 @@ jobs:
           c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Ithird_party/yamaha-smaf-player/src tools/audio-regression.cpp third_party/yamaha-smaf-player/src/smaf_file.cpp third_party/yamaha-smaf-player/src/ma_fm_core.cpp third_party/yamaha-smaf-player/src/smaf_voice.cpp third_party/yamaha-smaf-player/src/ma_player.cpp -o audio-regression
           ./audio-regression
 
+      - name: Build and run silent-note voice pool tests
+        run: |
+          c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Ithird_party/yamaha-smaf-player/src tools/silent-note-pool-test.cpp third_party/yamaha-smaf-player/src/smaf_file.cpp third_party/yamaha-smaf-player/src/ma_fm_core.cpp third_party/yamaha-smaf-player/src/smaf_voice.cpp third_party/yamaha-smaf-player/src/ma_player.cpp -o silent-note-pool-test
+          ./silent-note-pool-test
+
       - name: Build and run VMA and HandyPhone bank isolation tests
         run: |
           c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Ithird_party/yamaha-smaf-player/src tools/vma-bank-regression-test.cpp third_party/yamaha-smaf-player/src/smaf_file.cpp third_party/yamaha-smaf-player/src/ma_fm_core.cpp third_party/yamaha-smaf-player/src/smaf_voice.cpp third_party/yamaha-smaf-player/src/ma_player.cpp -o vma-bank-regression-test

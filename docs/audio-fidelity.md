@@ -2,7 +2,7 @@
 
 ## Unreleased: current DSP and comparison workflow
 
-The current batch uses render cache **r67**, invalidating older rendered audio.
+The current batch uses render cache **r68**, invalidating older rendered audio.
 It combines bounded high-rate PCM reconstruction, corrected Yamaha ADPCM
 rounding, continuous FM phase during Nyquist suppression, complete HPS/VMA bank
 identity, completed-carrier release classification and provably silent-tail
@@ -10,6 +10,16 @@ completion. The changes below
 are software improvements; they do not establish handset-calibrated timbres or
 perceptual equivalence. Detailed probes and limits are in
 [DSP review evidence](dsp-review.md).
+
+### Immutable silent notes and polyphony (r68)
+
+MA-7 velocity1 and bank121/6 notes no longer allocate FM/PCM voices. Their
+immutable zero velocity previously allowed silent notes to steal held audible
+voices and advance the allocation cursor. Decoded notes, gates and score clocks
+remain intact; zero channel volume/expression still allocates a voice because
+later controller changes can restore its sound. The runtime diagnostic
+`suppressedSilentNotes` counts this skip independently of logical score notes.
+See [silent-note polyphony](silent-note-polyphony.md) for reproduction and limits.
 
 ### Near-native PCM stopband (r67)
 

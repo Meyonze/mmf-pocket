@@ -47,7 +47,9 @@ void silentBank() {
         auto neighbor=f;neighbor.tracks[0].sequenceData[7]=5;neighbor.tracks[0].sequenceData[11]=100;
         check(ma7DataRegression::audible(renderAll(neighbor)),"neighbor bank121/5 is not muted");
         MaPlayer p;check(p.init(f,8000),"silent bank initializes");auto first=drain(p,31);p.seekToStart();
-        check(first==drain(p,1024)&&p.diagnostics().fmNotes+p.diagnostics().pcmNotes==2,"silent bank keeps allocation/gate and seek policy");
+        check(first==drain(p,1024)&&p.diagnostics().fmNotes+p.diagnostics().pcmNotes==0&&
+              p.diagnostics().suppressedSilentNotes==2&&p.scoreEndSamples()==3200,
+              "silent bank retains gates and seek without allocating voices");
     }
     auto held=fixture(3);setVoice(held,protocolRegression::tone());
     held.tracks[0].sequenceData={0,0x10,60,100,30,5,0x30,0,121,0,0x30,32,6,30,0xff,0x2f,0};

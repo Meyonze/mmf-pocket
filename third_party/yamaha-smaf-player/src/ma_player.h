@@ -60,6 +60,7 @@ public:
         uint64_t audioNotes = 0, missingAudio = 0, stolenAudio = 0;
         uint64_t limitedFrames = 0; // output-quality diagnostic, not note fidelity
         bool tailLimitReached = false;
+        uint64_t suppressedSilentNotes = 0; // immutable MA7 silence, no voice allocated
     };
     const Diagnostics& diagnostics() const { return diagnostics_; }
     // Whole decoded score/setup coverage. Immutable until the next init();

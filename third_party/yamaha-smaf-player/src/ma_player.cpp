@@ -1900,6 +1900,13 @@ void MaPlayer::fireEvent_(const Ev& e) {
             // Keep immutable base0, just like Velocity1; later gain cannot revive.
             float noteVelocity = ma7 && (e.b == 1 || (c.bankMsb == 121 && c.bankLsb == 6))
                 ? 0.0f : vel01 * vel01;
+            // Immutable silence must not steal a sounding FM/PCM voice or
+            // advance its allocation cursor. Keep the decoded note/gate clocks;
+            // zero channel gain, unlike this base velocity, may change later.
+            if (noteVelocity == 0.0f) {
+                ++diagnostics_.suppressedSilentNotes;
+                break;
+            }
             // Mobile/MA7 Audio belongs to the note's MTR, even when another
             // MTR initialized the shared channel later. Untagged legacy or
             // internally constructed notes retain their channel fallback.

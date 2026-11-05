@@ -34,8 +34,9 @@ void velocity() {
         MaPlayer p;check(p.init(f,8000),"mute initializes");
         auto first=rerender(p,257);p.seekToStart();
         check(first==rerender(p,1),"mute seek and render block invariance");
-        check(p.diagnostics().fmNotes+p.diagnostics().pcmNotes==2,
-              "muted MA7 events retain existing voice allocation policy");
+        check(p.diagnostics().fmNotes+p.diagnostics().pcmNotes==0 &&
+              p.diagnostics().suppressedSilentNotes==2,
+              "immutable MA7 silence retains notes without allocating voices");
         check(p.scoreEndSamples()==3200,"muted notes retain30-tick gates and later40-tick authored MA7 EOS endpoint");
         seq={0,uint8_t(0x10|high),60,2,10,10,0xff,0x2f,0};
         check(audible(renderAll(score(3,seq,voice))),"MA7 velocity2 remains audible");
