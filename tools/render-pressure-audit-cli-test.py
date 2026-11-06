@@ -34,6 +34,11 @@ class CliTest(unittest.TestCase):
         result = json.loads(process.stdout)
         self.assertEqual(result['schema_version'], 1)
         self.assertEqual(sum(w['frames'] for w in result['windows']), result['frames'])
+        for window in result['windows']:
+            c = window['counters']
+            self.assertTrue(0 <= c['limited_12db_frames'] <= c['limited_6db_frames']
+                            <= c['limited_3db_frames'] <= c['limited_frames'] <= window['frames'])
+
         for key, value in result['totals'].items():
             self.assertEqual(sum(w['counters'][key] for w in result['windows']), value)
         self.assertNotIn('private-filename', process.stdout)

@@ -17,14 +17,16 @@
 namespace renderPressure {
 using namespace fxchain::smaf;
 constexpr uint32_t sampleRate=44100,windowFrames=4410;
-using Counters=std::array<uint64_t,13>;
-constexpr std::array<std::string_view,13> names={"fm_notes","pcm_notes","fallback_notes",
+using Counters=std::array<uint64_t,16>;
+constexpr std::array<std::string_view,16> names={"fm_notes","pcm_notes","fallback_notes",
     "stolen_fm","stolen_pcm","stolen_held_fm","stolen_held_pcm","suppressed_hps_duplicates",
-    "audio_notes","missing_audio","stolen_audio","limited_frames","suppressed_silent_notes"};
+    "audio_notes","missing_audio","stolen_audio","limited_frames","suppressed_silent_notes",
+    "limited_3db_frames","limited_6db_frames","limited_12db_frames"};
 Counters counters(const MaPlayer::Diagnostics& d) {
     return {d.fmNotes,d.pcmNotes,d.fallbackNotes,d.stolenFm,d.stolenPcm,
         d.stolenHeldFm,d.stolenHeldPcm,d.suppressedHpsDuplicates,d.audioNotes,
-        d.missingAudio,d.stolenAudio,d.limitedFrames,d.suppressedSilentNotes};
+        d.missingAudio,d.stolenAudio,d.limitedFrames,d.suppressedSilentNotes,
+        d.limited3DbFrames,d.limited6DbFrames,d.limited12DbFrames};
 }
 struct Window {
     uint64_t first=0,frames=0;

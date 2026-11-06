@@ -52,4 +52,32 @@ void reportOracle() {
             measured=Window{};}}
     require(at==reference.frames&&counters(direct.diagnostics())==reference.total,"audit retains actual renderer endpoint and diagnostics");
 }
-int main(){metricOracle();reportOracle();std::cout<<"Render-pressure audit PASS: metric oracles, dense limiter/fallback/steals, time windows, caps and block invariance\n";}
+void limiterSeverityOracle() {
+    struct Case {int voices,sample,category;};
+    for(const auto c:std::array<Case,5>{{{4,8192,0},{20,8192,1},{24,8192,2},{32,12288,3},{32,32767,4}}}) {
+        SmafFile file;TrackChunk track;track.formatType=3;track.durationTimeBase=track.gateTimeBase=0x10;
+        const std::vector<uint8_t> voice={0x43,0x79,7,0x7f,1,0,0,0,0,1,
+            0x1f,0x40,0,0,0,0xf0,0xf0,0,0,0,0,0,0,0,80,1};
+        track.setupData={0xf0,uint8_t(voice.size()+1)};track.setupData.insert(track.setupData.end(),voice.begin(),voice.end());track.setupData.push_back(0xf7);
+        WaveData wave;wave.number=1;wave.adpcm=false;wave.bitsPerSample=16;wave.samplingRate=8000;
+        for(int i=0;i<80;++i){wave.data.push_back(uint8_t(c.sample>>8));wave.data.push_back(uint8_t(c.sample));}track.waves.push_back(wave);
+        track.sequenceData={0,0x30,7,127,0,0x30,11,127};
+        for(int i=0;i<c.voices;++i)track.sequenceData.insert(track.sequenceData.end(),{0,0x10,60,127,100});
+        track.sequenceData.insert(track.sequenceData.end(),{120,0xff,0x2f,0});file.tracks.push_back(track);
+        // Independent steady-state DC gain: N * sample/32768 * mix gain *
+        // the MA7 cosine/sine pan law. Warmup lets both output poles settle.
+        const double prePeak=c.voices*(double(c.sample)/32768)*.32*std::sin(1.5707963267948966*64/127.);
+        const double gain=std::min(1.,.92/prePeak);
+        require((gain<1)==(c.category>=1)&&(gain<=std::pow(10.,-3./20))==(c.category>=2)
+            &&(gain<=std::pow(10.,-6./20))==(c.category>=3)&&(gain<=std::pow(10.,-12./20))==(c.category>=4),"analytical steady gain spans distinct severity bands");
+        MaPlayer player;require(player.init(file,8000),"limiter severity fixture initializes");std::array<float,2048> buffer{};
+        require(player.render(buffer.data(),1024)==1024,"limiter DC fixture warms up");const auto before=player.diagnostics();
+        require(player.render(buffer.data(),256)==256,"limiter DC measurement window renders");const auto after=player.diagnostics();
+        require(after.limitedFrames-before.limitedFrames==uint64_t(c.category>=1?256:0),"steady limiter activation matches analytical gain");
+        require(after.limited3DbFrames-before.limited3DbFrames==uint64_t(c.category>=2?256:0),"3dB threshold matches independent constant-source oracle");
+        require(after.limited6DbFrames-before.limited6DbFrames==uint64_t(c.category>=3?256:0),"6dB threshold matches independent constant-source oracle");
+        require(after.limited12DbFrames-before.limited12DbFrames==uint64_t(c.category>=4?256:0),"12dB threshold matches independent constant-source oracle");
+        player.seekToStart();const auto reset=player.diagnostics();require(reset.limitedFrames==0&&reset.limited3DbFrames==0&&reset.limited6DbFrames==0&&reset.limited12DbFrames==0,"seek resets every severity count");
+    }
+}
+int main(){limiterSeverityOracle();metricOracle();reportOracle();std::cout<<"Render-pressure audit PASS: metric oracles, dense limiter/fallback/steals, time windows, caps and block invariance\n";}

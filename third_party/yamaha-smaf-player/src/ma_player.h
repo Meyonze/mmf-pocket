@@ -61,6 +61,8 @@ public:
         uint64_t limitedFrames = 0; // output-quality diagnostic, not note fidelity
         bool tailLimitReached = false;
         uint64_t suppressedSilentNotes = 0; // immutable MA7 silence, no voice allocated
+        // Nested frame counts: gain reduction at least 3/6/12dB, not clipping.
+        uint64_t limited3DbFrames = 0, limited6DbFrames = 0, limited12DbFrames = 0;
     };
     const Diagnostics& diagnostics() const { return diagnostics_; }
     // Whole decoded score/setup coverage. Immutable until the next init();

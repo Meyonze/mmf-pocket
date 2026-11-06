@@ -2138,6 +2138,10 @@ int MaPlayer::render(float* out, int frames) {
         if (limEnv_ > 0.92f) {
             ++diagnostics_.limitedFrames;
             float g = 0.92f / limEnv_; l *= g; r *= g;
+            // Observe the applied gain without changing the rider or signal.
+            if (g <= 0.7079457843841379) ++diagnostics_.limited3DbFrames;
+            if (g <= 0.5011872336272722) ++diagnostics_.limited6DbFrames;
+            if (g <= 0.2511886431509580) ++diagnostics_.limited12DbFrames;
         }
         // Do not introduce a discontinuity when a pathological envelope or
         // the ten-minute file limit reaches the hard safety boundary.
