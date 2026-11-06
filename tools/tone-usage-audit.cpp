@@ -35,6 +35,8 @@ struct Usage {
 struct Route {
     int channel=-1,source=-1,bankMsb=-1,bankLsb=-1,program=-1,note=-1;
     int definition=-1,wave=-1,modern=0;
+    int waveSource=-1,legacyMwaTracks=0;
+    std::string waveBinding="-";
     std::string reason,substitute="-";
     uint64_t al=0,fixed=0,dt=0,sram=0;
     auto operator<=>(const Route&) const = default;
@@ -68,6 +70,12 @@ Usage measure(MaPlayer& p,bool initialized,Details* details=nullptr) {
     Usage u;u.initialized=initialized;u.complete=p.scoreAudit().scanComplete;
     u.definitions=p.voiceTable_.size();if(!initialized)return u;
     std::set<size_t> requests,bound;
+    // Source banks stay immutable during scheduled replay. Count once rather
+    // than scanning every MTR again for each legacy WT note.
+    std::map<int,int> legacyCandidates;
+    if(details)for(const auto& entry:p.scoreWaveBanks_)
+        for(size_t id=0;id<entry.second.size();++id)
+            if(!entry.second[id].pcm.empty())++legacyCandidates[int(id)];
     const uint64_t ceiling=std::min(p.totalSamples(),uint64_t(p.rate_)*600);
     for(size_t index=0;index<p.events_.size();++index) {
         const auto& e=p.events_[index];
@@ -120,6 +128,20 @@ Usage measure(MaPlayer& p,bool initialized,Details* details=nullptr) {
             else if(pcm>audio)r.reason="bound_ram";
             else if(selected&&selected->isPcm&&selected->pcm.endPt==0)r.reason="ep_zero";
             else r.reason="no_instance";
+            if(e.type==MaPlayer::Ev::WaveOn && pcm) {
+                r.waveBinding="atr_awa";r.waveSource=e.b;
+            } else if(recording && audio) {
+                r.waveBinding="recorded_mwa";r.waveSource=source;
+            } else if(selected&&selected->valid&&selected->isPcm&&e.b>0&&!silent) {
+                if(selected->pcm.rom) r.waveBinding="rom_address";
+                else {
+                    const auto binding=p.instrumentWave_(selected->pcm);
+                    r.waveBinding=!binding.sample?"missing_ram":binding.legacyMwa?"legacy_mwa":"instrument_ram";
+                    r.waveSource=binding.sourceTrack;
+                    const auto candidates=legacyCandidates.find(r.wave);
+                    if(binding.legacyMwa&&candidates!=legacyCandidates.end())r.legacyMwaTracks=candidates->second;
+                }
+            }
             details->add(r,e.sample);
         }
         u.fm+=fm;u.audio+=audio;u.fallback+=fb;u.missingAudio+=after.missingAudio-before.missingAudio;
@@ -246,6 +268,23 @@ void selfTest() {
         require(r.reason==(present?"bound_atr":"missing_atr_wave")&&r.source==3&&r.wave==1&&r.note==-1,
             "ATR reports its source/one-based wave, independently of score channel banks");
     }
+    for(bool second:{false,true})for(bool reverse:{false,true})for(bool ram:{false,true}) {
+        auto file=fixture();WaveData wave;wave.number=1;wave.adpcm=false;wave.bitsPerSample=8;
+        wave.samplingRate=8000;wave.data.assign(80,150);file.tracks[0].waves.push_back(wave);
+        if(second) {auto other=file.tracks[0];other.trackNumber=1;other.setupData.clear();
+            other.sequenceData={0,0xff,0x2f,0};other.waves[0].data.assign(80,170);file.tracks.push_back(other);
+            if(reverse)std::reverse(file.tracks.begin(),file.tracks.end());}
+        MaPlayer player;require(player.init(file,8000),"wave provenance initializes");
+        auto& voice=player.voiceTable_[0];voice.isPcm=true;voice.pcm.waveId=1;
+        voice.pcm.voiceWaveOnly=false;voice.pcm.rom=false;voice.pcm.endPt=40;voice.pcm.env.ar=15;
+        if(ram)player.voiceWaveBank_[1].pcm.assign(80,1234);
+        Details details;const auto usage=measure(player,true,&details);const auto& route=details.groups.begin()->first;
+        require(usage.wt==1&&usage.fallback==0,"wave provenance actually binds a WT voice");
+        require(route.source==0,"originating note track is independent of selected legacy waveform");
+        require(route.waveBinding==(ram?"instrument_ram":"legacy_mwa"),"provenance reports RAM precedence or legacy compatibility");
+        require(route.waveSource==(ram?-1:second&&!reverse?1:0),"provenance identifies actual waveform owner");
+        require(route.legacyMwaTracks==(ram?0:second?2:1),"provenance counts bound legacy candidate tracks");
+    }
     auto profileDetail=[](const SmafFile& file,bool modern,const std::string& recipe) {
         MaPlayer player;require(player.init(file,8000),"mixed profile detail initializes");
         Details details;const auto usage=measure(player,true,&details);
@@ -311,7 +350,7 @@ int audit(const fs::path& root,const fs::path& report,bool details) {
         std::cerr<<"Report path identifies an input file; refusing overwrite\n";return 2;
     }
     std::ofstream out(report,std::ios::binary|std::ios::trunc);if(!out)return 2;
-    if(details)out<<"file\tkind\tinitialized\tcomplete\tafter_bound\tdetail_overflow\tchannel\tsource_track\tbank_msb\tbank_lsb\tprogram\tnote\tdefinition\twave_id\tmodern\treason\tsubstitute\tcount\tfirst_seconds\tlast_seconds\trequested_al\trequested_fixed\trequested_dt\trequested_sram\n";
+    if(details)out<<"file\tkind\tinitialized\tcomplete\tafter_bound\tdetail_overflow\tchannel\tsource_track\tbank_msb\tbank_lsb\tprogram\tnote\tdefinition\twave_id\tmodern\treason\tsubstitute\tcount\tfirst_seconds\tlast_seconds\trequested_al\trequested_fixed\trequested_dt\trequested_sram\twave_binding\twave_source_track\tlegacy_mwa_tracks\n";
     else out<<"file\tinitialized\tcomplete\tdefinitions\trequested_defs\tbound_defs\tnotes\tafter_bound\tzero_velocity\timmutable_silent\tfm\twt\trecorded\tatr\tno_instance\tfallback\trom_source_fallback\tram_source_fallback\tmissing_recorded\tep_zero\trequested_al\tbound_al\trequested_fixed\tbound_fixed\trequested_dt\tbound_dt\trequested_sram\tbound_sram\n";
     bool overflow=false;
     for(const auto& path:paths) {
@@ -326,12 +365,13 @@ int audit(const fs::path& root,const fs::path& report,bool details) {
                 <<u.complete<<'\t'<<u.afterBound<<'\t'<<d.overflow;};
             // Always emit a summary, including valid files with no note routes.
             prefix("summary");out<<"\t-1\t-1\t-1\t-1\t-1\t-1\t-1\t-1\t-1\tsummary\t-\t"
-                <<u.notes<<"\t0\t0\t0\t0\t0\t0\n";
+                <<u.notes<<"\t0\t0\t0\t0\t0\t0\t-\t-1\t0\n";
             for(const auto& [r,n]:d.groups) {
                 prefix("route");out<<'\t'<<r.channel<<'\t'<<r.source<<'\t'<<r.bankMsb<<'\t'<<r.bankLsb
                     <<'\t'<<r.program<<'\t'<<r.note<<'\t'<<r.definition<<'\t'<<r.wave<<'\t'<<r.modern
                     <<'\t'<<r.reason<<'\t'<<r.substitute<<'\t'<<n.count<<'\t'<<double(n.first)/44100
-                    <<'\t'<<double(n.last)/44100<<'\t'<<r.al<<'\t'<<r.fixed<<'\t'<<r.dt<<'\t'<<r.sram<<'\n';
+                    <<'\t'<<double(n.last)/44100<<'\t'<<r.al<<'\t'<<r.fixed<<'\t'<<r.dt<<'\t'<<r.sram
+                    <<'\t'<<r.waveBinding<<'\t'<<r.waveSource<<'\t'<<r.legacyMwaTracks<<'\n';
             }
             overflow|=d.overflow!=0;
         } else {

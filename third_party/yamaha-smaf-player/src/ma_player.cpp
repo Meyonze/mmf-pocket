@@ -508,7 +508,7 @@ void MaPlayer::suppressHpsSlapbackDuplicates_() {
 // yamaha adpcm payloads are LOW-nibble-first (the vavi-sound decoder's
 // little-endian bit order), which is the difference between clean audio and hash.
 void MaPlayer::buildWaveBank_(const SmafFile& file) {
-    waveBank_.clear();
+    legacyWaveSources_.clear();
     scoreWaveBanks_.clear();
     audioWaveBanks_.clear();
     for (const TrackChunk& t : file.tracks) {
@@ -533,8 +533,7 @@ void MaPlayer::buildWaveBank_(const SmafFile& file) {
             }
             if (!t.isAudioTrack) {
                 ps.silence.build(ps.pcm);
-                if (size_t(w.number) >= waveBank_.size()) waveBank_.resize(w.number + 1);
-                waveBank_[w.number] = ps;
+                legacyWaveSources_[w.number] = t.trackNumber;
                 auto& bank = scoreWaveBanks_[t.trackNumber];
                 if (size_t(w.number) >= bank.size()) bank.resize(w.number + 1);
                 bank[w.number] = std::move(ps);
@@ -1428,20 +1427,28 @@ void MaPlayer::decodeMa7_(const uint8_t* p, size_t n, int base,
         audit_(ScoreAudit::Domain::Sequence, ScoreAudit::Status::ResourceLimit, 0x104, 0, msToSample(curMs));
 }
 
-bool MaPlayer::startPcm_(int ch, int rawNote, int soundingNote, const ParsedVoice& v,
-                         const Chan& c, float noteVelocity, uint64_t noteId) {
-    // Bind ONLY the referenced wave. An unrelated short sample is not a
-    // substitute for a missing instrument and can sound like random noise.
-    const PcmSample* ws = nullptr;
-    int wid = v.pcm.waveId;
-    if (v.pcm.rom) return false; // ROM IDs must never alias a local RAM sample
+MaPlayer::PcmBinding MaPlayer::instrumentWave_(const PcmParams& params) const {
+    const int wid = params.waveId;
+    if (params.rom) return {}; // ROM addresses never alias local RAM/streams
     if (wid >= 0 && wid < 128) {
         const int version = activeVoiceWaveVersion_[wid];
         const PcmSample& selected = version >= 0 ? voiceWaveVersions_[size_t(version)] : voiceWaveBank_[wid];
-        if (!selected.pcm.empty()) ws = &selected;
+        if (!selected.pcm.empty()) return {&selected, -1, false};
     }
-    if (!ws && !v.pcm.voiceWaveOnly && wid >= 0 && size_t(wid) < waveBank_.size() && !waveBank_[wid].pcm.empty())
-        ws = &waveBank_[wid];
+    if (params.voiceWaveOnly || wid < 0) return {};
+    const auto source = legacyWaveSources_.find(wid);
+    if (source == legacyWaveSources_.end()) return {};
+    const auto bank = scoreWaveBanks_.find(source->second);
+    if (bank == scoreWaveBanks_.end() || size_t(wid) >= bank->second.size()) return {};
+    const auto& sample = bank->second[size_t(wid)];
+    return sample.pcm.empty() ? PcmBinding{} : PcmBinding{&sample, source->second, true};
+}
+
+bool MaPlayer::startPcm_(int ch, int rawNote, int soundingNote, const ParsedVoice& v,
+                         const Chan& c, float noteVelocity, uint64_t noteId) {
+    // Resolve the exact same instrument/legacy source as diagnostics. Mwa
+    // remains a compatibility path; its manufacturer mapping is not inferred.
+    const PcmSample* ws = instrumentWave_(v.pcm).sample;
     if (!ws) return false;
     if (v.pcm.endPt == 0) return true; // EP=0 intentionally does not pronounce
 

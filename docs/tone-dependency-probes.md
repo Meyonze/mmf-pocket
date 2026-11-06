@@ -114,3 +114,24 @@ use each note's originating MTR header and grammar, matching the r81 renderer.
 An inert overlapping track cannot change a HandyPhone report to modern GM or
 turn a Mobile melody report into a drum substitute. Self-tests include twelve
 source-profile cases alongside the existing route and output-safety cases.
+
+
+## Decoded waveform provenance
+
+Detailed reports append three columns; the default 28-column aggregate is unchanged.
+
+| Column | Meaning |
+| --- | --- |
+| `wave_binding` | `instrument_ram`, `legacy_mwa`, `recorded_mwa`, `atr_awa`, `rom_address`, `missing_ram`, or `-` |
+| `wave_source_track` | Actual owning MTR/ATR for a bound stream sample; `-1` for instrument RAM, ROM addresses, missing samples and routes without a sample |
+| `legacy_mwa_tracks` | Number of score MTR banks with decoded samples at the bound legacy Wave ID; zero for other binding types |
+
+`source_track` continues to mean the note's origin. A legacy WT note from MTR0
+can currently bind MTR1; the new actual-owner column exposes this difference.
+Two or more legacy candidate tracks identifies a compatibility mapping that
+needs investigation, even if their decoded waveforms happen to match. It does
+not establish which source a handset should use or an audible balance error.
+`rom_address` identifies a requested address, never a recovered ROM waveform.
+Unallocated silent/zero-velocity notes and failed recorded/ATR allocations do
+not claim a successful stream binding. Candidate counts are cached per report;
+reporting does not scan all MTRs again for every note.

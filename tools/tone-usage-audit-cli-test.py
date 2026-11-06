@@ -91,6 +91,54 @@ class ToneUsageCliTest(unittest.TestCase):
         self.assertEqual(sum(int(row['wt']) for row in rows), 2)
         self.assertEqual(sum(int(row['fallback']) for row in rows), 12)
 
+    def test_bound_wave_provenance_for_original_fixtures(self):
+        result = self.run_cli()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        rows = {r['file']: r for r in self.read_report() if r['kind'] == 'route'}
+        for case in self.manifest['cases']:
+            with self.subTest(case=case['name']):
+                expected = {'ram': 'instrument_ram', 'missing_ram': 'missing_ram',
+                            'rom': 'rom_address'}.get(case['kind'], '-')
+                route = rows[case['file']]
+                self.assertEqual(route['wave_binding'], expected)
+                self.assertEqual(route['wave_source_track'], '-1')
+                self.assertEqual(route['legacy_mwa_tracks'], '0')
+
+    def test_legacy_mwa_provenance_separates_note_and_wave_sources(self):
+        for reverse in (False, True):
+            for second in (False, True):
+                for ram in (False, True):
+                    with self.subTest(reverse=reverse, second=second, ram=ram):
+                        def track(number, setup, sequence, wave_id, level):
+                            body = bytes((2, 0, 0x10, 0x10)) + bytes(16)
+                            if setup:
+                                body += PROBES.chunk(b'Mtsu', setup)
+                            body += PROBES.chunk(b'Mtsq', sequence)
+                            wave = PROBES.chunk(b'Mwa' + bytes((wave_id,)),
+                                                bytes((0x11, 0x1f, 0x40)) + bytes((level,)) * 80)
+                            body += PROBES.chunk(b'Mtsp', wave)
+                            return PROBES.chunk(b'MTR' + bytes((number,)), body)
+                        setup = PROBES.wt_voice(1, bank=0)
+                        if ram:
+                            setup += PROBES.original_wave()
+                        tracks = [track(0, setup, bytes((0, 0x90, 69, 100, 10, 30, 0xff, 0x2f, 0)), 1, 150),
+                                  track(1, b'', bytes((0, 0xff, 0x2f, 0)), 1 if second else 2, 170)]
+                        payload = b''.join(reversed(tracks) if reverse else tracks)
+                        data = b'MMMD' + struct.pack('>I', len(payload) + 2) + payload
+                        data += struct.pack('>H', binascii.crc_hqx(data, 0xffff) ^ 0xffff)
+                        source = self.root / 'legacy.mmf'
+                        source.write_bytes(data)
+                        result = self.run_cli(source)
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        rows = [r for r in self.read_report() if r['kind'] == 'route']
+                        self.assertEqual(len(rows), 1)
+                        route = rows[0]
+                        self.assertEqual(route['reason'], 'bound_ram')
+                        self.assertEqual(route['source_track'], '0')
+                        self.assertEqual(route['wave_binding'], 'instrument_ram' if ram else 'legacy_mwa')
+                        self.assertEqual(int(route['wave_source_track']), -1 if ram else 1 if second and not reverse else 0)
+                        self.assertEqual(int(route['legacy_mwa_tracks']), 0 if ram else 2 if second else 1)
+
     def test_control_only_score_still_has_explicit_summary(self):
         # A complete original score with a Program event and EOS, but no notes.
         source = self.root / 'controls-only.mmf'

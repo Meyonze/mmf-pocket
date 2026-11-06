@@ -192,7 +192,15 @@ private:
         float tick();
         bool silentSource() const; // EOF-only; retains possible reconstruction history
     };
-    std::vector<PcmSample> waveBank_;
+    // Preserve the legacy last-MTR-wins lookup without duplicating decoded
+    // PCM or retaining pointers invalidated while source vectors grow.
+    std::map<int, int> legacyWaveSources_; // wave ID -> owning score MTR
+    struct PcmBinding {
+        const PcmSample* sample = nullptr;
+        int sourceTrack = -1;
+        bool legacyMwa = false;
+    };
+    PcmBinding instrumentWave_(const PcmParams& params) const;
     std::map<int, std::vector<PcmSample>> scoreWaveBanks_; // Mwa IDs local to each MTR
     std::map<int, std::vector<PcmSample>> audioWaveBanks_; // Awa IDs local to each ATR
     struct AudioPanState {

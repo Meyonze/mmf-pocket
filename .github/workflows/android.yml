@@ -144,6 +144,11 @@ jobs:
           c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Ithird_party/yamaha-smaf-player/src tools/hps-shift-isolation-test.cpp build/native-sanitizer/libsmaf.a -o hps-shift-isolation-test
           ./hps-shift-isolation-test
 
+      - name: Check decoded wave source references
+        run: |
+          c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Ithird_party/yamaha-smaf-player/src tools/wave-bank-reference-test.cpp build/native-sanitizer/libsmaf.a -o wave-bank-reference-test
+          ./wave-bank-reference-test
+
       - name: Build and run silent-note voice pool tests
         run: |
           c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Ithird_party/yamaha-smaf-player/src tools/silent-note-pool-test.cpp build/native-sanitizer/libsmaf.a -o silent-note-pool-test
