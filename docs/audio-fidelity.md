@@ -2,7 +2,7 @@
 
 ## Unreleased: current DSP and comparison workflow
 
-The current batch uses render cache **r78**, invalidating older rendered audio.
+The current batch uses render cache **r79**, invalidating older rendered audio.
 It combines bounded high-rate PCM reconstruction, corrected Yamaha ADPCM
 rounding, continuous FM phase during Nyquist suppression, complete HPS/VMA bank
 identity, completed-carrier release classification and provably silent-tail
@@ -10,6 +10,15 @@ completion. The changes below
 are software improvements; they do not establish handset-calibrated timbres or
 perceptual equivalence. Detailed probes and limits are in
 [DSP review evidence](dsp-review.md).
+
+### Completed attack followed by a zero PCM loop at EOF (r79)
+
+An additional source certificate covers a zero loop after its possible FIR
+attack history has drained. Decoding caches the final nonzero-sample boundary;
+EOF checks combine it with the allocated loop and virtual history distance.
+In-score retirement remains restricted to its previous signed-PCM8 path.
+All 2,121 prior WAVs retain their PCM16 prefix exactly: 2,104 are unchanged and
+17 lose only zero-valued tails. See [silent voice allocation](silent-voice-allocation.md).
 
 ### Exact-zero keyed PCM at score EOF (r78)
 

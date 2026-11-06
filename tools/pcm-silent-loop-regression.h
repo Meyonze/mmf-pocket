@@ -16,6 +16,7 @@ inline void run() {
                 MaPlayer::PcmVoice voice;
                 voice.pcm = pcm.data(); voice.len = voice.loopEnd = pcm.size();
                 voice.loopStart = start; voice.loop = voice.silentLoop = true;
+                voice.zeroLoopTail = true; voice.zeroSource = start == 0;
                 voice.active = voice.streamAudio = voice.qualityInterpolation = true;
                 const double limit = start == 0 ? 0 : start + 63;
                 double position = 0;
@@ -27,6 +28,8 @@ inline void run() {
                     const size_t index = size_t(position);
                     const float expected = pcm_detail::interpolatePcm(timeline.data(), timeline.size(),
                         index, float(position - index), false, 0, 0, true, voice.rate);
+                    require(!voice.silentSource() || expected == 0,
+                            "EOF silence certificate must retain every nonzero reconstruction tap");
                     const float actual = voice.tick();
                     maxError = std::max(maxError, std::fabs(double(actual) - expected));
                     const bool premature = !voice.active && position + 1e-8 < limit;
@@ -41,6 +44,7 @@ inline void run() {
                     position += voice.rate; ++checks;
                     require(frame < 10000, "zero-loop source clock advances to its bounded end");
                 }
+                require(voice.silentSource(),"EOF certificate becomes true after the maximum FIR history is consumed");
                 require(voice.tick() == 0 && !voice.active,
                         "zero loop retires exactly once all possible FIR source taps are zero");
                 // Widening after retirement cannot resurrect an old sample.

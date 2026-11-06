@@ -1176,9 +1176,17 @@ void checkMa7SignedWaveRam() {
     setVoice(zeroLoop,silentWt); appendExclusive(zeroLoop,signedSilent);
     setVoice(oldZeroLoop,silentWt); appendExclusive(oldZeroLoop,unsignedSilent);
     const auto shorter=renderAll(zeroLoop), longer=renderAll(oldZeroLoop);
-    check(shorter.size()<longer.size() &&
-          std::equal(shorter.begin(),shorter.end(),longer.begin()),
-          "signed zero loop retires without altering any output sample");
+    // Both codecs may now finish at EOF once their reconstruction history
+    // is zero. Signed-only in-score retirement can leave one extra drain
+    // frame; retain the complete common output and bound that residual.
+    auto sameZeroLoopOutput=[](const auto& a,const auto& b) {
+        const size_t common=std::min(a.size(),b.size()),length=std::max(a.size(),b.size());
+        if(length-common>2 || !std::equal(a.begin(),a.begin()+common,b.begin()))return false;
+        const auto& tail=a.size()>b.size()?a:b;
+        return std::all_of(tail.begin()+common,tail.end(),[](float x){return std::abs(x)<1e-7f;});
+    };
+    check(sameZeroLoopOutput(shorter,longer),
+          "signed/unsigned zero loops retain reconstruction and finish at EOF with at most one sub-threshold drain frame");
     check(player.init(zeroLoop,8000),"signed zero loop initializes");
     while(player.render(scratch.data(),257)>0) {}
     check(!player.diagnostics().tailLimitReached,"signed silent loop cannot extend song to safety cap");
@@ -1197,7 +1205,7 @@ void checkMa7SignedWaveRam() {
           "unsigned overwrite clears new signed-only zero-loop retirement state");
 
     // Identical signed/unsigned waves must use the same reconstruction even
-    // when only the signed form may retire its exactly silent endpoint loop.
+    // while only signed PCM retires during the score; both may finish at EOF.
     // Exercise upsampling and downsampling, not just native-rate playback.
     auto signedTone=signedSilent, unsignedTone=unsignedSilent;
     for (int i=0;i<256;++i) {
@@ -1211,9 +1219,8 @@ void checkMa7SignedWaveRam() {
         setVoice(signedFile,silentWt); appendExclusive(signedFile,signedTone);
         setVoice(unsignedFile,silentWt); appendExclusive(unsignedFile,unsignedTone);
         const auto actual=renderAll(signedFile), reference=renderAll(unsignedFile);
-        check(actual.size()<reference.size() &&
-              std::equal(actual.begin(),actual.end(),reference.begin()),
-              "signed silent-loop wave retains the unsigned reference reconstruction at every pitch");
+        check(sameZeroLoopOutput(actual,reference),
+              "signed/unsigned silent loops retain identical reconstruction at every pitch and finish together at EOF");
         check(actual==renderAll(signedFile,1),"signed silent-loop quality is independent of render block size");
     }
 }

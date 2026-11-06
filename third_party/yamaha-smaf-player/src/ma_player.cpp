@@ -28,6 +28,9 @@ namespace {
 size_t zeroPcmPrefix(const std::vector<int16_t>& pcm) {
     return size_t(std::find_if(pcm.begin(),pcm.end(),[](int16_t s){return s!=0;})-pcm.begin());
 }
+size_t zeroPcmSuffixStart(const std::vector<int16_t>& pcm) {
+    return size_t(std::find_if(pcm.rbegin(),pcm.rend(),[](int16_t s){return s!=0;}).base()-pcm.begin());
+}
 constexpr double kSafetySeconds = 600.0;   // hard cap so a broken loop can't hang
 constexpr size_t kMaxEvents     = 400000;  // total decoded-event ceiling (anti-DoS)
 constexpr size_t kMaxCustomVoices = 2048;  // cap malformed exclusive-message floods
@@ -535,6 +538,7 @@ void MaPlayer::buildWaveBank_(const SmafFile& file) {
                         : int(w.data[i]) - 128) * 256);
             }
             ps.zeroPrefix = zeroPcmPrefix(ps.pcm);
+            ps.zeroSuffixStart = zeroPcmSuffixStart(ps.pcm);
             if (!t.isAudioTrack) {
                 if (size_t(w.number) >= waveBank_.size()) waveBank_.resize(w.number + 1);
                 waveBank_[w.number] = ps;
@@ -633,6 +637,7 @@ bool MaPlayer::decodeVoiceWave_(const uint8_t* p, size_t n, PcmSample& out,
             out.retireSilentLoop = p[6] == 3;
         }
         out.zeroPrefix = zeroPcmPrefix(out.pcm);
+        out.zeroSuffixStart = zeroPcmSuffixStart(out.pcm);
         return !out.pcm.empty();
     }
     // MA-3 voice waves use seven-bit transport for ADPCM or unsigned PCM8.
@@ -656,6 +661,7 @@ bool MaPlayer::decodeVoiceWave_(const uint8_t* p, size_t n, PcmSample& out,
     }
     out.retireSilentLoop = false;
     out.zeroPrefix = zeroPcmPrefix(out.pcm);
+    out.zeroSuffixStart = zeroPcmSuffixStart(out.pcm);
     // Playback rate belongs to the selecting PCM patch's Fs, not this block.
     return !out.pcm.empty();
 }
@@ -1467,6 +1473,7 @@ bool MaPlayer::startPcm_(int ch, int rawNote, int soundingNote, const ParsedVoic
     // FIR/linear interpolation uses this same exclusive endpoint. Samples
     // outside it cannot make this allocated source audible.
     pv.zeroSource = ws->zeroPrefix >= pv.loopEnd;
+    pv.zeroLoopTail = pv.loop && ws->zeroSuffixStart <= pv.loopStart;
     pv.silentLoop = ws->retireSilentLoop && pv.loop &&
         std::all_of(ws->pcm.begin() + pv.loopStart, ws->pcm.begin() + pv.loopEnd,
                     [](int16_t sample) { return sample == 0; });
@@ -1542,6 +1549,14 @@ void MaPlayer::startAudio_(int ch, int note, float velocity, uint64_t noteId, bo
     slot->startOrder = nextAudioStartOrder_++;
     slot->streamAudio = true; slot->active = true;
     ++diagnostics_.audioNotes; ++diagnostics_.pcmNotes;
+}
+
+bool MaPlayer::PcmVoice::silentSource() const {
+    // Match the existing signed-PCM8 retirement certificate without changing
+    // other codecs' in-score source lifetimes or their allocation policy.
+    const double history = qualityInterpolation ? pcm_detail::kMaxPastSamples : 0;
+    return zeroSource || (zeroLoopTail &&
+        pos + double(loopTravel) >= double(loopStart) + history);
 }
 
 float MaPlayer::PcmVoice::tick() {
@@ -1631,7 +1646,7 @@ bool MaPlayer::hasOutputVoices_() const {
             // Only instrument WT uses this envelope silence certificate.
             // ATR and recorded Audio retain their source/gate endpoint rules.
             (v.keyNote < 0 || v.streamAudio ||
-             (!v.zeroSource && !v.env.silentForCurrentNote()))) return true;
+             (!v.silentSource() && !v.env.silentForCurrentNote()))) return true;
     for (const auto& v : audioPool_)
         if (v.active && v.gain != 0.0f && v.vel != 0.0f) return true;
     return false;
@@ -1878,6 +1893,7 @@ void MaPlayer::fireEvent_(const Ev& e) {
             pv.amDepth = 0.0f; // ATR must not inherit a stolen WT slot's LFO
             pv.pos = 0.0; pv.loopStart = 0; pv.loopEnd = pv.len; pv.loop = false;
             pv.zeroSource = false;
+            pv.zeroLoopTail = false;
             pv.silentLoop = false;
             FmOpPatch flat{};                      // full-open sustaining envelope
             flat.ar = 15; flat.sl = 0; flat.sr = 0; flat.egType = true;

@@ -357,5 +357,33 @@ void zeroPcmEof() {
     }
     std::cout<<"Zero PCM EOF PASS: "<<cases<<" cases, three rates, authored rests, later audible notes, unused suffix, blocks and seek\n";
 }
-int main(){zeroPcmEof();zeroPcmEndpoints();zeroPcmVersionLifetime();zeroPcmCodecs();zeroPcmAllocation();unboundWaveCertificate();unboundWaveAllocation();allocation();envelopeCertificate();reversibleSuppression();}
+void zeroLoopPcmEof() {
+    unsigned cases=0;
+    for(int format:{2,3})for(int rate:{8000,44100,48000})for(int loopStart:{1,16,64})for(bool future:{false,true}) {
+        auto fixture=[&](bool oracle){auto f=base(true,format);auto& setup=f.tracks[0].setupData;
+            setup[2+14]|=8;setup[2+22]=uint8_t(loopStart);setup[2+25]=2;
+            if(oracle){Bytes bulk={0x43,0x79,8,0x7f,0x23,2,3,16};bulk.insert(bulk.end(),79,0);exclusive(f,bulk);}
+            else {auto wave=f.tracks[0].waves[0];wave.number=2;wave.adpcm=false;wave.data.assign(160,0);wave.data[0]=16;f.tracks[0].waves.push_back(wave);}
+            auto& seq=f.tracks[0].sequenceData;seq={0,uint8_t(format==2?0x90:0x10),60,100,3};
+            if(future)seq.insert(seq.end(),{10,uint8_t(format==2?0xc1:0x41),2,0,uint8_t(format==2?0x91:0x11),60,100,5,10,0xff,0x2f,0});
+            else seq.insert(seq.end(),{20,0xff,0x2f,0});return f;
+        };
+        auto render=[&](MaPlayer& p,int block){std::vector<float> out,buf(size_t(block)*2);int n;
+            while((n=p.render(buf.data(),block))>0){out.insert(out.end(),buf.begin(),buf.begin()+2*n);require(out.size()<size_t(rate)*24,"zero loop EOF bounded");}return out;};
+        MaPlayer reference;require(reference.init(fixture(true),uint32_t(rate)),"signed8 zero-loop EOF reference initializes");const auto expected=render(reference,257);
+        require(!reference.diagnostics().tailLimitReached&&std::any_of(expected.begin(),expected.end(),[](float x){return x!=0;}),"zero-loop oracle retains its audible attack and ends naturally");
+        for(int block:{1,257,1024}){MaPlayer actual;require(actual.init(fixture(false),uint32_t(rate)),"zero-loop EOF initializes");
+            require(render(actual,block)==expected&&!actual.diagnostics().tailLimitReached,"completed zero-loop attack/history must not force a ten-second tail");
+            if(block==257){actual.seekToStart();require(render(actual,block)==expected,"zero-loop EOF survives seek");}++cases;}
+    }
+    for(int format:{2,3}){auto f=base(true,format);auto& setup=f.tracks[0].setupData;setup[2+14]|=8;setup[2+22]=16;
+        auto& wave=f.tracks[0].waves[0];wave.adpcm=false;std::fill(wave.data.begin(),wave.data.end(),0);wave.data.back()=1;
+        f.tracks[0].sequenceData={0,uint8_t(format==2?0xb0:0x30),7,1,0,uint8_t(format==2?0xb0:0x30),11,1,
+            0,uint8_t(format==2?0x90:0x10),60,2,3,20,0xff,0x2f,0};
+        MaPlayer actual;require(actual.init(f,8000),"tiny nonzero loop initializes");uint64_t frames=0;std::vector<float> buf(514);int n;
+        while((n=actual.render(buf.data(),257))>0)frames+=uint64_t(n);
+        require(frames==81600&&actual.diagnostics().tailLimitReached,"one tiny nonzero loop sample keeps its previous lifetime");}
+    std::cout<<"Zero-loop EOF PASS: "<<cases<<" cases, retained attacks/FIR history, later audio, rates and seeks\n";
+}
+int main(){zeroLoopPcmEof();zeroPcmEof();zeroPcmEndpoints();zeroPcmVersionLifetime();zeroPcmCodecs();zeroPcmAllocation();unboundWaveCertificate();unboundWaveAllocation();allocation();envelopeCertificate();reversibleSuppression();return 0;}
 

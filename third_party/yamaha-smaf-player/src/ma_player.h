@@ -145,6 +145,7 @@ private:
         // codecs' source/EOF lifetimes, including silent tails.
         bool retireSilentLoop = false;
         size_t zeroPrefix = 0; // exact leading zeros, classified once after decoding
+        size_t zeroSuffixStart = 0; // first sample after the final nonzero sample
     };
     struct PcmVoice {
         const int16_t* pcm = nullptr; size_t len = 0;
@@ -153,6 +154,7 @@ private:
         float amDepth = 0.0f;
         size_t loopStart = 0, loopEnd = 0; bool loop = false;
         bool zeroSource = false; // entire immutable playback range, not just its loop
+        bool zeroLoopTail = false; // loop and all later decoded samples are zero
         bool silentLoop = false; // after loopStart all future source samples are exactly zero
         bool qualityInterpolation = false;
         size_t loopTravel = 0; // virtual history distance removed by loop wraps
@@ -172,6 +174,7 @@ private:
         uint64_t startOrder = 0; // successful Audio allocation order, including ties in sample time
         int stopFade = -1, stopFadeTotal = 1; // Audio gate: bounded 2ms anti-click fade
         float tick();
+        bool silentSource() const; // EOF-only; retains possible reconstruction history
     };
     std::vector<PcmSample> waveBank_;
     std::map<int, std::vector<PcmSample>> scoreWaveBanks_; // Mwa IDs local to each MTR
