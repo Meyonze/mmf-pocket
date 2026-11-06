@@ -2,7 +2,7 @@
 
 ## Unreleased: current DSP and comparison workflow
 
-The current batch uses render cache **r77**, invalidating older rendered audio.
+The current batch uses render cache **r78**, invalidating older rendered audio.
 It combines bounded high-rate PCM reconstruction, corrected Yamaha ADPCM
 rounding, continuous FM phase during Nyquist suppression, complete HPS/VMA bank
 identity, completed-carrier release classification and provably silent-tail
@@ -10,6 +10,14 @@ completion. The changes below
 are software improvements; they do not establish handset-calibrated timbres or
 perceptual equivalence. Detailed probes and limits are in
 [DSP review evidence](dsp-review.md).
+
+### Exact-zero keyed PCM at score EOF (r78)
+
+After all authored events are consumed and the score endpoint is reached,
+zero-source keyed PCM no longer forces a ten-second silent safety tail. The
+player retains the existing shared output-filter drain. ATR and recorded Audio
+keep their existing source/gate liveness; arbitrarily tiny nonzero PCM remains
+live. Note allocation and in-score clocks are unchanged. See [silent voice allocation](silent-voice-allocation.md).
 
 ### Respect the exclusive PCM endpoint when classifying silence (r77)
 

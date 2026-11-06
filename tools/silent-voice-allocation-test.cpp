@@ -321,5 +321,41 @@ void zeroPcmEndpoints() {
     }
     std::cout<<"PCM zero-prefix endpoint PASS: "<<cases<<" cases\n";
 }
-int main(){zeroPcmEndpoints();zeroPcmVersionLifetime();zeroPcmCodecs();zeroPcmAllocation();unboundWaveCertificate();unboundWaveAllocation();allocation();envelopeCertificate();reversibleSuppression();}
+void zeroPcmEof() {
+    unsigned cases=0;
+    for(int format:{2,3})for(int rate:{8000,44100,48000})for(bool unusedNonzero:{false,true})for(bool future:{false,true}) {
+        auto fixture=[&](bool include){auto f=base(true,format);auto& setup=f.tracks[0].setupData;
+            setup[2+14]|=8;setup[2+25]=2; // XOF held zero instrument, separate from the audible PC2.
+            auto wave=f.tracks[0].waves[0];wave.number=2;wave.adpcm=false;wave.data.assign(unusedNonzero?162:160,0);
+            if(unusedNonzero)wave.data.back()=1;f.tracks[0].waves.push_back(wave);
+            auto& seq=f.tracks[0].sequenceData;
+            if(include)seq={0,uint8_t(format==2?0x90:0x10),60,100,3};
+            if(future){seq.insert(seq.end(),{10,uint8_t(format==2?0xc1:0x41),2,0,uint8_t(format==2?0x91:0x11),60,100,5,10,0xff,0x2f,0});}
+            else seq.insert(seq.end(),{20,0xff,0x2f,0});return f;
+        };
+        std::vector<float> expected;
+        if(future){MaPlayer reference;require(reference.init(fixture(false),uint32_t(rate)),"EOF audible reference initializes");
+            std::vector<float> buffer(514);int n;while((n=reference.render(buffer.data(),257))>0)expected.insert(expected.end(),buffer.begin(),buffer.begin()+2*n);
+            require(!reference.diagnostics().tailLimitReached,"EOF audible reference ends naturally");}
+        else expected.assign(size_t(rate/5)*2,0);
+        for(int block:{1,257,1024}){MaPlayer actual;require(actual.init(fixture(true),uint32_t(rate)),"zero PCM EOF fixture initializes");
+            auto render=[&]{std::vector<float> out,buffer(size_t(block)*2);int n;
+                while((n=actual.render(buffer.data(),block))>0){out.insert(out.end(),buffer.begin(),buffer.begin()+2*n);require(out.size()<size_t(rate)*24,"zero PCM EOF stays bounded");}return out;};
+            require(render()==expected&&!actual.diagnostics().tailLimitReached,"exact-zero held PCM must not append ten seconds after authored EOF");
+            if(block==257){actual.seekToStart();require(render()==expected,"zero PCM EOF and future audible notes survive seek");}++cases;
+        }
+    }
+    for(int format:{2,3}) {
+        auto f=base(true,format);f.tracks[0].setupData[2+14]|=8;
+        auto& wave=f.tracks[0].waves[0];wave.adpcm=false;std::fill(wave.data.begin(),wave.data.end(),0);wave.data[1]=1;
+        f.tracks[0].sequenceData={0,uint8_t(format==2?0xb0:0x30),7,1,0,uint8_t(format==2?0xb0:0x30),11,1,
+            0,uint8_t(format==2?0x90:0x10),60,2,3,20,0xff,0x2f,0};
+        MaPlayer actual;require(actual.init(f,8000),"tiny nonzero PCM EOF initializes");
+        std::vector<float> buffer(514);float peak=0;uint64_t frames=0;int n;
+        while((n=actual.render(buffer.data(),257))>0){frames+=uint64_t(n);for(int i=0;i<2*n;++i)peak=std::max(peak,std::abs(buffer[i]));}
+        require(peak>0&&peak<1e-7f&&frames==81600&&actual.diagnostics().tailLimitReached,"tiny nonzero PCM remains live below filter-drain threshold");
+    }
+    std::cout<<"Zero PCM EOF PASS: "<<cases<<" cases, three rates, authored rests, later audible notes, unused suffix, blocks and seek\n";
+}
+int main(){zeroPcmEof();zeroPcmEndpoints();zeroPcmVersionLifetime();zeroPcmCodecs();zeroPcmAllocation();unboundWaveCertificate();unboundWaveAllocation();allocation();envelopeCertificate();reversibleSuppression();}
 

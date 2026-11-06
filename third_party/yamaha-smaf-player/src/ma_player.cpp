@@ -1630,7 +1630,8 @@ bool MaPlayer::hasOutputVoices_() const {
         if (v.active && v.gain != 0.0f && v.vel != 0.0f &&
             // Only instrument WT uses this envelope silence certificate.
             // ATR and recorded Audio retain their source/gate endpoint rules.
-            (v.keyNote < 0 || v.streamAudio || !v.env.silentForCurrentNote())) return true;
+            (v.keyNote < 0 || v.streamAudio ||
+             (!v.zeroSource && !v.env.silentForCurrentNote()))) return true;
     for (const auto& v : audioPool_)
         if (v.active && v.gain != 0.0f && v.vel != 0.0f) return true;
     return false;
