@@ -276,7 +276,7 @@ void selfTest() {
         modern.tracks[0].sequenceData={0,uint8_t(format==3?0x14:0x94),60,100,20,30,0xff,0x2f,0};
         TrackChunk hps;hps.trackNumber=1;hps.formatType=0;
         hps.durationTimeBase=hps.gateTimeBase=0x10;hps.channelStatus={0x33,0x33};
-        hps.sequenceData={0,0,0};modern.tracks.push_back(hps);
+        hps.sequenceData={0,0,0,0};modern.tracks.push_back(hps);
         profileDetail(modern,true,"gm_modern_recipe");
     }
     // Original generated sentinel, not music. Output must never truncate any

@@ -9,7 +9,7 @@ SmafFile withInert(SmafFile file, int format, bool first) {
     t.durationTimeBase = t.gateTimeBase = 0x10;
     // Deliberately conflicting RHYTHM and Mobile KeyControl-OFF headers.
     t.channelStatus.assign(format == 0 ? 2 : 32, format == 0 ? 0x33 : 0x43);
-    t.sequenceData = format == 0 ? std::vector<uint8_t>{0,0,0}
+    t.sequenceData = format == 0 ? std::vector<uint8_t>{0,0,0,0}
                                  : std::vector<uint8_t>{0,0xff,0x2f,0};
     if (first) file.tracks.insert(file.tracks.begin(),t);
     else file.tracks.push_back(t);
@@ -22,6 +22,8 @@ void invariant(const SmafFile& source, int inertFormat, int& cases) {
     for (bool first : {false,true}) for (int block : {1,257,1024}) {
         MaPlayer p;
         check(p.init(withInert(source,inertFormat,first),8000),"mixed profile initializes");
+        check(p.scoreAudit().scanComplete&&p.scoreAudit().decodedTracks==2,
+              "both complete source-profile tracks decode");
         const auto actual = silentAttackRegression::drain(p,block);
         check(actual == expected,"inert overlapping MTR preserves complete waveform and tail");
         if(block==257) {

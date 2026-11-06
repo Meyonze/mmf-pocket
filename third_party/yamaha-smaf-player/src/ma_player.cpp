@@ -1951,7 +1951,10 @@ void MaPlayer::fireEvent_(const Ev& e) {
                 c.volume = c.volumeFor(c.squaredControllers);
                 c.expression = c.expressionFor(c.squaredControllers);
             }
-            int soundingNote = e.a + c.octShift;
+            // HPS extends its four-octave note encoding with Octave Shift.
+            // Mobile/MA7 already carry absolute note numbers; an overlapping
+            // HPS part must not transpose those notes a second time.
+            int soundingNote = e.a + (e.handyPhoneNote ? c.octShift : 0);
             if (e.b <= 0) break; // explicit/running zero velocity is silent
             float vel01 = e.b / 127.0f;
             const bool ma7 = e.type == Ev::Ma7NoteOn;

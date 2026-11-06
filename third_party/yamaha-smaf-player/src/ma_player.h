@@ -121,7 +121,7 @@ private:
         double bend = 0.0;            // in semitones
         int bendRange = 2, rawBend = 0; // MA7 CC15 range, default +/-2 semitones
         int rpnMsb = 127, rpnLsb = 127, bendCents = 0; // Mobile RPN0/0, null by default
-        int   octShift = 0;           // handyphone octave-shift state (semitones)
+        int   octShift = 0;           // HPS-only note decoding extension (semitones)
         bool  drum = false;           // bank bit7 (hps) or rhythm channel
         bool  rhythm = false;         // MTR channel-status type 3 (rhythm channel)
         bool  monophonic = false;      // HandyPhone parts own one retriggered voice slot
