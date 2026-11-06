@@ -232,6 +232,11 @@ jobs:
           c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Ithird_party/yamaha-smaf-player/src tools/fm-aligned-prototype-test.cpp build/native-sanitizer/libsmaf.a -o fm-aligned-prototype-test
           ./fm-aligned-prototype-test
 
+      - name: Check isolated FM channel histories and idle tails
+        run: |
+          c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Ithird_party/yamaha-smaf-player/src tools/fm-channel-prototype-test.cpp build/native-sanitizer/libsmaf.a -o fm-channel-prototype-test
+          ./fm-channel-prototype-test
+
       - name: Check unmodulated FM carrier bandlimiting
         run: |
           c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Ithird_party/yamaha-smaf-player/src tools/fm-bandlimit-test.cpp build/native-sanitizer/libsmaf.a -o fm-bandlimit-test
