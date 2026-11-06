@@ -1416,8 +1416,10 @@ void checkVoiceStealing() {
 #include "silent-wt-regression.h"
 #include "fm-zero-output-regression.h"
 #include "mobile-modulation-isolation-regression.h"
+#include "source-profile-regression.h"
 
 int main() {
+    sourceProfileRegression::test();
     mobileModulationIsolation::test();
     fmZeroOutputRegression::test();
     ma7IncompleteFm::checkIncompleteImages();

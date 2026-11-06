@@ -85,6 +85,9 @@ private:
         uint64_t noteId = 0; // paired gate identity, not pitch or pool slot
         int sourceTrack = -1; // Mobile/MA7 note's originating MTR, not channel state
         bool handyPhoneNote = false; // HPS FM retrigger policy belongs to a note
+        // Captured from the source MTR, before another track can reuse its
+        // channel. Bit0 valid, bit1 rhythm, bit2 fixed FM drum pitch.
+        uint8_t sourceProfile = 0;
     };
     std::vector<Ev> events_;
     size_t nextEvent_ = 0;
@@ -98,6 +101,15 @@ private:
         int bankMsb = 0, bankLsb = 0, program = 0;
         float volume = 100.0f / 127.0f;
         float expression = 1.0f;
+        uint8_t rawVolume = 100, rawExpression = 127;
+        float volumeFor(bool squared) const {
+            float v = rawVolume / 127.0f;
+            return squared ? v * v : v;
+        }
+        float expressionFor(bool squared) const {
+            float v = rawExpression / 127.0f;
+            return squared ? v * v : v;
+        }
         bool squaredControllers = false; // MA7 SMAF 40-log volume / expression curve
         bool modernTimbre = false; // Mobile/MA7 trial synthesis, not HandyPhone
         // Mobile KeyControl OFF uses DrumKey; unspecified/ON use score pitch.
@@ -132,6 +144,7 @@ private:
     std::array<float, kPoolSize> poolPan_{};      // live channel pan unless explicitly locked
     std::array<float, kPoolSize> poolPanLeft_{}, poolPanRight_{};
     std::array<bool, kPoolSize> poolPanLocked_{};
+    std::array<bool, kPoolSize> poolSquaredControllers_{};
     std::array<uint64_t, kPoolSize> poolNoteId_{};
     std::array<double,kPoolSize> poolBaseFreq_{}; // unbent pitch incl. original ROM substitute tuning
     unsigned fmSteal_ = 0, pcmSteal_ = 0;
@@ -159,6 +172,7 @@ private:
         bool zeroLoopTail = false; // loop and all later decoded samples are zero
         bool silentLoop = false; // after loopStart all future source samples are exactly zero
         bool qualityInterpolation = false;
+        bool squaredControllers = false; // originating note, not shared channel
         size_t loopTravel = 0; // virtual history distance removed by loop wraps
         FmEnvelope env;
         float pan = 0.0f, vel = 1.0f, gain = 1.0f, noteVelocity = 1.0f;

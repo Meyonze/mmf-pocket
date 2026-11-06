@@ -701,6 +701,7 @@ void MaPlayer::addExclusivesFrom_(const std::vector<uint8_t>& buf, bool mobile) 
 }
 
 void MaPlayer::decodeTrack_(const TrackChunk& t, int base) {
+    const size_t firstEvent = events_.size();
     auditFormat_ = t.formatType; auditTrack_ = t.trackNumber;
     ScoreAudit::increment(scoreAudit_.decodedTracks);
     double tbD = TrackChunk::timeBaseMs(t.durationTimeBase);
@@ -752,6 +753,26 @@ void MaPlayer::decodeTrack_(const TrackChunk& t, int base) {
         decodeMobile_(t.sequenceData.data(), t.sequenceData.size(), base, tbD, tbG);
     } else if (t.formatType == 0x03) {
         decodeMa7_(t.sequenceData.data(), t.sequenceData.size(), base, tbD, tbG);
+    }
+    // Static synthesis settings belong to the originating MTR. Capture them
+    // here rather than reading whichever track initialized this channel last.
+    for (size_t i = firstEvent; i < events_.size(); ++i) {
+        auto& e = events_[i];
+        if (e.type != Ev::NoteOn && e.type != Ev::Ma7NoteOn) continue;
+        const size_t local = (int(e.ch) - base) & 127;
+        bool rhythm = false;
+        bool fixed = t.formatType == 0 || t.formatType == 3;
+        if (t.formatType == 0) {
+            if (local < 4 && local / 2 < t.channelStatus.size()) {
+                const uint8_t packed = t.channelStatus[local / 2];
+                rhythm = (((local % 2 == 0 ? packed >> 4 : packed) & 3) == 3);
+            }
+        } else if (local < t.channelStatus.size()) {
+            const uint8_t status = t.channelStatus[local];
+            rhythm = (status & 3) == 3;
+            if (t.formatType == 1 || t.formatType == 2) fixed = (status >> 6) == 1;
+        }
+        e.sourceProfile = 1 | (rhythm ? 2 : 0) | (fixed ? 4 : 0);
     }
 }
 
@@ -1427,6 +1448,7 @@ bool MaPlayer::startPcm_(int ch, int rawNote, int soundingNote, const ParsedVoic
     int slot = allocatePcmSlot_();
     PcmVoice& pv = pcmPool_[slot];
     pv.streamAudio = false;
+    pv.squaredControllers = c.squaredControllers;
     pv.pcm = ws->pcm.data(); pv.len = ws->pcm.size();
     // Bank125 is a custom drum voice even when its mapped trigger key is zero.
     // A zero key must not turn a native-rate drum into a five-octave-down tone.
@@ -1522,7 +1544,8 @@ void MaPlayer::startAudio_(int ch, int note, float velocity, uint64_t noteId, bo
     if (modern && slot->rate > 1.0) pcm_detail::prepareDownsamplingKernels();
     if (modern && slot->rate > 1.0 && slot->rate < 1.1) (void)pcm_detail::nearUnityKernels();
     slot->vel = velocity; slot->pan = chans_[ch & 127].pan;
-    channelPanGains(slot->pan, chans_[ch & 127].squaredControllers, slot->panLeft, slot->panRight);
+    slot->squaredControllers = ma7;
+    channelPanGains(slot->pan, ma7, slot->panLeft, slot->panRight);
     slot->channel = ch; slot->keyNote = note; slot->noteId = noteId;
     if (ma7) {
         const int track = sourceTrack;
@@ -1662,53 +1685,56 @@ void MaPlayer::fireEvent_(const Ev& e) {
             c.drum    = (e.a & 0x80) != 0;       // bit7 = drum bank
             break;
         case Ev::Volume: {
-            c.volume = (e.a & 0x7f) / 127.0f;
+            c.rawVolume = e.a & 0x7f;
+            c.volume = c.rawVolume / 127.0f;
             if (c.squaredControllers) c.volume *= c.volume;
             for (auto& voice : pcmPool_)
                 if (voice.active && voice.channel == int(e.ch) && voice.keyNote >= 0)
-                    voice.vel = voice.noteVelocity * c.volume * c.expression;
+                    voice.vel = voice.noteVelocity * c.volumeFor(voice.squaredControllers) * c.expressionFor(voice.squaredControllers);
             for (int i = 0; i < kPoolSize; ++i)
                 if (pool_[i].active() && pool_[i].channel == int(e.ch))
-                    pool_[i].setVolume(c.volume * c.expression);
+                    pool_[i].setVolume(c.volumeFor(poolSquaredControllers_[i]) * c.expressionFor(poolSquaredControllers_[i]));
         } break;
         case Ev::Expression: {
-            c.expression = (e.a & 0x7f) / 127.0f;
+            c.rawExpression = e.a & 0x7f;
+            c.expression = c.rawExpression / 127.0f;
             if (c.squaredControllers) c.expression *= c.expression;
             for (auto& voice : pcmPool_)
                 if (voice.active && voice.channel == int(e.ch) && voice.keyNote >= 0)
-                    voice.vel = voice.noteVelocity * c.volume * c.expression;
+                    voice.vel = voice.noteVelocity * c.volumeFor(voice.squaredControllers) * c.expressionFor(voice.squaredControllers);
             for (int i = 0; i < kPoolSize; ++i)
                 if (pool_[i].active() && pool_[i].channel == int(e.ch))
-                    pool_[i].setVolume(c.volume * c.expression);
+                    pool_[i].setVolume(c.volumeFor(poolSquaredControllers_[i]) * c.expressionFor(poolSquaredControllers_[i]));
         } break;
         case Ev::Pan:
             c.pan = ((e.a & 0x7f) - 64) / 64.0f;
             for (int i = 0; i < kPoolSize; ++i)
                 if (pool_[i].active() && pool_[i].channel == int(e.ch) && !poolPanLocked_[i]) {
                     poolPan_[i] = c.pan;
-                    channelPanGains(c.pan, c.squaredControllers, poolPanLeft_[i], poolPanRight_[i]);
+                    channelPanGains(c.pan, poolSquaredControllers_[i], poolPanLeft_[i], poolPanRight_[i]);
                 }
             for (auto& voice : audioPool_)
                 if (voice.active && voice.channel == int(e.ch) && !voice.panLocked) {
                     voice.pan = c.pan;
-                    channelPanGains(c.pan, voice.audioSourceTrack >= 0 || c.squaredControllers, voice.panLeft, voice.panRight);
+                    channelPanGains(c.pan, voice.squaredControllers, voice.panLeft, voice.panRight);
                 }
             for (auto& voice : pcmPool_)
                 if (voice.active && voice.channel == int(e.ch) && voice.keyNote >= 0 && !voice.panLocked) {
                     voice.pan = c.pan;
-                    channelPanGains(c.pan, c.squaredControllers, voice.panLeft, voice.panRight);
+                    channelPanGains(c.pan, voice.squaredControllers, voice.panLeft, voice.panRight);
                 }
             break;
         case Ev::Modulation:
             if (e.b == 1) c.octShift = e.a - 1000;    // octave-shift marker
-            else if (c.squaredControllers && e.a >= 0 && e.a <= 127) {
+            else if (e.a >= 0 && e.a <= 127) {
                 // MA7 SMAF guideline8.3.2/Table6: magnify each voice's own
                 // vibrato by OFF,1,2,4,8. No effect on tremolo or recorded Audio.
                 c.vibratoScale = e.a == 0 ? 0.0 : double(1 << (e.a / 32));
-                for (auto& voice : pool_)
-                    if (voice.active() && voice.channel == int(e.ch)) voice.setVibratoScale(c.vibratoScale);
+                for (int i = 0; i < kPoolSize; ++i)
+                    if (pool_[i].active() && pool_[i].channel == int(e.ch) && poolSquaredControllers_[i])
+                        pool_[i].setVibratoScale(c.vibratoScale);
                 for (auto& voice : pcmPool_)
-                    if (voice.active && voice.channel == int(e.ch) && voice.keyNote >= 0)
+                    if (voice.active && voice.channel == int(e.ch) && voice.keyNote >= 0 && voice.squaredControllers)
                         voice.vibDepth = voice.baseVibDepth * c.vibratoScale;
             }
             break;
@@ -1916,6 +1942,15 @@ void MaPlayer::fireEvent_(const Ev& e) {
         } break;
         case Ev::Ma7NoteOn:
         case Ev::NoteOn: {
+            Chan c = chans_[e.ch & 127];
+            if (e.sourceProfile & 1) {
+                c.modernTimbre = !e.handyPhoneNote;
+                c.squaredControllers = e.type == Ev::Ma7NoteOn;
+                c.rhythm = (e.sourceProfile & 2) != 0;
+                c.fixedFmDrumPitch = (e.sourceProfile & 4) != 0;
+                c.volume = c.volumeFor(c.squaredControllers);
+                c.expression = c.expressionFor(c.squaredControllers);
+            }
             int soundingNote = e.a + c.octShift;
             if (e.b <= 0) break; // explicit/running zero velocity is silent
             float vel01 = e.b / 127.0f;
@@ -2027,6 +2062,7 @@ void MaPlayer::fireEvent_(const Ev& e) {
             pool_[slot].channel = e.ch;
             pool_[slot].note_   = midi;                 // sounding pitch (for bend)
             poolNoteId_[slot] = e.noteId;
+            poolSquaredControllers_[slot] = c.squaredControllers;
             pool_[slot].setVolume(c.volume * c.expression);
             // gm-style squared velocity curve: linear velocity made every mid-
             // velocity note nearly full-scale and the mix bus pump the limiter.
