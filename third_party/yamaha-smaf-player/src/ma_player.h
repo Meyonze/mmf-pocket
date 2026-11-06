@@ -21,6 +21,7 @@
 
 #include "smaf_file.h"
 #include "ma_fm_core.h"
+#include "pcm_silence.h"
 #include "smaf_voice.h"
 #include "score_audit.h"
 
@@ -146,8 +147,7 @@ private:
         // Only the newly supported MA-7 signed8 path opts in. Preserve older
         // codecs' source/EOF lifetimes, including silent tails.
         bool retireSilentLoop = false;
-        size_t zeroPrefix = 0; // exact leading zeros, classified once after decoding
-        size_t zeroSuffixStart = 0; // first sample after the final nonzero sample
+        pcm_detail::SilenceIndex silence; // immutable decoded-range classification
     };
     struct PcmVoice {
         const int16_t* pcm = nullptr; size_t len = 0;

@@ -25,12 +25,6 @@
 namespace fxchain::smaf {
 
 namespace {
-size_t zeroPcmPrefix(const std::vector<int16_t>& pcm) {
-    return size_t(std::find_if(pcm.begin(),pcm.end(),[](int16_t s){return s!=0;})-pcm.begin());
-}
-size_t zeroPcmSuffixStart(const std::vector<int16_t>& pcm) {
-    return size_t(std::find_if(pcm.rbegin(),pcm.rend(),[](int16_t s){return s!=0;}).base()-pcm.begin());
-}
 constexpr double kSafetySeconds = 600.0;   // hard cap so a broken loop can't hang
 constexpr size_t kMaxEvents     = 400000;  // total decoded-event ceiling (anti-DoS)
 constexpr size_t kMaxCustomVoices = 2048;  // cap malformed exclusive-message floods
@@ -537,9 +531,8 @@ void MaPlayer::buildWaveBank_(const SmafFile& file) {
                         ? (int(w.data[i]) < 128 ? int(w.data[i]) : int(w.data[i]) - 256)
                         : int(w.data[i]) - 128) * 256);
             }
-            ps.zeroPrefix = zeroPcmPrefix(ps.pcm);
-            ps.zeroSuffixStart = zeroPcmSuffixStart(ps.pcm);
             if (!t.isAudioTrack) {
+                ps.silence.build(ps.pcm);
                 if (size_t(w.number) >= waveBank_.size()) waveBank_.resize(w.number + 1);
                 waveBank_[w.number] = ps;
                 auto& bank = scoreWaveBanks_[t.trackNumber];
@@ -636,8 +629,7 @@ bool MaPlayer::decodeVoiceWave_(const uint8_t* p, size_t n, PcmSample& out,
             out.pcm = std::move(pcm);
             out.retireSilentLoop = p[6] == 3;
         }
-        out.zeroPrefix = zeroPcmPrefix(out.pcm);
-        out.zeroSuffixStart = zeroPcmSuffixStart(out.pcm);
+        out.silence.build(out.pcm);
         return !out.pcm.empty();
     }
     // MA-3 voice waves use seven-bit transport for ADPCM or unsigned PCM8.
@@ -660,8 +652,7 @@ bool MaPlayer::decodeVoiceWave_(const uint8_t* p, size_t n, PcmSample& out,
         out.pcm = std::move(pcm);
     }
     out.retireSilentLoop = false;
-    out.zeroPrefix = zeroPcmPrefix(out.pcm);
-    out.zeroSuffixStart = zeroPcmSuffixStart(out.pcm);
+    out.silence.build(out.pcm);
     // Playback rate belongs to the selecting PCM patch's Fs, not this block.
     return !out.pcm.empty();
 }
@@ -1472,11 +1463,10 @@ bool MaPlayer::startPcm_(int ch, int rawNote, int soundingNote, const ParsedVoic
     pv.loop = v.pcm.loop && v.pcm.loopPt >= 0 && size_t(v.pcm.loopPt) < pv.loopEnd;
     // FIR/linear interpolation uses this same exclusive endpoint. Samples
     // outside it cannot make this allocated source audible.
-    pv.zeroSource = ws->zeroPrefix >= pv.loopEnd;
-    pv.zeroLoopTail = pv.loop && ws->zeroSuffixStart <= pv.loopStart;
-    pv.silentLoop = ws->retireSilentLoop && pv.loop &&
-        std::all_of(ws->pcm.begin() + pv.loopStart, ws->pcm.begin() + pv.loopEnd,
-                    [](int16_t sample) { return sample == 0; });
+    pv.zeroSource = ws->silence.zero(ws->pcm,0,pv.loopEnd);
+    const bool zeroLoop = pv.loop && ws->silence.zero(ws->pcm,pv.loopStart,pv.loopEnd);
+    pv.zeroLoopTail = zeroLoop;
+    pv.silentLoop = ws->retireSilentLoop && zeroLoop;
     pv.env.configure(v.pcm.env, double(rate_)); pv.env.keyOn();
     pv.gain = float(std::pow(10.0, -0.75 * double(v.pcm.env.tl) / 20.0));
     // Match FM voices: authored note velocity is part of the musical balance,

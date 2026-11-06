@@ -24,7 +24,7 @@ SmafFile base(bool pcm) {
     if(pcm) {
         voice={0x43,0x79,7,0x7f,1,0,0,0,0,1,
             0x1f,0x40,0,0,0,0xf0,0xf0,0,0,0,0,0,0,0,80,1};
-        WaveData wave;wave.number=1;wave.bitsPerSample=16;wave.samplingRate=8000;
+        WaveData wave;wave.number=1;wave.adpcm=false;wave.bitsPerSample=16;wave.samplingRate=8000;
         for(int i=0;i<80;++i) {
             const auto v=uint16_t(int16_t(std::lround(4000*std::sin(6.283185307179586*i/40))));
             wave.data.push_back(uint8_t(v>>8));wave.data.push_back(uint8_t(v));

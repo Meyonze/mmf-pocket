@@ -2,7 +2,7 @@
 
 ## Unreleased: current DSP and comparison workflow
 
-The current batch uses render cache **r79**, invalidating older rendered audio.
+The current batch uses render cache **r80**, invalidating older rendered audio.
 It combines bounded high-rate PCM reconstruction, corrected Yamaha ADPCM
 rounding, continuous FM phase during Nyquist suppression, complete HPS/VMA bank
 identity, completed-carrier release classification and provably silent-tail
@@ -10,6 +10,14 @@ completion. The changes below
 are software improvements; they do not establish handset-calibrated timbres or
 perceptual equivalence. Detailed probes and limits are in
 [DSP review evidence](dsp-review.md).
+
+### Exact PCM subrange classification (r80)
+
+A decoded-source index records occupied64-sample blocks. Prefix counts plus
+at most126 edge samples prove silence inside the allocated LP..EP range,
+without scanning a long loop at each NoteOn. This also recognizes zero loops
+when unused data after EP is nonzero. Existing prefix/whole-source silence and
+signed-only in-score retirement remain exact. See [silent voice allocation](silent-voice-allocation.md).
 
 ### Completed attack followed by a zero PCM loop at EOF (r79)
 

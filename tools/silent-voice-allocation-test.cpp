@@ -24,7 +24,7 @@ SmafFile base(bool pcm,int format,int silentWave=0) {
     if(pcm) {
         voice={0x43,0x79,7,0x7f,1,0,0,0,0,1,
             0x1f,0x40,0,0,0,0xf0,0xf0,0,0,0,0,0,0,0,80,1};
-        WaveData wave;wave.number=1;wave.bitsPerSample=16;wave.samplingRate=8000;
+        WaveData wave;wave.number=1;wave.adpcm=false;wave.bitsPerSample=16;wave.samplingRate=8000;
         for(int i=0;i<80;++i) {
             const auto v=uint16_t(int16_t(std::lround(4000*std::sin(6.283185307179586*i/40))));
             wave.data.push_back(uint8_t(v>>8));wave.data.push_back(uint8_t(v));
@@ -359,11 +359,11 @@ void zeroPcmEof() {
 }
 void zeroLoopPcmEof() {
     unsigned cases=0;
-    for(int format:{2,3})for(int rate:{8000,44100,48000})for(int loopStart:{1,16,64})for(bool future:{false,true}) {
+    for(int format:{2,3})for(int rate:{8000,44100,48000})for(int loopStart:{1,16,64})for(bool future:{false,true})for(bool unusedSuffix:{false,true}) {
         auto fixture=[&](bool oracle){auto f=base(true,format);auto& setup=f.tracks[0].setupData;
             setup[2+14]|=8;setup[2+22]=uint8_t(loopStart);setup[2+25]=2;
             if(oracle){Bytes bulk={0x43,0x79,8,0x7f,0x23,2,3,16};bulk.insert(bulk.end(),79,0);exclusive(f,bulk);}
-            else {auto wave=f.tracks[0].waves[0];wave.number=2;wave.adpcm=false;wave.data.assign(160,0);wave.data[0]=16;f.tracks[0].waves.push_back(wave);}
+            else {auto wave=f.tracks[0].waves[0];wave.number=2;wave.adpcm=false;wave.data.assign(160,0);wave.data[0]=16;if(unusedSuffix){wave.data.push_back(0);wave.data.push_back(1);}f.tracks[0].waves.push_back(wave);}
             auto& seq=f.tracks[0].sequenceData;seq={0,uint8_t(format==2?0x90:0x10),60,100,3};
             if(future)seq.insert(seq.end(),{10,uint8_t(format==2?0xc1:0x41),2,0,uint8_t(format==2?0x91:0x11),60,100,5,10,0xff,0x2f,0});
             else seq.insert(seq.end(),{20,0xff,0x2f,0});return f;
