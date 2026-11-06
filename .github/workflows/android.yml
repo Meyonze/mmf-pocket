@@ -237,6 +237,11 @@ jobs:
           c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Ithird_party/yamaha-smaf-player/src tools/fm-channel-prototype-test.cpp build/native-sanitizer/libsmaf.a -o fm-channel-prototype-test
           ./fm-channel-prototype-test
 
+      - name: Check delayed FM stop boundaries and retrigger preservation
+        run: |
+          c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Ithird_party/yamaha-smaf-player/src tools/fm-timed-stop-prototype-test.cpp build/native-sanitizer/libsmaf.a -o fm-timed-stop-prototype-test
+          ./fm-timed-stop-prototype-test
+
       - name: Check unmodulated FM carrier bandlimiting
         run: |
           c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Ithird_party/yamaha-smaf-player/src tools/fm-bandlimit-test.cpp build/native-sanitizer/libsmaf.a -o fm-bandlimit-test
