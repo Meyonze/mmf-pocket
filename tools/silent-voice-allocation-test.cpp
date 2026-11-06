@@ -240,5 +240,62 @@ void zeroPcmAllocation() {
     }
     std::cout<<"Whole-zero PCM allocation PASS:24 cases\n";
 }
-int main(){zeroPcmAllocation();unboundWaveCertificate();unboundWaveAllocation();allocation();envelopeCertificate();reversibleSuppression();}
+Bytes packWave(const Bytes& raw) {
+    Bytes packed;
+    for(size_t i=0;i<raw.size();i+=7){uint8_t mask=0;const size_t n=std::min(size_t(7),raw.size()-i);
+        for(size_t j=0;j<n;++j)mask|=uint8_t((raw[i+j]>>7)<<(6-j));
+        packed.push_back(mask);for(size_t j=0;j<n;++j)packed.push_back(raw[i+j]&127);}
+    return packed;
+}
+void zeroPcmCodecs() {
+    unsigned cases=0;
+    for(int format:{2,3})for(int kind=0;kind<7;++kind)for(bool inSequence:{false,true}) {
+        if(kind<2&&inSequence)continue;
+        auto fixture=[&](bool withSilent){auto f=dense(true,format,false,withSilent,false,false);
+            auto& setup=f.tracks[0].setupData;const size_t second=2+setup[1];
+            setup[second+2+16]=0xf0;setup[second+2+25]=2;
+            if(kind<2){auto wave=f.tracks[0].waves[0];wave.number=2;wave.adpcm=false;wave.bitsPerSample=8;
+                wave.signedPcm8=kind==1;wave.data.assign(80,uint8_t(kind==0?128:0));f.tracks[0].waves.push_back(wave);}
+            else {Bytes raw(80,uint8_t(kind==5||kind==6?0:128)),bulk;
+                if(kind==2){bulk={0x43,0x79,6,0x7f,3,2,2};const auto packed=packWave(raw);bulk.insert(bulk.end(),packed.begin(),packed.end());}
+                else {bulk={0x43,0x79,uint8_t(kind==3?7:8),0x7f,uint8_t(kind==3?3:0x23),2,uint8_t(kind==5?3:kind==6?0:2)};
+                    bulk.insert(bulk.end(),raw.begin(),raw.end());}
+                if(inSequence){Bytes prefix={0,0xf0,uint8_t(bulk.size()+1)};prefix.insert(prefix.end(),bulk.begin(),bulk.end());prefix.push_back(0xf7);
+                    auto& seq=f.tracks[0].sequenceData;seq.insert(seq.begin(),prefix.begin(),prefix.end());}
+                else exclusive(f,bulk);
+            }
+            return f;
+        };
+        MaPlayer reference;require(reference.init(fixture(false),8000),"codec reference initializes");const auto expected=drain(reference,257);
+        for(int block:{1,257,1024}){MaPlayer actual;require(actual.init(fixture(true),8000),"codec pressure initializes");const auto audio=drain(actual,block);
+            require(actual.diagnostics().fallbackNotes==0&&actual.diagnostics().pcmNotes==unsigned(capacity(true,format)+1),"codec binds RAM/stream PCM without fallback");
+            if(kind==6){require(actual.diagnostics().stolenHeldPcm==1,"zero ADPCM bytes decode nonzero and must remain protected");}
+            else {require(audio==expected&&actual.diagnostics().stolenHeldPcm==0,"decoded zero PCM codec does not displace audible parts");}
+            if(block==257){actual.seekToStart();require(drain(actual,block)==audio,"codec classification survives version reset and seek");}
+            ++cases;
+        }
+    }
+    std::cout<<"Zero PCM codec coverage PASS: "<<cases<<" cases including packed/raw RAM, setup/inline, signedness and nonzero ADPCM\n";
+}
+void zeroPcmVersionLifetime() {
+    for(int format:{2,3})for(bool initiallyZero:{false,true}) {
+        auto fixture=[&](bool withSilent,bool update){auto f=dense(true,format,false,withSilent,false,false);
+            auto& setup=f.tracks[0].setupData;const size_t second=2+setup[1];setup[second+2+16]=0xf0;setup[second+2+25]=2;
+            Bytes initial={0x43,0x79,8,0x7f,0x23,2,2};initial.insert(initial.end(),80,uint8_t(initiallyZero?128:144));exclusive(f,initial);
+            TrackChunk activation;activation.trackNumber=1;activation.formatType=uint8_t(format);activation.durationTimeBase=activation.gateTimeBase=0x10;
+            if(update){Bytes replacement={0x43,0x79,8,0x7f,0x23,2,2};replacement.insert(replacement.end(),80,uint8_t(initiallyZero?144:128));
+                activation.sequenceData={1,0xf0,uint8_t(replacement.size()+1)};auto& seq=activation.sequenceData;
+                seq.insert(seq.end(),replacement.begin(),replacement.end());seq.push_back(0xf7);seq.insert(seq.end(),{29,0xff,0x2f,0});}
+            else activation.sequenceData={30,0xff,0x2f,0};
+            f.tracks.push_back(activation);return f;
+        };
+        MaPlayer reference;require(reference.init(fixture(!initiallyZero,false),8000),"version lifetime reference initializes");const auto expected=drain(reference,257);
+        for(int block:{1,257,1024}){MaPlayer actual;require(actual.init(fixture(true,true),8000),"timed version pressure initializes");
+            require(drain(actual,block)==expected,"timed RAM replacement must not reclassify a held note's immutable PCM source");
+            require(actual.diagnostics().stolenHeldPcm==unsigned(!initiallyZero),"pressure uses the allocated source's silence classification");
+            if(block==257){actual.seekToStart();require(drain(actual,block)==expected,"seek restores original PCM source and classification");}}
+    }
+    std::cout<<"PCM version lifetime PASS:12 cases, zero/nonzero transitions while held\n";
+}
+int main(){zeroPcmVersionLifetime();zeroPcmCodecs();zeroPcmAllocation();unboundWaveCertificate();unboundWaveAllocation();allocation();envelopeCertificate();reversibleSuppression();}
 
