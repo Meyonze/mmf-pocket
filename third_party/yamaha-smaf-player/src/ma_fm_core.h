@@ -153,7 +153,7 @@ public:
     // Pitch/CC1 changes may clear it: use only after future events are exhausted.
     // Keep ticking this operator during the score to preserve phase/envelope.
     bool muted(double vibratoScale = 1.0) const {
-        bool pitchMuted = nyMute_;
+        bool pitchMuted = phaseInc_ >= 0.5;
         if (pitchMuted && modernTimbre_ && vibAmt_ != 0.0) {
             const double depth = vibAmt_ * (vibratoScale < 0 ? -vibratoScale : vibratoScale);
             pitchMuted = phaseInc_ * (1.0 - depth) >= 0.5;
@@ -175,7 +175,7 @@ private:
     double kslGain_    = 1.0;   // key-scale level attenuation (freq-dependent)
     double vibAmt_     = 0.0;   // vibrato depth as a phase-inc factor
     float  amAmt_      = 0.0f;  // tremolo depth as a linear gain span
-    bool   nyMute_     = false; // nominal increment>=0.5; modern EVB checks actual increment
+    bool   cachedMute_ = false; // nominal Nyquist or an exactly stopped attack
     uint8_t wave_      = 0;
     bool modernTimbre_ = false;
     bool blepEnabled_ = false;

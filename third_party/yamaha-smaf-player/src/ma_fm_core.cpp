@@ -538,7 +538,10 @@ void FmOperator::recalc_() {
     // nyquist guard: a high note through a high MULTI (percussion patches use
     // 14/15) can land the operator above fs/2; mute it instead of splattering
     // alias noise across the band.
-    nyMute_ = (phaseInc_ >= 0.5);
+    // A raw MA7 AR1 has its low bit set and must remain audible. Only
+    // configured attack rate zero is permanently silent after noteOn.
+    // Reuse the existing cached guard, adding no per-tick envelope test.
+    cachedMute_ = (phaseInc_ >= 0.5) || (patch_.ar == 0 && (patch_.rateLowBits & 8) == 0);
 }
 
 void FmOperator::noteOn(double freqHz) {
@@ -638,8 +641,9 @@ float FmOperator::tick(double modCycles, double lfoSin, double vibratoScale) {
     // moving so a pitch bend back into range resumes the integrated phase.
     // Modern intrinsic vibrato can cross Nyquist in either direction. Use
     // the increment already applied to source time, not its nominal pitch.
-    // Preserve the legacy profile and non-vibrating paths exactly.
-    const bool nyquistMute = modernTimbre_ && vibAmt_ != 0.0 ? inc >= 0.5 : nyMute_;
+    // The cached path also skips stopped attacks. Modern EVB retains its
+    // actual-increment guard, including its existing zero-output arithmetic.
+    const bool nyquistMute = modernTimbre_ && vibAmt_ != 0.0 ? inc >= 0.5 : cachedMute_;
     if (nyquistMute) return 0.0f;
     const double effectivePhase = phase_ + modCycles;
     // Related Yamaha waveform chart and independent MA3 model agree that
