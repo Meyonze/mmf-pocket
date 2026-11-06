@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fm-native-clock-probe.h"
 #include "fm-timed-stop-prototype.h"
+#include "fm-replay-stop-reference.h"
 #include <cstdlib>
 #include <iostream>
 #include <limits>
@@ -14,28 +15,33 @@ bool event(int mode,int n){
     if(mode==1)return n==100;
     if(mode==2)return n==100||n==172||n==245;
     if(mode==3)return (n>=80&&n<240)||(n>=240&&n<340&&n%7==0)||n==600;
+    if(mode>=4&&mode<=7)return n>=80&&n<340&&(n-80)%(mode-2)==0;
+    if(mode==8)return n>=80&&n<340&&(n%10==0||n%10==1||n%10==5);
     return false;
 }
 void timelines(){constexpr int frames=720;size_t checks=0;
     for(int factor:{2,4,8,16,32}){const auto config=alignedConfig(factor);const auto h=dense(config);
         const int pad=72-int(Decimator(config).delayFrames());
-        for(int mode=0;mode<4;++mode){std::vector<Stereo> high(size_t(frames*factor)),native(frames);
+        for(int mode=0;mode<9;++mode){std::vector<Stereo> high(size_t(frames*factor)),native(frames);
             for(int n=0;n<430;++n){if(n>=10)native[size_t(n)]={.02*std::cos(n*.11),.03*std::sin(n*.17)};
                 for(int j=0;j<factor;++j)if(n>=20&&!(n>=350&&n<380)){double t=n+double(j+1)/factor;
                     high[size_t(n*factor+j)]={.2*std::sin(t*.37),-.1*std::cos(t*.29)};}}
-            for(int block:{1,7,64,257}){TimedStopPrototype actual(factor);AlignedBus unchanged(factor);int cut=0,lastReset=0;uint64_t dueCount=0;
+            for(int block:{1,7,64,257}){TimedStopPrototype actual(factor);ReplayStopReference replay(factor);AlignedBus unchanged(factor);int cut=0,lastReset=0;uint64_t dueCount=0;
                 for(int begin=0;begin<frames;begin+=block)for(int n=begin;n<std::min(frames,begin+block);++n){
-                    if(mode==3&&n==280){actual.reset();cut=lastReset=n;dueCount=0;}
+                    if(mode==3&&n==280){actual.reset();replay.reset();cut=lastReset=n;dueCount=0;}
                     const int due=n-72;if(due>=lastReset&&event(mode,due)){cut=due;++dueCount;}
                     auto y=actual.frame(std::span<const Stereo>(high.data()+n*factor,size_t(factor)),native[size_t(n)],event(mode,n));
+                    const auto oldReplay=replay.frame(std::span<const Stereo>(high.data()+n*factor,size_t(factor)),native[size_t(n)],event(mode,n));
+                    require(std::abs(y.left-oldReplay.left)<2e-13&&std::abs(y.right-oldReplay.right)<2e-13,"fast path differs from frozen replay baseline");
+                    require(actual.pendingFrames()==replay.pendingFrames(),"fast path changed pending audio/control lifetime");
                     if(mode==0){const auto old=unchanged.frame(high.data()+n*factor,size_t(factor),native[size_t(n)]);
                         require(y.left==old.left&&y.right==old.right,"no-stop output changed from existing bus");}
                     Stereo expected{};const int latest=(n-pad+1)*factor-1;
                     for(size_t k=0;k<h.size();++k){int p=latest-int(k);if(p>=cut*factor){expected.left+=high[size_t(p)].left*h[k];expected.right+=high[size_t(p)].right*h[k];}}
                     if(n-72>=cut){expected.left+=native[size_t(n-72)].left;expected.right+=native[size_t(n-72)].right;}
                     require(std::abs(y.left-expected.left)<2e-13&&std::abs(y.right-expected.right)<2e-13,"timed stop/retrigger/reset disagrees with independent gated convolution");
-                    require(actual.replayedFrames()==dueCount*73,"stop consumed at wrong frame or replay work not bounded");
-                    require(actual.retainedInputFrames()==73,"history grew with stop count");++checks;
+                    require(replay.replayedFrames()==dueCount*73&&actual.replayedFrames()<=replay.replayedFrames(),"stop consumed at wrong frame or replay work increased");
+                    require(actual.retainedInputFrames()==77,"history grew with stop count");++checks;
                     if(mode==3&&n==601)require(actual.pendingFrames()>0,"pending silent stop was forgotten before output boundary");
                 }
                 require(actual.pendingFrames()==0,"EOF leaves pending audio/control work");
@@ -98,4 +104,35 @@ void realVoices(){using namespace fxchain::smaf;constexpr int factor=8,frames=60
     require(held&&restarted,"lost held old note or retriggered new note");require(timed.pendingFrames()==0,"real note EOF incomplete");
     std::cout<<"Real FM Hold, consecutive stops, same-frame NoteOn, PCM and other channel PASS\n";
 }
-int main(){timelines();nativeBoundaryAndRestart();invalidInputAndReset();realVoices();}
+void boundedRuns(){
+    for(int factor:{2,4,8,16,32})for(int period:{1,2,3,4,5,256}){
+        TimedStopPrototype actual(factor);ReplayStopReference replay(factor);std::array<Stereo,32> input;input.fill({.1,-.2});
+        uint64_t stops=0;
+        for(int n=0;n<600;++n){const bool stop=n<300&&n%period==0;stops+=stop;
+            auto data=n<300?std::span<const Stereo>(input.data(),size_t(factor)):std::span<const Stereo>{};
+            const auto a=actual.frame(data,{},stop),b=replay.frame(data,{},stop);
+            require(std::abs(a.left-b.left)<2e-13&&std::abs(a.right-b.right)<2e-13,"stop-run transition differs from baseline");}
+        require(replay.replayedFrames()==stops*73,"frozen replay counter");
+        if(period<=4)require(actual.replayedFrames()==73&&actual.directFrames()>0,"nearby stop run must rebuild only once");
+        else require(actual.replayedFrames()==stops*73&&actual.directFrames()==0,"isolated stops must keep original path");
+        require(actual.pendingFrames()==0,"run does not drain after normal path resumes");
+    }
+    std::cout<<"Nearby stop runs rebuild once; sparse stops preserve original path PASS\n";
+}
+void silentAndTinyRuns(){
+    for(int factor:{2,4,8,16,32})for(bool fm:{false,true}){
+        TimedStopPrototype actual(factor);ReplayStopReference replay(factor);std::array<Stereo,32> input;input.fill({1e-100,-2e-100});bool heard=false;
+        for(int n=0;n<300;++n){const bool stop=n<100;
+            const auto data=fm&&n==80?std::span<const Stereo>(input.data(),size_t(factor)):std::span<const Stereo>{};
+            const Stereo native=!fm&&n==80?Stereo{1e-100,-2e-100}:Stereo{};
+            const auto a=actual.frame(data,native,stop),b=replay.frame(data,native,stop);
+            require(std::abs(a.left-b.left)<=std::max(1e-120,std::abs(b.left)*1e-12)&&
+                std::abs(a.right-b.right)<=std::max(1e-120,std::abs(b.right)*1e-12),"quiet-run shortcut dropped tiny FM or PCM");
+            require(actual.pendingFrames()==replay.pendingFrames(),"quiet-run shortcut changed lifetime");
+            if(n==152)heard=a.left!=0;
+        }
+        require(heard&&actual.pendingFrames()==0,"tiny note after silent run was lost or not drained");
+    }
+    std::cout<<"Silent stop runs preserve tiny FM/PCM wakeup PASS\n";
+}
+int main(){timelines();nativeBoundaryAndRestart();invalidInputAndReset();realVoices();boundedRuns();silentAndTinyRuns();}
