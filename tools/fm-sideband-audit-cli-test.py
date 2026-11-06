@@ -125,10 +125,43 @@ class SidebandCliTest(unittest.TestCase):
         self.assertGreater(error(8), .1)
         self.assertLess(error(32), 1e-4)
 
+    def test_aligned_native_clock_experiments(self):
+        r = self.report('--aligned-oversampling')
+        self.assertIn('Native-frame', r['source_clock'])
+        self.assertIn('Streaming FIR', r['oversampling_scope'])
+        self.assertEqual(r['aligned_warmup_frames'], 256)
+        layouts = {2: ([257], 64, 65), 4: ([33, 257], 68, 83),
+                   8: ([33, 33, 257], 70, 119), 16: ([33, 33, 33, 257], 71, 191),
+                   32: ([33, 33, 33, 37, 257], 72, 337)}
+        controls = r['aligned_filter_controls']
+        self.assertEqual(len(controls), 5)
+        measured = [x for x in r['results'] if 'aligned_oversampling' in x]
+        self.assertEqual(len(measured), 12)
+        groups = [controls] + [x['aligned_oversampling'] for x in measured]
+        for group in groups:
+            self.assertEqual([x['factor'] for x in group], list(layouts))
+            for x in group:
+                taps, delay, work = layouts[x['factor']]
+                self.assertEqual(x['stage_taps'], taps)
+                self.assertEqual(x['group_delay_frames'], delay)
+                self.assertEqual(x['fir_multiplies_per_output'], work)
+                self.assertEqual(x['common_delay_frames'], 72)
+                self.assertEqual(x['padding_frames'], 72 - delay)
+                self.assertEqual(x['pipeline_tail_bound_frames'], 72 + delay)
+                self.assertTrue(all(math.isfinite(v) for k, v in x.items() if k != 'stage_taps'))
+        for row in measured:
+            for x in row['aligned_oversampling']:
+                self.assertEqual(x['native_operator_ticks_per_output'], 2)
+                self.assertLess(x['fir_equation_error_rms'], 3e-6)
+        for x in controls:
+            self.assertLess(x['step_final_error'], 1e-12)
+            self.assertLess(abs(x['gain_1000hz_db']), .05)
+
     def test_arguments(self):
         self.assertEqual(self.run_cli('--help').returncode, 0)
         for argv in (('--unknown',), ('--self-test', 'extra'), ('--oversampling', 'extra'), ('--causal-oversampling', 'extra'),
-                     ('--oversampling', '--causal-oversampling')):
+                     ('--oversampling', '--causal-oversampling'), ('--aligned-oversampling', 'extra'),
+                     ('--aligned-oversampling', '--causal-oversampling')):
             with self.subTest(argv=argv):
                 p = self.run_cli(*argv)
                 self.assertEqual(p.returncode, 2)

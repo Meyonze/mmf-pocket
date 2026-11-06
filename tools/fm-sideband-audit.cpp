@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Steady sine PM oracle: software alias measurement, not handset calibration.
-#include "ma_fm_core.h"
+#include "fm-native-clock-probe.h"
 #include "fm-causal-decimator.h"
 #include <algorithm>
 #include <cmath>
@@ -64,13 +64,24 @@ std::vector<double> idealDecimate(const std::vector<double>& input,int factor) {
         require(std::abs(x.imag())<1e-8,"ideal low-pass result is real");out[i]=x.real();}
     return out;
 }
-std::vector<double> filteredEquation(const Case& c,int factor,int taps,int warmup,double fraction,int lastTaps) {
+std::vector<double> renderNativeClock(const Case& c,int factor,int outputFrames) {
+    FmVoicePatch patch;patch.modernTimbre=true;patch.algorithm=0;patch.fourOp=false;
+    for(int i=0;i<2;++i){auto& p=patch.ops[i];p.wave=0;p.ar=15;p.dr=p.sr=p.sl=0;p.tl=uint8_t(i==0?c.tl:0);
+        p.multi=uint8_t(i==0?c.modulator:c.carrier);p.ma35Multipliers=c.vm35;}
+    FmVoice voice;voice.setSampleRate(rate);voice.setVolume(1);voice.noteOn(patch,rate*c.base/frames,1);
+    std::vector<double> signal(size_t(outputFrames)*size_t(factor));std::array<float,32> sub{};
+    for(int n=0;n<outputFrames;++n){const auto r=fm_probe::frame(voice,std::span<float>(sub.data(),size_t(factor)));
+        require(r.reconstructedEndpoint==r.native,"aligned source endpoint mismatch");
+        for(int j=0;j<factor;++j)signal[size_t(n*factor+j)]=sub[size_t(j)];}
+    return signal;
+}
+std::vector<double> filteredEquation(const Case& c,const fm_causal::Config& config,int warmup,int padding=0) {
     const auto b=coefficients(index(c));std::vector<double> out(frames,0.);
     for(int n=-maxOrder;n<=maxOrder;++n) {
         const int bin=c.base*(c.carrier+n*c.modulator);
-        const auto h=fm_causal::response(factor,taps,tau*bin/(frames*factor),fraction,lastTaps);
+        const auto h=fm_causal::response(config,tau*bin/(frames*config.factor));
         const double gain=.7*coefficient(b,n);
-        for(int i=0;i<frames;++i)out[i]+=gain*std::imag(h*std::polar(1.,tau*bin*double(i+1+warmup)/frames));
+        for(int i=0;i<frames;++i)out[i]+=gain*std::imag(h*std::polar(1.,tau*bin*double(i+1+warmup-padding)/frames));
     }
     return out;
 }
@@ -94,63 +105,79 @@ void selfTest() {
         higher[i]=.7*std::sin(tau*34*double(i+1)/higher.size())+.2*std::sin(tau*2300*double(i+1)/higher.size());}
         require(error(idealDecimate(higher,factor),pure)<1e-10,"ideal low-pass phase/alignment/gain mismatch");}
 }
-void causalReport(const Case& c) {
+struct Design {fm_causal::Config config;int early,last;};
+std::vector<Design> designs(int factor,bool aligned) {
+    if(aligned){auto c=fm_causal::alignedConfig(factor);return {{c,c.taps.front(),c.taps.back()}};}
+    std::vector<Design> out;
+    for(auto sizes:std::vector<std::pair<int,int>>{{31,31},{63,63},{127,127},{31,255}})for(double f:{1.,.95})
+        out.push_back({fm_causal::uniformConfig(factor,sizes.first,f,sizes.second),sizes.first,sizes.second});
+    return out;
+}
+void alignmentFields(const Design& design,const fm_causal::Decimator& d) {
+    std::cout<<",\"stage_taps\":[";bool first=true;for(int taps:design.config.taps){if(!first)std::cout<<',';first=false;std::cout<<taps;}
+    std::cout<<"],\"common_delay_frames\":72,\"padding_frames\":"<<72-int(d.delayFrames())
+        <<",\"pipeline_tail_bound_frames\":"<<d.supportBoundFrames()+72-int(d.delayFrames());
+}
+void causalReport(const Case& c,bool aligned=false) {
     constexpr int warmup=256;
-    std::cout<<",\"causal_oversampling\":[";bool first=true;
+    std::cout<<(aligned?",\"aligned_oversampling\":[":",\"causal_oversampling\":[");bool first=true;
     for(int factor:{2,4,8,16,32}) {
-        const auto input=render(c,factor,warmup+frames);
-        for(auto sizes:std::vector<std::pair<int,int>>{{31,31},{63,63},{127,127},{31,255}})for(double fraction:{1.,.95}) {
-            const int taps=sizes.first,lastTaps=sizes.second;
-            fm_causal::Decimator setup(factor,taps,fraction,lastTaps);
-            require(warmup>setup.supportBoundFrames(),"insufficient causal warmup");
-            auto all=fm_causal::stream(input,factor,taps,fraction,lastTaps);require(all.size()==size_t(warmup+frames),"causal frame count");
+        const auto input=aligned?renderNativeClock(c,factor,warmup+frames):render(c,factor,warmup+frames);
+        for(const auto& design:designs(factor,aligned)) {
+            const auto& config=design.config;fm_causal::Decimator setup(config);
+            const int padding=aligned?72-int(setup.delayFrames()):0;
+            require(warmup>setup.supportBoundFrames()+padding,"insufficient causal warmup");
+            auto all=fm_causal::stream(input,config);require(all.size()==size_t(warmup+frames),"causal frame count");
+            if(padding){std::move_backward(all.begin(),all.end()-padding,all.end());std::fill_n(all.begin(),padding,0.);}
             std::vector<double> out(all.begin()+warmup,all.end());
-            const auto exact=filteredEquation(c,factor,taps,warmup,fraction,lastTaps);
-            const auto band=reference(c,true,warmup-setup.delayFrames());
+            const auto exact=filteredEquation(c,config,warmup,padding);
+            const auto band=reference(c,true,warmup-setup.delayFrames()-padding);
             const double equationError=error(out,exact);
             require(equationError<3e-6,"streaming FIR disagrees with independent sideband response");
             if(!first)std::cout<<',';first=false;
-            std::cout<<"{\"factor\":"<<factor<<",\"early_taps\":"<<taps<<",\"final_taps\":"<<lastTaps<<",\"stages\":"<<setup.stages()
-                <<",\"last_nyquist_fraction\":"<<fraction<<",\"group_delay_frames\":"<<setup.delayFrames()<<",\"group_delay_ms\":"<<1000*setup.delayFrames()/rate
-                <<",\"support_bound_frames\":"<<setup.supportBoundFrames()<<",\"fm_operator_ticks_per_output\":"<<2*factor
+            std::cout<<"{\"factor\":"<<factor<<",\"early_taps\":"<<design.early<<",\"final_taps\":"<<design.last<<",\"stages\":"<<setup.stages()
+                <<",\"last_nyquist_fraction\":"<<config.lastFraction<<",\"group_delay_frames\":"<<setup.delayFrames()<<",\"group_delay_ms\":"<<1000*setup.delayFrames()/rate
+                <<",\"support_bound_frames\":"<<setup.supportBoundFrames()
+                <<(aligned?",\"native_operator_ticks_per_output\":":",\"fm_operator_ticks_per_output\":")<<(aligned?2:2*factor)
                 <<",\"fir_multiplies_per_output\":"<<setup.multipliesPerOutput()<<",\"rms\":"<<rms(out)
-                <<",\"aligned_band_error_rms\":"<<error(out,band)<<",\"fir_equation_error_rms\":"<<equationError<<'}';
+                <<",\"aligned_band_error_rms\":"<<error(out,band)<<",\"fir_equation_error_rms\":"<<equationError;
+            if(aligned)alignmentFields(design,setup);std::cout<<'}';
         }
     }
     std::cout<<']';
 }
-void causalControls() {
-    std::cout<<"  \"causal_warmup_frames\":256,\n  \"causal_filter_controls\":[";bool first=true;
-    for(int factor:{2,4,8,16,32})for(auto sizes:std::vector<std::pair<int,int>>{{31,31},{63,63},{127,127},{31,255}})for(double fraction:{1.,.95}) {
-        const int taps=sizes.first,lastTaps=sizes.second;
-        fm_causal::Decimator d(factor,taps,fraction,lastTaps);
+void causalControls(bool aligned=false) {
+    std::cout<<(aligned?"  \"aligned_warmup_frames\":256,\n  \"aligned_filter_controls\":[":"  \"causal_warmup_frames\":256,\n  \"causal_filter_controls\":[");bool first=true;
+    for(int factor:{2,4,8,16,32})for(const auto& design:designs(factor,aligned)) {
+        fm_causal::Decimator d(design.config);
         const std::vector<double> input(size_t((d.supportBoundFrames()+32)*factor),1.);
-        const auto step=fm_causal::stream(input,factor,taps,fraction,lastTaps);
+        const auto step=fm_causal::stream(input,design.config);
         if(!first)std::cout<<',';first=false;
-        std::cout<<"{\"factor\":"<<factor<<",\"early_taps\":"<<taps<<",\"final_taps\":"<<lastTaps<<",\"last_nyquist_fraction\":"<<fraction
+        std::cout<<"{\"factor\":"<<factor<<",\"early_taps\":"<<design.early<<",\"final_taps\":"<<design.last<<",\"last_nyquist_fraction\":"<<design.config.lastFraction
             <<",\"group_delay_frames\":"<<d.delayFrames()<<",\"group_delay_ms\":"<<1000*d.delayFrames()/rate
             <<",\"support_bound_frames\":"<<d.supportBoundFrames()<<",\"fir_multiplies_per_output\":"<<d.multipliesPerOutput()
             <<",\"step_overshoot\":"<<std::max(0.,*std::max_element(step.begin(),step.end())-1)
             <<",\"step_undershoot\":"<<std::max(0.,-*std::min_element(step.begin(),step.end()))
             <<",\"step_final_error\":"<<std::abs(step.back()-1);
         for(int hz:{1000,20000,21800,24000}) {
-            const auto gain=std::abs(fm_causal::response(factor,taps,tau*hz/(rate*factor),fraction,lastTaps));
+            const auto gain=std::abs(fm_causal::response(design.config,tau*hz/(rate*factor)));
             std::cout<<",\"gain_"<<hz<<"hz_db\":"<<20*std::log10(std::max(gain,1e-300));
         }
-        std::cout<<'}';
+        if(aligned)alignmentFields(design,d);std::cout<<'}';
     }
     std::cout<<"],\n";
 }
 void usage(std::ostream& out) {
-    out<<"Usage: fm-sideband-audit [--self-test | --oversampling | --causal-oversampling]\n"
+    out<<"Usage: fm-sideband-audit [--self-test | --oversampling | --causal-oversampling | --aligned-oversampling]\n"
        <<"JSON for96 original steady sine-PM cases. Optional ideal or streaming FIR experiments; no device-latency claim.\n";
 }
-int run(bool experiments,bool causal=false) {
-    selfTest();if(causal)fm_causal::selfTest();std::cout<<std::setprecision(12)<<"{\n  \"schema_version\":1,\n  \"sample_rate\":44100,\n  \"frames\":4096,\n"
+int run(bool experiments,bool causal=false,bool aligned=false) {
+    selfTest();if(causal||aligned)fm_causal::selfTest();std::cout<<std::setprecision(12)<<"{\n  \"schema_version\":1,\n  \"sample_rate\":44100,\n  \"frames\":4096,\n"
         <<"  \"scope\":\"Steady two-sine phase modulation; no feedback, time-varying envelopes, handset, listening, device latency or power claim\",\n"
         <<"  \"reference\":\"Jacobi-Anger sidebands, orders -96..96; only abs(f)<output Nyquist retained; discarded power is not normalized\",\n"
-        <<"  \"oversampling_scope\":\""<<(causal?"Streaming FIR experiment; filter group delay and arithmetic counts, not full player latency":"Optional offline periodic ideal low-pass, not a causal player implementation")<<"\",\n";
-    if(causal)causalControls();
+        <<"  \"oversampling_scope\":\""<<((causal||aligned)?"Streaming FIR experiment; filter group delay and arithmetic counts, not full player latency":"Optional offline periodic ideal low-pass, not a causal player implementation")<<"\",\n";
+    if(causal||aligned)causalControls(aligned);
+    if(aligned)std::cout<<"  \"source_clock\":\"Native-frame EG/LFO/allocation updates with subframe sine evaluation\",\n";
     std::cout<<"  \"results\":[\n";
     bool first=true;
     for(bool vm35:{false,true})for(int base:{1,17,67,211})for(auto ratio:std::vector<std::pair<int,int>>{{2,3},{5,7},{7,9}})for(int tl:{0,12,24,36}) {
@@ -166,7 +193,7 @@ int run(bool experiments,bool causal=false) {
         if(experiments&&base==211&&tl==0){std::cout<<",\"offline_oversampling\":[";bool firstFactor=true;
             for(int factor:{2,4,8,16,32}){const auto filtered=idealDecimate(render(c,factor),factor);if(!firstFactor)std::cout<<',';firstFactor=false;
                 std::cout<<"{\"factor\":"<<factor<<",\"error_rms\":"<<error(filtered,band)<<",\"rms\":"<<rms(filtered)<<'}';}std::cout<<']';}
-        if(causal&&base==211&&(tl==0||tl==24))causalReport(c);
+        if((causal||aligned)&&base==211&&(tl==0||tl==24))causalReport(c,aligned);
         std::cout<<'}';
     }
     std::cout<<"\n  ]\n}\n";std::cout.flush();require(bool(std::cout),"cannot write report");return 0;
@@ -175,6 +202,6 @@ int run(bool experiments,bool causal=false) {
 int main(int argc,char** argv){try{
     if(argc==2&&std::string(argv[1])=="--help"){sideband::usage(std::cout);return 0;}
     if(argc==2&&std::string(argv[1])=="--self-test"){sideband::selfTest();fm_causal::selfTest();std::cout<<"PASS: independent PM sidebands, quadrature, FFT, offline phase alignment and causal FIR controls\n";return 0;}
-    if(argc>2||(argc==2&&std::string(argv[1])!="--oversampling"&&std::string(argv[1])!="--causal-oversampling")){sideband::usage(std::cerr);return 2;}
-    return sideband::run(argc==2&&std::string(argv[1])=="--oversampling",argc==2&&std::string(argv[1])=="--causal-oversampling");
+    if(argc>2||(argc==2&&std::string(argv[1])!="--oversampling"&&std::string(argv[1])!="--causal-oversampling"&&std::string(argv[1])!="--aligned-oversampling")){sideband::usage(std::cerr);return 2;}
+    return sideband::run(argc==2&&std::string(argv[1])=="--oversampling",argc==2&&std::string(argv[1])=="--causal-oversampling",argc==2&&std::string(argv[1])=="--aligned-oversampling");
 }catch(const std::exception& e){std::cerr<<"fm-sideband-audit: "<<e.what()<<'\n';return 1;}}

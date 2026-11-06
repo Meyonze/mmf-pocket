@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Host-only streaming decimation experiment; not used by the app renderer.
 #pragma once
+#include <algorithm>
+#include <array>
+#include <bit>
 #include <cmath>
 #include <complex>
 #include <cstddef>
@@ -12,7 +15,7 @@
 namespace fm_causal {
 inline void check(bool ok,const char* message){if(!ok)throw std::runtime_error(message);}
 inline std::vector<double> kernel(int taps,double fraction=1.) {
-    check(taps==31||taps==63||taps==127||taps==255,"halfband taps must be31/63/127/255");
+    check(taps==31||taps==33||taps==37||taps==63||taps==127||taps==255||taps==257,"unsupported experimental tap count");
     check(fraction==1.||fraction==.95,"last-stage Nyquist fraction must be1/.95");
     const int middle=(taps-1)/2;const double pi=std::numbers::pi;
     std::vector<double> h(size_t(taps),0.);
@@ -31,9 +34,12 @@ class Stage {
     std::vector<double> h_,history_;
     size_t cursor_=0,mask_;
     bool odd_=false;
-    size_t stride_;
+    size_t stride_,first_;
 public:
-    explicit Stage(int taps,double fraction=1.):h_(kernel(taps,fraction)),history_(size_t(taps+1),0.),mask_(size_t(taps)),stride_(fraction==1.?2:1){}
+    explicit Stage(int taps,double fraction=1.):h_(kernel(taps,fraction)),
+        history_(std::bit_ceil(size_t(taps)),0.),mask_(history_.size()-1),
+        stride_(fraction==1.?2:1),first_(fraction==1.&&((taps-1)/2)%2?2:1){}
+    void reset(){std::fill(history_.begin(),history_.end(),0.);cursor_=0;odd_=false;}
     bool push(double input,double& output) {
         cursor_=(cursor_+1)&mask_;history_[cursor_]=input;odd_=!odd_;
         if(odd_)return false;
@@ -41,45 +47,91 @@ public:
         double sum=h_[middle]*history_[(cursor_-middle)&mask_];
         // End coefficients are zero; exact halfband stages also skip alternate zeros.
         // Symmetric pairs need one multiplication, two source loads and a sum.
-        for(size_t k=stride_;k<middle;k+=stride_)
+        for(size_t k=first_;k<middle;k+=stride_)
             sum+=h_[k]*(history_[(cursor_-k)&mask_]+history_[(cursor_-(h_.size()-1-k))&mask_]);
         output=sum;return true;
     }
 };
+struct Config {int factor;std::vector<int> taps;double lastFraction=1.;};
+inline void validateFactor(int factor){check(factor>=2&&factor<=32&&(factor&(factor-1))==0,"factor must be2/4/8/16/32");}
+inline Config uniformConfig(int factor,int taps,double fraction=1.,int lastTaps=0) {
+    validateFactor(factor);Config c{factor,{}};c.lastFraction=fraction;
+    for(int n=factor;n>1;n/=2)c.taps.push_back(n==2&&lastTaps?lastTaps:taps);return c;
+}
+inline Config alignedConfig(int factor) {
+    validateFactor(factor);Config c{factor,{}};
+    for(int n=factor;n>1;n/=2)c.taps.push_back(n==2?257:factor==32&&n==4?37:33);
+    return c;
+}
 class Decimator {
-    int factor_,taps_,lastTaps_;
-    double fraction_;
+    Config config_;
     std::vector<Stage> stages_;
 public:
-    Decimator(int factor,int taps,double fraction=1.,int lastTaps=0):factor_(factor),taps_(taps),lastTaps_(lastTaps?lastTaps:taps),fraction_(fraction) {
-        check(factor>=2&&factor<=32&&(factor&(factor-1))==0,"factor must be2/4/8/16/32");
-        (void)kernel(taps);(void)kernel(lastTaps_,fraction);
-        for(int n=factor;n>1;n/=2)stages_.emplace_back(n==2?lastTaps_:taps,n==2?fraction:1.);
+    explicit Decimator(const Config& c):config_(c) {
+        validateFactor(c.factor);check(c.taps.size()==size_t(std::bit_width(unsigned(c.factor))-1),"stage count mismatch");
+        for(size_t j=0;j<c.taps.size();++j)stages_.emplace_back(c.taps[j],j+1==c.taps.size()?c.lastFraction:1.);
     }
+    Decimator(int factor,int taps,double fraction=1.,int lastTaps=0):Decimator(uniformConfig(factor,taps,fraction,lastTaps)){}
     bool push(double input,double& output) {
-        double value=input;
-        for(auto& stage:stages_)if(!stage.push(value,value))return false;
+        double value=input;for(auto& stage:stages_)if(!stage.push(value,value))return false;
         output=value;return true;
     }
-    double delayFrames()const{return double((taps_-1)/2)*(factor_/2-1)/factor_+double((lastTaps_-1)/2)/2;}
+    void reset(){for(auto& stage:stages_)stage.reset();}
+    double delayFrames()const{double d=0;unsigned stride=1;
+        for(int taps:config_.taps){d+=double((taps-1)/2)*stride/config_.factor;stride*=2;}return d;}
     int supportBoundFrames()const{return int(std::ceil(2*delayFrames()));}
-    int multipliesPerOutput()const{return (taps_+1)/4*(factor_-2)+(fraction_==1.?(lastTaps_+1)/4:(lastTaps_-1)/2);}
+    int multipliesPerOutput()const{int cost=0,outputs=config_.factor/2;
+        for(size_t j=0;j<config_.taps.size();++j){const int taps=config_.taps[j],middle=(taps-1)/2;
+            const bool half=j+1<config_.taps.size()||config_.lastFraction==1.;
+            cost+=outputs*(half?(taps+3)/4:middle);outputs/=2;}return cost;}
     int stages()const{return int(stages_.size());}
 };
 // Independent dense frequency response, not the paired streaming accumulation.
-inline std::complex<double> response(int factor,int taps,double omega,double fraction=1.,int lastTaps=0) {std::complex<double> total=1.;
-    for(int n=factor;n>1;n/=2) {
-        const auto h=kernel(n==2&&lastTaps?lastTaps:taps,n==2?fraction:1.);
-        std::complex<double> stage=0.;
-        for(size_t k=0;k<h.size();++k)stage+=h[k]*std::polar(1.,-omega*double(k));
-        total*=stage;omega*=2;
-    }
+inline std::complex<double> response(const Config& c,double omega) {
+    std::complex<double> total=1.;
+    for(size_t j=0;j<c.taps.size();++j){const auto h=kernel(c.taps[j],j+1==c.taps.size()?c.lastFraction:1.);
+        std::complex<double> stage=0.;for(size_t k=0;k<h.size();++k)stage+=h[k]*std::polar(1.,-omega*double(k));
+        total*=stage;omega*=2;}
     return total;
 }
-inline std::vector<double> stream(const std::vector<double>& input,int factor,int taps,double fraction=1.,int lastTaps=0) {
-    Decimator d(factor,taps,fraction,lastTaps);std::vector<double> out;out.reserve(input.size()/size_t(factor));
+inline std::complex<double> response(int factor,int taps,double omega,double fraction=1.,int lastTaps=0) {
+    return response(uniformConfig(factor,taps,fraction,lastTaps),omega);
+}
+inline std::vector<double> stream(const std::vector<double>& input,const Config& c) {
+    Decimator d(c);std::vector<double> out;out.reserve(input.size()/size_t(c.factor));
     for(double x:input){double y;if(d.push(x,y))out.push_back(y);}return out;
 }
+inline std::vector<double> stream(const std::vector<double>& input,int factor,int taps,double fraction=1.,int lastTaps=0) {
+    return stream(input,uniformConfig(factor,taps,fraction,lastTaps));
+}
+struct Stereo {double left=0,right=0;};
+// Experimental common-delay bus. Full reset is for seek/global stop, not a
+// per-channel AllSoundOff policy. Zero input preserves the natural FIR tail.
+class AlignedBus {
+    int factor_,padding_;
+    Decimator left_,right_;
+    std::array<Stereo,72> nativeDelay_{};
+    std::vector<Stereo> fmDelay_;
+    size_t nativeCursor_=0,fmCursor_=0;
+public:
+    static constexpr int commonDelay=72;
+    explicit AlignedBus(int factor):factor_(factor),padding_(commonDelay-int(Decimator(alignedConfig(factor)).delayFrames())),
+        left_(alignedConfig(factor)),right_(alignedConfig(factor)),fmDelay_(size_t(padding_)) {
+        check(left_.delayFrames()==std::floor(left_.delayFrames())&&padding_>=0,"noninteger common delay");
+    }
+    Stereo frame(const Stereo* fm,size_t count,Stereo native) {
+        check(count==size_t(factor_),"wrong subframe count");Stereo filtered;int produced=0;
+        for(size_t i=0;i<count;++i){const bool a=left_.push(fm[i].left,filtered.left),b=right_.push(fm[i].right,filtered.right);
+            check(a==b,"stereo phase mismatch");produced+=a;}
+        check(produced==1,"expected one output per native frame");
+        if(!fmDelay_.empty()){const auto old=fmDelay_[fmCursor_];fmDelay_[fmCursor_]=filtered;filtered=old;fmCursor_=(fmCursor_+1)%fmDelay_.size();}
+        const auto old=nativeDelay_[nativeCursor_];nativeDelay_[nativeCursor_]=native;nativeCursor_=(nativeCursor_+1)%nativeDelay_.size();
+        return {filtered.left+old.left,filtered.right+old.right};
+    }
+    void reset(){left_.reset();right_.reset();nativeDelay_.fill({});std::fill(fmDelay_.begin(),fmDelay_.end(),Stereo{});nativeCursor_=fmCursor_=0;}
+    int tailBoundFrames()const{return left_.supportBoundFrames()+padding_;}
+    int factor()const{return factor_;}
+};
 inline void selfTest() {
     for(auto sizes:std::vector<std::pair<int,int>>{{31,31},{63,63},{127,127},{31,255}})
     for(double fraction:{1.,.95}) {

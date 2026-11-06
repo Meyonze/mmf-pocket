@@ -63,3 +63,6 @@ python3 tools/fm-sideband-audit-cli-test.py --binary build/fm-causal-audit/audit
 
 `--oversampling`は従来の理想ローパス実験のままです。標準レポートと理想実験の既存96行の
 数値は変更前と完全一致しています。アプリ、正式版、変換キャッシュは変更しません。
+
+続く[整数遅延とネイティブ時刻の試作](fm-aligned-prototype.md)では、限定した2演算器の
+EG・LFO更新を保ち、PCMとの群遅延統一、Hold・再発音・末尾・全体リセットを検証しています。
