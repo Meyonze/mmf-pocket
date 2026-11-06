@@ -75,6 +75,8 @@ Usage measure(MaPlayer& p,bool initialized,Details* details=nullptr) {
         const bool note=e.type==MaPlayer::Ev::NoteOn||e.type==MaPlayer::Ev::Ma7NoteOn;
         const auto& c=p.chans_[e.ch&127];
         const bool ma7=e.type==MaPlayer::Ev::Ma7NoteOn;
+        const bool modern=note&&(e.sourceProfile&1)?!e.handyPhoneNote:c.modernTimbre;
+        const bool rhythm=note&&(e.sourceProfile&1)?(e.sourceProfile&2)!=0:c.rhythm;
         const bool silent=note&&ma7&&(e.b==1||(c.bankMsb==121&&c.bankLsb==6));
         const int source=e.sourceTrack>=0?e.sourceTrack:c.streamTrack;
         // Same routing guard, not a wave-existence guess. This branch never
@@ -89,7 +91,7 @@ Usage measure(MaPlayer& p,bool initialized,Details* details=nullptr) {
         const auto audio=after.audioNotes-before.audioNotes,fb=after.fallbackNotes-before.fallbackNotes;
         if(details&&(note||e.type==MaPlayer::Ev::WaveOn)) {
             Route r;r.channel=e.ch;r.source=source;r.bankMsb=c.bankMsb;r.bankLsb=c.bankLsb;
-            r.program=c.program;r.note=e.a;r.modern=c.modernTimbre;
+            r.program=c.program;r.note=e.a;r.modern=modern;
             if(selected) {
                 r.definition=int(selected-p.voiceTable_.data());
                 if(selected->isPcm)r.wave=selected->pcm.waveId;
@@ -109,11 +111,11 @@ Usage measure(MaPlayer& p,bool initialized,Details* details=nullptr) {
                     ?(selected->pcm.rom?"explicit_rom_wave":"missing_ram_wave")
                     :"no_matching_supported_voice";
                 const bool romRecipe=selected&&selected->isPcm&&selected->pcm.rom
-                    &&c.modernTimbre&&FmVoicePatch::romApprox(selected->pcm.waveId);
+                    &&modern&&FmVoicePatch::romApprox(selected->pcm.waveId);
                 const bool pcmDrum=selected&&selected->valid&&selected->isPcm
                     &&(selected->key.bankMSB==125||selected->key.drumNote!=0);
-                r.substitute=romRecipe?"rom_recipe":pcmDrum||c.rhythm||c.drum||c.bankMsb==125
-                    ?"drum_recipe":c.modernTimbre?"gm_modern_recipe":"gm_legacy_recipe";
+                r.substitute=romRecipe?"rom_recipe":pcmDrum||rhythm||c.drum||c.bankMsb==125
+                    ?"drum_recipe":modern?"gm_modern_recipe":"gm_legacy_recipe";
             } else if(fm)r.reason="bound_fm";
             else if(pcm>audio)r.reason="bound_ram";
             else if(selected&&selected->isPcm&&selected->pcm.endPt==0)r.reason="ep_zero";
@@ -243,6 +245,39 @@ void selfTest() {
         Details detail;measure(atr,true,&detail);const auto& r=detail.groups.begin()->first;
         require(r.reason==(present?"bound_atr":"missing_atr_wave")&&r.source==3&&r.wave==1&&r.note==-1,
             "ATR reports its source/one-based wave, independently of score channel banks");
+    }
+    auto profileDetail=[](const SmafFile& file,bool modern,const std::string& recipe) {
+        MaPlayer player;require(player.init(file,8000),"mixed profile detail initializes");
+        Details details;const auto usage=measure(player,true,&details);
+        require(usage.fm==1&&usage.fallback==1&&details.groups.size()==1,"one mixed profile fallback route");
+        const auto& route=details.groups.begin()->first;
+        require(route.modern==modern&&route.substitute==recipe,
+                "detail uses source note timbre and rhythm, matching synthesis");
+    };
+    for(bool rhythm:{false,true}) {
+        SmafFile legacy;TrackChunk hps;hps.trackNumber=1;hps.formatType=0;
+        hps.durationTimeBase=hps.gateTimeBase=0x10;
+        hps.channelStatus.assign(2,rhythm?0x33:0);
+        hps.sequenceData={0,0x29,20,30,0,0,0};legacy.tracks.push_back(hps);
+        const std::string recipe=rhythm?"drum_recipe":"gm_legacy_recipe";
+        profileDetail(legacy,false,recipe);
+        for(int format:{2,3})for(bool first:{false,true}) {
+            auto mixed=legacy;TrackChunk inert;inert.formatType=uint8_t(format);
+            inert.durationTimeBase=inert.gateTimeBase=0x10;
+            inert.channelStatus.assign(32,rhythm?0:3);
+            inert.sequenceData={0,0xff,0x2f,0};
+            if(first)mixed.tracks.insert(mixed.tracks.begin(),inert);else mixed.tracks.push_back(inert);
+            profileDetail(mixed,false,recipe);
+        }
+    }
+    for(int format:{2,3}) {
+        auto modern=fixture();modern.tracks[0].setupData.clear();
+        modern.tracks[0].formatType=uint8_t(format);
+        modern.tracks[0].sequenceData={0,uint8_t(format==3?0x14:0x94),60,100,20,30,0xff,0x2f,0};
+        TrackChunk hps;hps.trackNumber=1;hps.formatType=0;
+        hps.durationTimeBase=hps.gateTimeBase=0x10;hps.channelStatus={0x33,0x33};
+        hps.sequenceData={0,0,0};modern.tracks.push_back(hps);
+        profileDetail(modern,true,"gm_modern_recipe");
     }
     // Original generated sentinel, not music. Output must never truncate any
     // input, including a hard link or an input discovered inside a folder.

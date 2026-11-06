@@ -108,3 +108,9 @@ Run the original wire-fixture and input-protection checks against built tools:
 python3 tools/tone-usage-audit-cli-test.py --binary build/host-tests/tone-usage-audit
 python3 tools/score-audit-cli-test.py --binary build/host-tests/score-audit
 ```
+
+For mixed score formats, the synthesis-profile and substitute-family columns
+use each note's originating MTR header and grammar, matching the r81 renderer.
+An inert overlapping track cannot change a HandyPhone report to modern GM or
+turn a Mobile melody report into a drum substitute. Self-tests include twelve
+source-profile cases alongside the existing route and output-safety cases.
