@@ -297,5 +297,29 @@ void zeroPcmVersionLifetime() {
     }
     std::cout<<"PCM version lifetime PASS:12 cases, zero/nonzero transitions while held\n";
 }
-int main(){zeroPcmVersionLifetime();zeroPcmCodecs();zeroPcmAllocation();unboundWaveCertificate();unboundWaveAllocation();allocation();envelopeCertificate();reversibleSuppression();}
+void zeroPcmEndpoints() {
+    unsigned cases=0;
+    for(int format:{2,3})for(int boundary:{0,1,2})for(bool future:{false,true}) {
+        auto fixture=[&](bool include){auto f=dense(true,format,false,include,future,false);
+            if(include&&boundary!=0){Bytes note={0,uint8_t(format==2?0x91:0x11),60,100,3};auto& seq=f.tracks[0].sequenceData;
+                auto found=std::search(seq.begin(),seq.end(),note.begin(),note.end());require(found!=seq.end(),"boundary fixture has the target note");
+                found[4]=20; // Remain held past the later pressure event, not an already finished free slot.
+            }
+            auto& setup=f.tracks[0].setupData;const size_t second=2+setup[1];setup[second+2+16]=0xf0;setup[second+2+25]=2;
+            if(boundary==2)setup[second+2+24]=82; // Invalid EP clamps to actual81-sample source.
+            auto wave=f.tracks[0].waves[0];wave.number=2;wave.adpcm=false;wave.data.assign(162,0);
+            wave.data[boundary==1?159:161]=1; // Last played sample, or first sample outside EP80.
+            f.tracks[0].waves.push_back(wave);return f;
+        };
+        MaPlayer reference;require(reference.init(fixture(false),8000),"PCM endpoint reference initializes");const auto expected=drain(reference,257);
+        for(int block:{1,257,1024}){MaPlayer actual;require(actual.init(fixture(true),8000),"PCM endpoint pressure initializes");const auto audio=drain(actual,block);
+            if(boundary==0){require(audio==expected,"nonzero samples outside authored EP must not block zero-source reclamation");
+                require(actual.diagnostics().stolenHeldPcm==unsigned(future),"zero-prefix reclaim preserves future held-steal order");}
+            else require(actual.diagnostics().stolenHeldPcm==unsigned(1+int(future)),"played nonzero boundary sample protects the held source");
+            if(block==257){actual.seekToStart();require(drain(actual,block)==audio,"PCM endpoint classification survives seek");}++cases;
+        }
+    }
+    std::cout<<"PCM zero-prefix endpoint PASS: "<<cases<<" cases\n";
+}
+int main(){zeroPcmEndpoints();zeroPcmVersionLifetime();zeroPcmCodecs();zeroPcmAllocation();unboundWaveCertificate();unboundWaveAllocation();allocation();envelopeCertificate();reversibleSuppression();}
 

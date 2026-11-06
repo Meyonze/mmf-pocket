@@ -2,7 +2,7 @@
 
 ## Unreleased: current DSP and comparison workflow
 
-The current batch uses render cache **r76**, invalidating older rendered audio.
+The current batch uses render cache **r77**, invalidating older rendered audio.
 It combines bounded high-rate PCM reconstruction, corrected Yamaha ADPCM
 rounding, continuous FM phase during Nyquist suppression, complete HPS/VMA bank
 identity, completed-carrier release classification and provably silent-tail
@@ -10,6 +10,15 @@ completion. The changes below
 are software improvements; they do not establish handset-calibrated timbres or
 perceptual equivalence. Detailed probes and limits are in
 [DSP review evidence](dsp-review.md).
+
+### Respect the exclusive PCM endpoint when classifying silence (r77)
+
+Source decoding records the exact leading-zero sample count once. A keyed PCM
+voice can reuse a zero-source slot under pressure when that prefix covers its
+clamped playback endpoint, even if unused data beyond the endpoint is nonzero.
+The same exclusive endpoint bounds linear/FIR interpolation. A nonzero final
+played sample and invalid endpoints clamped to the actual source remain protected.
+See [silent voice allocation](silent-voice-allocation.md).
 
 ### Reclaim zero-output unbound user-wave slots (r75)
 

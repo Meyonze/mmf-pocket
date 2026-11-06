@@ -144,7 +144,7 @@ private:
         // Only the newly supported MA-7 signed8 path opts in. Preserve older
         // codecs' source/EOF lifetimes, including silent tails.
         bool retireSilentLoop = false;
-        bool allZero = false; // classified once after decoding
+        size_t zeroPrefix = 0; // exact leading zeros, classified once after decoding
     };
     struct PcmVoice {
         const int16_t* pcm = nullptr; size_t len = 0;
@@ -152,7 +152,7 @@ private:
         double lfoPhase = 0.0, lfoInc = 0.0, vibDepth = 0.0, baseVibDepth = 0.0;
         float amDepth = 0.0f;
         size_t loopStart = 0, loopEnd = 0; bool loop = false;
-        bool zeroSource = false; // whole immutable sample, not just the current loop
+        bool zeroSource = false; // entire immutable playback range, not just its loop
         bool silentLoop = false; // after loopStart all future source samples are exactly zero
         bool qualityInterpolation = false;
         size_t loopTravel = 0; // virtual history distance removed by loop wraps
