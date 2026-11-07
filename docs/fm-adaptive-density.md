@@ -44,9 +44,10 @@ PCM・録音Audio・独立ATR・対象外FMのnative FIFOは一つだけです�
 player.init(file, 44100, false, {8, FmSubframeMath::Hermite, true});
 ```
 
-`boostHighNotes=true`は基準倍率8の場合だけ有効です。固定倍率のパート寄与診断は自動密度を
-扱わず、そのプレイヤーを渡すと明示的に拒否します。固定8/16の比較と、自動経路全体の
-診断を混同しないためです。アプリの倍率設定画面は追加していません。
+`boostHighNotes=true`は基準倍率8の場合だけ有効です。パート寄与診断も
+`--app-quality`で自動密度を扱い、8倍・16倍の使用量と混在出力を測れます。
+[集計方法と適用範囲](render-contributions.md)を参照してください。
+アプリの倍率設定画面は追加していません。
 
 ## 検証と改善例
 

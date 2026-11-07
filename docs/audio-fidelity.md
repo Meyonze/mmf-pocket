@@ -3290,8 +3290,8 @@ errors fall from.0969059 to8.49e-6 (graph0) and.0387624 to3.09e-6 (graph7).
 112 tail-bound checks,900 mixed dense-FIR frames with no ordinary C++new,
 final-frame tails/blocks/seek, Release/ASan, actual JNI/WAV paths and AndroidallABI
 lint/Debug/Release pass.32 encoded app cases change only the intended one;
-31 remain exact. Cache85; official1.6.6 unchanged. Fixed-density contribution
-audit explicitly rejects adaptive players. See [scope and limits](fm-adaptive-density.md).
+31 remain exact. Cache85; official1.6.6 unchanged. Adaptive contribution
+audit now supports the app policy; see [scope and limits](fm-adaptive-density.md).
 
 ### r86 folded-Nyquist edge inclusion
 
@@ -3299,3 +3299,15 @@ Use ceil for the first relevant sideband order so an exactly representable
 8±0.5 boundary is included. A regression with beta8π, fc.109375 and fm.171875
 fails the old floor+1 estimate and passes the correction. Existing48 spectral
 policies/selection and mixed/endpoint results remain unchanged. Cache86.
+
+
+### Adaptive channel contribution accounting
+
+The read-only contribution audit now supports the current app8x/16x policy via
+`--app-quality`. Both per-part histories drain without inventing source ticks;
+per-density counters separate boosted16x from explicit fixed16x. Original-order
+shadow/filter samples and shared limiter/fade match an independent player
+bit-for-bit.24 mixed/late-part cases, tiny final-frame tails, heavy shared limiting
+and six CLI checks pass;12 legacy controls preserve every previous field/value.
+Application source, cache86 and release are unchanged by this diagnostic update.
+See [interpretation](render-contributions.md).

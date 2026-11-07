@@ -62,7 +62,7 @@ void hardBoundaryAndGuards(){
   catch(const std::runtime_error&){rejected=true;}require(rejected,"bad independent-player/render bound accepted");
  }
  {MaPlayer p,b;init(p);init(b);p.sineRender_.emplace(SineRenderOptions{8,FmSubframeMath::Hermite,true});bool rejected=false;
-  try{(void)analyzePlayers(p,b,128);}catch(const std::runtime_error&){rejected=true;}require(rejected,"fixed-density diagnostic accepted adaptive policy");}
+  try{(void)analyzePlayers(p,b,128);}catch(const std::runtime_error&){rejected=true;}require(rejected,"mismatched adaptive policy accepted");}
  std::cout<<"Hard fade/endpoints/future-event exclusion and bounded input guards PASS\n";
 }
 
@@ -114,6 +114,50 @@ void qualityRoutes(){size_t cases=0;
  std::cout<<cases<<" mixed quality/late-part routes plus delayed hard caps and final-frame/tiny tails PASS\n";
 }
 
+
+void adaptiveRoutes(){size_t cases=0;
+ const auto hz=[](int note){return 440*std::pow(2.,double(note-69)/12);};
+ for(int graph:{0,5,7})for(auto math:{FmSubframeMath::Exact,FmSubframeMath::Hermite})for(int block:{1,17,512,1024}){
+  MaPlayer p,b;for(auto* x:{&p,&b}){
+   require(x->init(clockFile(),44100,false,{8,math,true}),"adaptive diagnostic init");
+   FmVoicePatch q;q.modernTimbre=true;q.algorithm=uint8_t(graph);q.fourOp=graph!=0;
+   for(auto& o:q.ops){o.ar=15;o.dr=o.sr=o.sl=0;o.rr=15;o.ma35Multipliers=true;o.multi=1;}
+   if(graph==7){q.ops[0].tl=18;q.ops[1].multi=7;q.ops[2].multi=5;q.ops[3].multi=2;q.ops[3].tl=24;}
+   else {q.ops[0].multi=7;q.ops[1].multi=5;if(graph==5){q.ops[2].multi=3;q.ops[2].tl=24;q.ops[3].multi=2;}}
+   for(int i=0;i<3;++i){auto& v=x->pool_[i];const double f=hz(i==0?84:96);v.noteOn(q,f,.2f);v.setVolume(.2f);v.channel=i==1?1:0;x->poolBaseFreq_[i]=f;x->poolPanLeft_[i]=i==2?.8f:.3f;x->poolPanRight_[i]=i==2?.2f:.7f;}
+   pcm(*x,0,120,1000);pcm(*x,1,120,2000,true,7);
+   std::vector<MaPlayer::Ev> events{{128,MaPlayer::Ev::PitchBend,0,8191,0},{256,MaPlayer::Ev::PitchBend,0,0,0},{256,MaPlayer::Ev::AllSoundOff,120,0,0},{384,MaPlayer::Ev::AllSoundOff,0,0,0},{512,MaPlayer::Ev::AllSoundOff,1,0,0},{640,MaPlayer::Ev::NoteOn,16,69,100,1},{704,MaPlayer::Ev::AllSoundOff,16,0,0}};
+   x->events_.insert(x->events_.begin(),events.begin(),events.end());x->nonAtrGateEventEnd_=x->events_.size();
+  }
+  const auto r=analyzePlayers(p,b,768,block);require(r.boostHighNotes&&r.frames==768&&!r.finished,"adaptive report policy/interval");
+  const auto& a=r.parts.at({0,-1,0});const auto& high=r.parts.at({0,-1,1});
+  require(a.voiceFrames[0]==768&&a.sineFrames==768&&a.densityFrames[2]==128&&a.densityFrames[3]==640&&a.boostedFrames==640,"mixed-density part/latching counts");
+  require(high.voiceFrames[0]==512&&high.boostedFrames==512&&high.densityFrames[3]==512,"high part source attribution");
+  require(r.parts.at({0,-1,120}).voiceFrames[1]==256&&r.parts.at({1,7,120}).voiceFrames[3]==768,"adaptive mix changed score/ATR domains");
+  require(r.parts.at({0,-1,16}).voiceFrames[0]==64&&r.sumErrorPeak<2e-5,"adaptive late part or contribution sum changed");++cases;
+ }
+ for(float gain:{1.f,1e-12f}){MaPlayer p,b;for(auto* x:{&p,&b}){
+   require(x->init(clockFile(),44100,false,{8,FmSubframeMath::Hermite,true}),"adaptive tail init");
+   FmVoicePatch q;q.modernTimbre=true;for(auto& o:q.ops){o.ar=15;o.dr=o.sr=o.sl=0;o.ma35Multipliers=true;}q.ops[0].multi=7;q.ops[1].multi=5;
+   x->pool_[0].noteOn(q,hz(96),gain);x->pool_[0].channel=0;x->poolPanLeft_[0]=.7f;x->poolPanRight_[0]=.3f;
+   x->events_={{1,MaPlayer::Ev::AllSoundOff,0,0,0}};x->nextEvent_=0;x->nonAtrGateEventEnd_=1;x->scoreEndSample_=1;x->endSample_=44101;
+  }
+  const auto r=analyzePlayers(p,b,1024,17);const auto& a=r.parts.at({0,-1,0});
+  require(r.finished&&r.frames>=144&&a.sineFrames==1&&a.boostedFrames==1&&a.output.rms()>0,"adaptive final-frame/tiny tail count or signal lost");
+ }
+ {MaPlayer p,b;for(auto* x:{&p,&b}){
+   require(x->init(clockFile(),44100,false,{8,FmSubframeMath::Hermite,true}),"adaptive limiter init");
+   FmVoicePatch q;q.modernTimbre=true;for(auto& o:q.ops){o.ar=15;o.dr=o.sr=o.sl=0;o.ma35Multipliers=true;}q.ops[0].multi=7;q.ops[1].multi=5;
+   x->pool_[0].noteOn(q,hz(96),.2f);x->pool_[0].channel=0;x->poolPanLeft_[0]=.7f;x->poolPanRight_[0]=.3f;
+   for(int slot=0;slot<32;++slot)pcm(*x,slot,2,32767);
+  }
+  const auto r=analyzePlayers(p,b,192,17);
+  require(r.totals[11]>0&&r.parts.at({0,-1,0}).boostedFrames==192,"adaptive shared limiter did not run");
+  require(r.parts.at({0,-1,2}).source.peak>10&&r.parts.at({0,-1,2}).output.peak<1&&r.sumErrorPeak<2e-6,"adaptive contributions did not retain actual shared limiting");
+ }
+ std::cout<<cases<<" adaptive mixed-density/late-part/source-counter cases and tiny tails PASS\n";
+}
+
 void waveMatrix(){size_t cases=0;
  for(bool modern:{false,true})for(int algo=0;algo<8;++algo)for(int wave=0;wave<32;++wave){MaPlayer p,b;init(p);init(b);
   FmVoicePatch q;q.modernTimbre=modern;q.algorithm=uint8_t(algo);q.fourOp=algo>=2;q.lfo=2;
@@ -123,4 +167,4 @@ void waveMatrix(){size_t cases=0;
  }
  std::cout<<cases<<" FM graph/wave/profile contribution streams match actual renderer PASS\n";
 }
-int main(){dcAndBlocks();sharedLimiterAndCancellation();domainsAndTerminal();hardBoundaryAndGuards();triggerKinds();qualityRoutes();waveMatrix();}
+int main(){dcAndBlocks();sharedLimiterAndCancellation();domainsAndTerminal();hardBoundaryAndGuards();triggerKinds();qualityRoutes();adaptiveRoutes();waveMatrix();}

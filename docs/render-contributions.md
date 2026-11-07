@@ -84,7 +84,7 @@ shared limiting, independent ATR/score channel collisions, native block sizes
 immutable silence attribution, late-created parts, and final-frame tiny tails.
 512 FM graph/wave/profile cases and16 mixed quality cases pass Release,
 ASan/UBSan and NDK Clang targeting the Linux host (not Android execution).
-Five CLI checks cover valid native/quality fixtures, metadata canaries, unchanged
+Six CLI checks cover valid native/quality fixtures, metadata canaries, unchanged
 input, caps and invalid arguments. Across2,121 encoded native inputs, output
 matches the uninstrumented renderer exactly, all six per-part trigger counts
 sum to engine totals, and maximum component residual is1.49011611938e-8.
@@ -93,6 +93,35 @@ An additional28 encoded-input runs cover seven observed source combinations
 2/exact,8/Hermite and32/Hermite. Reference samples and attributed trigger totals
 match in every run; component sums are exact for this representative subset.
 
-The fixed-density diagnostic rejects players initialized with adaptive8/16
-boosting. Its fixed8/16 comparisons do not describe the whole r85 app adaptive
-mix; see [adaptive policy and validation](fm-adaptive-density.md).
+## Adaptive app policy
+
+Use `--app-quality` to measure the current8x Hermite policy with selective16x
+voices, including pitch changes and retained8x/16x filter tails:
+
+```sh
+./render-contribution-audit input.mmf 10 --app-quality > app-contributions.json
+```
+
+This flag is mutually exclusive with explicit factor/math flags. `sine_factor`
+is the baseline8, and `boost_high_notes` is true. Per-part
+`sine_voice_frames_by_factor` contains disjoint native voice-frame counts for
+2/4/8/16/32. Their sum equals `sine_source_voice_frames`.
+`boosted_sine_voice_frames` counts only selectively raised16x frames. A fixed16x
+report therefore has16x voice frames but zero boosted frames. Filter drains do
+not add source counts. Zero-gain live voices can count; these are not audible
+voice counts or CPU measurements.
+
+Each part now carries both aligned FIR histories. The global shadow retains the
+original source summation order; actual output still matches an independent
+uninstrumented player bit-for-bit. Late parts have an implicit zero prefix.
+Mixing8x and16x within one channel, raising pitch and lowering it again, new
+notes, source stops, tiny final-frame tails and shared limiting are tested.
+24 adaptive mixed cases cover graphs0/5/7, Exact/Hermite and four block sizes.
+Six CLI checks include metadata exclusion and a high-note match to fixed16x.
+Twelve legacy controls preserve all old report fields and values exactly;
+additional metadata is additive under schema1.
+
+`--app-quality` matches the synthesis density policy. The existing
+`suppressHpsSlapbackDuplicates=false` setting and absence of app phone EQ still
+apply. This is not a complete app post-processing or handset-fidelity study.
+See [adaptive policy and validation](fm-adaptive-density.md).

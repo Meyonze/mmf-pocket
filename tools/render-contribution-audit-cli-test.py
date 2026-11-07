@@ -116,6 +116,43 @@ class ContributionCliTest(unittest.TestCase):
                       ('--experimental-sine-factor=8', '--experimental-sine-factor=8')):
             self.assertEqual(self.run_cli(extra=extra).returncode, 2)
 
+    def test_app_quality_density_attribution_and_high_note_reference(self):
+        p = self.run_cli(extra=('--app-quality',))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        r = json.loads(p.stdout)
+        self.assertTrue(r['boost_high_notes'] and r['reference_pcm_exact'] and r['finished'])
+        self.assertEqual((r['sine_factor'], r['sine_math'], r['latency_frames']), (8, 'hermite', 72))
+        self.assertGreater(sum(x['boosted_sine_voice_frames'] for x in r['parts']), 0)
+        self.assertEqual(r['parts'][0]['boosted_sine_voice_frames'], 0)
+        for old, part in zip(self.report['parts'], r['parts']):
+            self.assertEqual(part['voice_frames'], old['voice_frames'])
+            self.assertEqual(part['trigger_diagnostics'], old['trigger_diagnostics'])
+            self.assertEqual(sum(part['sine_voice_frames_by_factor'].values()), part['sine_source_voice_frames'])
+            self.assertEqual(part['boosted_sine_voice_frames'], part['sine_voice_frames_by_factor']['16'])
+        self.assertEqual(self.source.read_bytes(), self.input)
+        for forbidden in ('PRIVATE_TITLE_0912', 'PRIVATE_AUTHOR_0391', self.source.name):
+            self.assertNotIn(forbidden, p.stdout)
+
+        fm = probes.FM
+        high = self.root / 'original-high.mmf'
+        high.write_bytes(fm.encode(fm.Probe('high', 'Original high PM', 0,
+                                          (fm.Operator(tl=0, multi=7), fm.Operator(tl=0, multi=5)), note=96)))
+        reports = []
+        for extra in (('--app-quality',), ('--experimental-sine-factor=16', '--experimental-sine-math=hermite')):
+            result = self.run_cli(source=high, extra=extra)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            reports.append(json.loads(result.stdout))
+        self.assertEqual(reports[0]['mix'], reports[1]['mix'])
+        self.assertEqual(reports[0]['frames'], reports[1]['frames'])
+        self.assertEqual(reports[0]['parts'][0]['with_shared_output_gain'], reports[1]['parts'][0]['with_shared_output_gain'])
+        self.assertEqual(reports[0]['parts'][0]['boosted_sine_voice_frames'], reports[0]['parts'][0]['voice_frames']['fm'])
+        for extra in (('--app-quality', '--app-quality'),
+                      ('--app-quality', '--experimental-sine-factor=8'),
+                      ('--experimental-sine-factor=8', '--app-quality'),
+                      ('--app-quality', '--experimental-sine-math=hermite'),
+                      ('--experimental-sine-math=hermite', '--app-quality')):
+            self.assertEqual(self.run_cli(extra=extra).returncode, 2)
+
     def test_reject_arguments_missing_malformed_and_oversized(self):
         for seconds in ('', 'nan', 'inf', '0', '-1', '0.000001', '600.01', '1junk', '1e999'):
             self.assertEqual(self.run_cli(seconds).returncode, 2)
