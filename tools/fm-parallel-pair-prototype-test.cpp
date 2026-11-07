@@ -18,16 +18,19 @@ void state(const FmVoice&a,const FmVoice&b){require(a.lfoPhase_==b.lfoPhase_&&a.
     require(a.active_==b.active_&&a.released_==b.released_&&a.keyOffRequested_==b.keyOffRequested_,"native lifecycle changed");
     for(int j=0;j<4;++j){require(a.ops_[j].phase_==b.ops_[j].phase_&&a.ops_[j].env_.level_==b.ops_[j].env_.level_&&a.ops_[j].env_.phase_==b.ops_[j].env_.phase_&&a.ops_[j].env_.pendingKeyOff_==b.ops_[j].env_.pendingKeyOff_,"native operator phase/EG/Hold changed");
         for(int k=0;k<2;++k)require(a.fbMem_[j][k]==b.fbMem_[j][k],"native operator history changed");}}
-void clocks(){size_t cases=0,samples=0;
+void clocks(){size_t cases=0,samples=0;double fastMaximum=0,fastSquares=0;
     for(int rate:{8000,44100})for(int profile:{0,1,2})for(int lfo=0;lfo<4;++lfo)for(int mode=0;mode<4;++mode)for(int factor:{2,4,8,16,32}){
-        auto p=patch(profile,lfo,mode);FmVoice actual,oracle;actual.setSampleRate(rate);oracle.setSampleRate(rate);actual.noteOn(p,rate*.013,.73f);oracle.noteOn(p,rate*.013,.73f);std::array<float,32> out{};
+        auto p=patch(profile,lfo,mode);FmVoice actual,oracle,fast;actual.setSampleRate(rate);oracle.setSampleRate(rate);fast.setSampleRate(rate);actual.noteOn(p,rate*.013,.73f);oracle.noteOn(p,rate*.013,.73f);fast.noteOn(p,rate*.013,.73f);std::array<float,32> out{},fastOut{};
         for(int n=0;n<768;++n){auto events=[&](FmVoice&v){if(n==64)v.setVibratoScale(8);if(n==128)v.setPitch(rate*.71);if(n==192)v.setPitch(rate*.017);
                 if(n==256)v.setVolume(0);if(n==320)v.setVolume(.63f);if(n==384)v.noteOff(true);if(n==448)v.setHold(false);if(n==640)v.noteOn(p,317,.51f);};
-            events(actual);events(oracle);const auto r=fm_pairs::frame(actual,std::span<float>(out.data(),size_t(factor)));const float expected=oracle.tick();
+            events(actual);events(oracle);events(fast);const auto r=fm_pairs::frame(actual,std::span<float>(out.data(),size_t(factor)));const float expected=oracle.tick();
             require(r.native==expected&&r.reconstructedEndpoint==expected&&out[size_t(factor-1)]==expected,"pair endpoint or reconstructed gains changed");state(actual,oracle);
-            for(int j=0;j<factor;++j){require(std::isfinite(out[size_t(j)]),"nonfinite pair sample");++samples;}}
+            const auto fr=fm_pairs::frameFast(fast,std::span<float>(fastOut.data(),size_t(factor)));state(fast,oracle);require(fr.native==expected&&fr.reconstructedEndpoint==expected,"fast pair changed native endpoint");
+            for(int j=0;j<factor;++j){require(std::isfinite(out[size_t(j)]),"nonfinite pair sample");const double delta=double(out[size_t(j)])-fastOut[size_t(j)];
+                require(std::abs(delta)<3e-6,"fast pair waveform error");fastMaximum=std::max(fastMaximum,std::abs(delta));fastSquares+=delta*delta;++samples;}}
         ++cases;
     }
+    std::cout<<"Fast pair delta max="<<fastMaximum<<" RMS="<<std::sqrt(fastSquares/samples)<<"; ";
     std::cout<<cases<<" native-clock pair cases; "<<samples<<" subframes PASS\n";
 }
 void equations(){constexpr double tau=6.283185307179586;size_t checks=0;
@@ -50,19 +53,19 @@ void equations(){constexpr double tau=6.283185307179586;size_t checks=0;
     }
     std::cout<<checks<<" continuous/high-rate pair comparisons and Bessel controls PASS\n";
 }
-void guards(){for(int kind=0;kind<6;++kind){auto p=patch(2,0,0);if(kind==0)p.fourOp=false;if(kind==1)p.algorithm=4;if(kind==2)p.ops[2].wave=6;
+void guards(){for(int kind=0;kind<6;++kind)for(bool fast:{false,true}){auto p=patch(2,0,0);if(kind==0)p.fourOp=false;if(kind==1)p.algorithm=4;if(kind==2)p.ops[2].wave=6;
         if(kind==3)p.ops[3].fb=2;if(kind==4)p.feedback=2;FmVoice v;v.setSampleRate(44100);v.noteOn(p,317,1);const auto before=v;std::array<float,32> out;out.fill(123);
-        bool rejected=false;try{fm_pairs::frame(v,std::span<float>(out.data(),kind==5?3:8));}catch(const std::runtime_error&){rejected=true;}
+        bool rejected=false;try{auto span=std::span<float>(out.data(),kind==5?3:8);if(fast)fm_pairs::frameFast(v,span);else fm_pairs::frame(v,span);}catch(const std::runtime_error&){rejected=true;}
         require(rejected&&std::all_of(out.begin(),out.end(),[](float x){return x==123;}),"unsupported pair source mutated output");state(v,before);}
     std::cout<<"Unsupported graph/wave/header or operator feedback rejected before tick PASS\n";
 }
 void spectrum(){constexpr int frames=4096,warmup=256;constexpr double tau=6.283185307179586;size_t cases=0;double maximumEquation=0,hard8=0,hard32=0;
-    for(int profile:{1,2})for(int tl:{0,24})for(int factor:{2,4,8,16,32}){
+    for(int profile:{1,2})for(int tl:{0,24})for(int factor:{2,4,8,16,32})for(bool fast:{false,true}){
         auto p=patch(profile,0,0);for(int j=0;j<4;++j){p.ops[j].ksr=0;p.ops[j].tl=uint8_t(j%2?0:tl);}
         FmVoice voice;voice.setSampleRate(44100);voice.noteOn(p,44100.*211/frames,1);
         fm_causal::AlignedBus bus(factor);const auto config=fm_causal::alignedConfig(factor);const int padding=72-int(fm_causal::Decimator(config).delayFrames());
         std::vector<double> measured(frames),exact(frames),band(frames);std::array<float,32> source{};std::array<fm_causal::Stereo,32> stereo{};
-        for(int n=0;n<warmup+frames;++n){const auto r=fm_pairs::frame(voice,std::span<float>(source.data(),size_t(factor)));require(r.native==r.reconstructedEndpoint,"long steady pair endpoint drift");
+        for(int n=0;n<warmup+frames;++n){const auto r=fast?fm_pairs::frameFast(voice,std::span<float>(source.data(),size_t(factor))):fm_pairs::frame(voice,std::span<float>(source.data(),size_t(factor)));require(r.native==r.reconstructedEndpoint,"long steady pair endpoint drift");
             for(int k=0;k<factor;++k)stereo[size_t(k)]={source[size_t(k)],0};const auto y=bus.frame(stereo.data(),size_t(factor),{});require(y.right==0,"pair FIR stereo leakage");
             if(n>=warmup)measured[size_t(n-warmup)]=y.left;}
         const double index=tau*(profile==2?4:.42)*std::pow(10.,-.75*tl/20.);

@@ -7,6 +7,7 @@
 #define private public
 #include "ma_fm_core.h"
 #undef private
+#include "fm-subframe-sine.h"
 #include <algorithm>
 #include <cmath>
 #include <span>
@@ -17,7 +18,7 @@ inline bool eligible(const FmVoice& v) {
     return !v.fourOp_&&v.algo_==0&&v.patch_.ops[0].wave==0&&v.patch_.ops[1].wave==0&&v.opFb_[0]==0&&v.opFb_[1]==0;
 }
 struct Frame {float native=0,reconstructedEndpoint=0;};
-inline Frame frame(FmVoice& v,std::span<float> out) {
+template<bool Fast> inline Frame frameImpl(FmVoice& v,std::span<float> out) {
     if(!eligible(v))throw std::runtime_error("probe only supports two sine operators without feedback");
     const size_t factor=out.size();if(factor<2||factor>32||(factor&(factor-1)))throw std::runtime_error("invalid subframe count");
     const bool active=v.active_;
@@ -37,7 +38,7 @@ inline Frame frame(FmVoice& v,std::span<float> out) {
             double phase=sub==factor?op.phase_:before[j]+inc[j]*double(sub)/factor;
             if(phase>=1)phase-=std::floor(phase);
             if(j==1)phase+=double(values[0])*v.modDepth_;
-            const float sine=float(std::sin(6.283185307179586*(phase-std::floor(phase))));
+            const float sine=fm_probe_math::sample<Fast>(phase,sub==factor);
             values[j]=float(sine*op.tlGain_*op.kslGain_*gain[j]*am[j]);}
         return float(double(values[1])*v.velocity_*v.volume_*.7);
     };
@@ -46,4 +47,6 @@ inline Frame frame(FmVoice& v,std::span<float> out) {
     // Preserve the exact public native endpoint and its allocation-level update.
     out.back()=result.native;return result;
 }
+inline Frame frame(FmVoice& v,std::span<float> out){return frameImpl<false>(v,out);}
+inline Frame frameFast(FmVoice& v,std::span<float> out){return frameImpl<true>(v,out);}
 } // namespace fm_probe

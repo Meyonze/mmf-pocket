@@ -69,7 +69,7 @@ void invalidBatch(){const std::array<int,2> ids{0,127};constexpr int factor=8;
     std::cout<<"Atomic mixed input validation and immutable shared-kernel lifetime PASS\n";
 }
 void realSources(){using namespace fxchain::smaf;const std::array<int,3> ids{0,16,127};const int owner[4]={0,0,1,2};size_t checks=0;
-    for(int rate:{8000,44100})for(int factor:{2,8,32}){
+    for(int rate:{8000,44100})for(int factor:{2,8,32})for(bool fast:{false,true}){
         RenderBusPrototype bus(factor,ids);std::array<ReplayStopReference,3> ref{ReplayStopReference(factor),ReplayStopReference(factor),ReplayStopReference(factor)};
         std::array<FmVoice,4> voice,oracle;std::array<FmVoicePatch,4> patch;
         for(int j=0;j<4;++j){auto&p=patch[size_t(j)];p.modernTimbre=j!=2;p.algorithm=j==3?4:0;p.fourOp=j==3;p.feedback=j==1?3:0;p.lfo=2;
@@ -88,7 +88,8 @@ void realSources(){using namespace fxchain::smaf;const std::array<int,3> ids{0,1
             if(n==300){bus.reset();for(auto&r:ref)r.reset();independentHistory.fill({});cursor=0;}
             std::array<std::array<Stereo,32>,3> high{};std::array<Stereo,3> native{};std::array<float,32> sub{};
             for(int j=0;j<4;++j){auto& v=voice[size_t(j)];const float expected=oracle[size_t(j)].tick();const size_t ch=size_t(owner[j]);
-                if(fm_probe::eligible(v)||fm_pairs::eligible(v)){const auto r=fm_probe::eligible(v)?fm_probe::frame(v,std::span<float>(sub.data(),size_t(factor))):fm_pairs::frame(v,std::span<float>(sub.data(),size_t(factor)));require(r.native==expected,"eligible source native clock changed");
+                if(fm_probe::eligible(v)||fm_pairs::eligible(v)){const auto view=std::span<float>(sub.data(),size_t(factor));
+                    const auto r=fm_probe::eligible(v)?(fast?fm_probe::frameFast(v,view):fm_probe::frame(v,view)):(fast?fm_pairs::frameFast(v,view):fm_pairs::frame(v,view));require(r.native==expected,"eligible source native clock changed");
                     for(int k=0;k<factor;++k){high[ch][size_t(k)].left+=sub[size_t(k)]*.7;high[ch][size_t(k)].right+=sub[size_t(k)]*.3;}}
                 else{const float x=v.tick();require(x==expected,"native fallback clock changed");native[ch].left+=x*.4;native[ch].right+=x*.6;}}
             if(n<230)native[1]={native[1].left+.02*std::sin(n*.19),native[1].right-.01*std::cos(n*.13)};

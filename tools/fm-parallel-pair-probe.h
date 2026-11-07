@@ -9,7 +9,7 @@ inline bool eligible(const FmVoice& v){
     for(int j=0;j<4;++j)if(v.patch_.ops[size_t(j)].wave!=0||v.opFb_[j]!=0)return false;
     return true;
 }
-inline fm_probe::Frame frame(FmVoice& v,std::span<float> output){
+template<bool Fast> inline fm_probe::Frame frameImpl(FmVoice& v,std::span<float> output){
     if(!eligible(v))throw std::runtime_error("pair probe requires algorithm5 sine operators without feedback");
     const size_t factor=output.size();if(factor<2||factor>32||(factor&(factor-1)))throw std::runtime_error("invalid pair subframe count");
     const bool active=v.active_;double before[4];for(int j=0;j<4;++j)before[j]=v.ops_[j].phase_;
@@ -22,10 +22,12 @@ inline fm_probe::Frame frame(FmVoice& v,std::span<float> output){
     auto sample=[&](size_t sub){float values[4]{};
         for(int j=0;j<4;++j){if(mute[j])continue;const auto&o=v.ops_[j];double phase=sub==factor?o.phase_:before[j]+inc[j]*double(sub)/factor;
             if(phase>=1)phase-=std::floor(phase);if(j==1||j==3)phase+=double(values[j-1])*v.modDepth_;
-            const float sine=float(std::sin(6.283185307179586*(phase-std::floor(phase))));
+            const float sine=fm_probe_math::sample<Fast>(phase,sub==factor);
             values[j]=float(sine*o.tlGain_*o.kslGain_*gain[j]*am[j]);}
         const double combined=(double(values[1])+double(values[3]))*.5;
         return float(combined*v.velocity_*v.volume_*.7);};
     for(size_t j=0;j+1<factor;++j)output[j]=sample(j+1);result.reconstructedEndpoint=sample(factor);output.back()=result.native;return result;
 }
+inline fm_probe::Frame frame(FmVoice& v,std::span<float> out){return frameImpl<false>(v,out);}
+inline fm_probe::Frame frameFast(FmVoice& v,std::span<float> out){return frameImpl<true>(v,out);}
 } // namespace fm_pairs

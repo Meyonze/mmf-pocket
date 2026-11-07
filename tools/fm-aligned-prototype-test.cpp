@@ -36,38 +36,43 @@ FmVoicePatch patch(int profile,int lfo,int mode) {
     return p;
 }
 void sourceChecks() {
-    size_t samples=0,cases=0;
+    size_t samples=0,cases=0;double fastMaximum=0,fastSquares=0;
     for(int rate:{8000,44100})for(int profile:{0,1,2})for(int lfo=0;lfo<4;++lfo)for(int mode=0;mode<4;++mode)
     for(int factor:{2,4,8,16,32}) {
-        const auto p=patch(profile,lfo,mode);FmVoice actual,oracle;actual.setSampleRate(rate);oracle.setSampleRate(rate);
-        actual.noteOn(p,rate*.03,.73f);oracle.noteOn(p,rate*.03,.73f);std::array<float,32> buffer{};
+        const auto p=patch(profile,lfo,mode);FmVoice actual,oracle,fast;actual.setSampleRate(rate);oracle.setSampleRate(rate);fast.setSampleRate(rate);
+        actual.noteOn(p,rate*.03,.73f);oracle.noteOn(p,rate*.03,.73f);fast.noteOn(p,rate*.03,.73f);std::array<float,32> buffer{},fastBuffer{};
         for(int n=0;n<768;++n){
             auto controls=[&](FmVoice& v){if(n==64)v.setVibratoScale(8);if(n==128)v.setPitch(rate*.71);
                 if(n==192)v.setPitch(rate*.031);if(n==256)v.setVolume(0);if(n==320)v.setVolume(.63f);
                 if(n==384)v.noteOff(true);if(n==448)v.setHold(false);if(n==640)v.noteOn(p,317,.51f);};
-            controls(actual);controls(oracle);
+            controls(actual);controls(oracle);controls(fast);
             const auto r=fm_probe::frame(actual,std::span<float>(buffer.data(),size_t(factor)));const float expected=oracle.tick();
             require(r.native==expected&&buffer[size_t(factor-1)]==expected,"public native endpoint unchanged");
             require(r.reconstructedEndpoint==expected,"independent subframe endpoint/gains agree with native");
             nativeState(actual,oracle);
-            for(int j=0;j<factor;++j){require(std::isfinite(buffer[size_t(j)]),"finite subframe");++samples;}
+            const auto fr=fm_probe::frameFast(fast,std::span<float>(fastBuffer.data(),size_t(factor)));nativeState(fast,oracle);
+            require(fr.native==expected&&fr.reconstructedEndpoint==expected,"fast source changed native endpoint");
+            for(int j=0;j<factor;++j){require(std::isfinite(buffer[size_t(j)]),"finite subframe");
+                const double delta=double(buffer[size_t(j)])-fastBuffer[size_t(j)];require(std::abs(delta)<3e-6,"fast two-op waveform error");
+                fastMaximum=std::max(fastMaximum,std::abs(delta));fastSquares+=delta*delta;++samples;}
         }++cases;
     }
     // Independent continuous two-sine equation validates interior subframes.
     for(bool vm35:{false,true})for(int factor:{2,4,8,16,32}) {
         auto p=patch(vm35?2:1,0,0);for(auto&o:p.ops){o.ksr=0;o.tl=0;}
-        FmVoice v;v.setSampleRate(44100);v.noteOn(p,44100.*17/4096,1);
-        std::array<float,32> b{};
-        for(int n=0;n<512;++n){(void)fm_probe::frame(v,std::span<float>(b.data(),size_t(factor)));
+        FmVoice v,fast;v.setSampleRate(44100);fast.setSampleRate(44100);v.noteOn(p,44100.*17/4096,1);fast.noteOn(p,44100.*17/4096,1);
+        std::array<float,32> b{},fb{};
+        for(int n=0;n<512;++n){(void)fm_probe::frame(v,std::span<float>(b.data(),size_t(factor)));(void)fm_probe::frameFast(fast,std::span<float>(fb.data(),size_t(factor)));
             for(int j=0;j<factor;++j){double t=n+double(j+1)/factor;
                 double m=std::sin(tau*17*3*t/4096);double expected=.7*std::sin(tau*17*2*t/4096+tau*(vm35?4:.42)*m);
-                require(std::abs(b[size_t(j)]-expected)<3e-6,"interior subframes disagree with continuous PM oracle");}}
+                require(std::abs(b[size_t(j)]-expected)<3e-6&&std::abs(fb[size_t(j)]-expected)<3e-6,"interior subframes disagree with continuous PM oracle");}}
     }
     // Unsupported algorithms/waves/feedback must be rejected before any tick.
-    for(int kind=0;kind<3;++kind){auto p=patch(2,0,0);if(kind==0)p.algorithm=1;if(kind==1)p.ops[0].wave=8;if(kind==2)p.feedback=3;
+    for(int kind=0;kind<3;++kind)for(bool fast:{false,true}){auto p=patch(2,0,0);if(kind==0)p.algorithm=1;if(kind==1)p.ops[0].wave=8;if(kind==2)p.feedback=3;
         FmVoice v;v.setSampleRate(44100);v.noteOn(p,317,1);auto original=v;std::array<float,8> b;b.fill(123);
-        bool rejected=false;try{fm_probe::frame(v,b);}catch(const std::runtime_error&){rejected=true;}
+        bool rejected=false;try{if(fast)fm_probe::frameFast(v,b);else fm_probe::frame(v,b);}catch(const std::runtime_error&){rejected=true;}
         require(rejected&&std::all_of(b.begin(),b.end(),[](float x){return x==123;}),"unsupported source must not render");nativeState(v,original);}
+    std::cout<<"Fast two-op delta max="<<fastMaximum<<" RMS="<<std::sqrt(fastSquares/samples)<<"; ";
     std::cout<<"Native-clock sine source: "<<cases<<" cases; "<<samples<<" subframes PASS\n";
 }
 void busChecks() {
