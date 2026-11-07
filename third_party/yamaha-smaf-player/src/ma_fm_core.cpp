@@ -905,7 +905,14 @@ bool FmVoice::supportsSineSubframes() const {
     const bool serial = !fourOp_ && algo_ == 0;
     const bool pairs = fourOp_ && algo_ == 5;
     const bool mixed = fourOp_ && algo_ == 7;
-    if (!serial && !pairs && !mixed) return false;
+    // A stopped attack remains exactly zero until the next noteOn. Use its
+    // configured step, not a currently quiet/finished envelope, so eligibility
+    // cannot switch from native to filtered output during a note. MA7 odd
+    // attack rates have a nonzero step even when the coarse AR nibble is zero.
+    const bool reduced = fourOp_ &&
+        ((algo_ == 3 && ops_[2].env_.atkStep_ == 0.0) ||
+         ((algo_ == 4 || algo_ == 6) && ops_[1].env_.atkStep_ == 0.0));
+    if (!serial && !pairs && !mixed && !reduced) return false;
     for (int i = 0; i < (fourOp_ ? 4 : 2); ++i)
         if (patch_.ops[size_t(i)].wave != 0 || opFb_[i] != 0) return false;
     return true;
@@ -925,7 +932,10 @@ int FmVoice::sineDensityHint() {
         const double beta = 2 * std::numbers::pi * modDepth_ * peakGain;
         return sine_density::needs16(beta, peak(c), peak(m));
     };
-    const bool high = algo_ == 7 ? branch(1, 2) : branch(0, 1) || (algo_ == 5 && branch(2, 3));
+    const bool high = algo_ == 7 ? branch(1, 2)
+        : algo_ == 3 ? branch(0, 3)
+        : (algo_ == 4 || algo_ == 6) ? branch(2, 3)
+        : branch(0, 1) || (algo_ == 5 && branch(2, 3));
     if (high) densityFactor_ = 16;
     return densityFactor_;
 }
@@ -969,11 +979,22 @@ template<bool Fast> bool FmVoice::tickSineSubframesImpl_(float* output, int fact
             const auto& op = ops_[j];
             double phase = before[j] + inc[j] * double(sub) / factor;
             if (phase >= 1) phase -= std::floor(phase);
-            if (mixed ? j == 2 : (j == 1 || j == 3)) phase += double(values[j - 1]) * modDepth_;
+            if (algo_ == 3) {
+                if (j == 2) phase += double(values[1]) * modDepth_;
+                if (j == 3) phase += (double(values[0]) + double(values[2])) * modDepth_;
+            } else if (algo_ == 4) {
+                if (j > 0) phase += double(values[j - 1]) * modDepth_;
+            } else if (algo_ == 6) {
+                if (j >= 2) phase += double(values[j - 1]) * modDepth_;
+            } else if (mixed ? j == 2 : (j == 1 || j == 3)) {
+                phase += double(values[j - 1]) * modDepth_;
+            }
             const float sine = subframeMath::sample<Fast>(phase, false);
             values[j] = float(sine * op.tlGain_ * op.kslGain_ * level[j] * am[j]);
         }
-        const double combined = mixed ? (double(values[0]) + double(values[2]) + double(values[3])) * .4
+        const double combined = (algo_ == 3 || algo_ == 4) ? double(values[3])
+            : algo_ == 6 ? (double(values[0]) + double(values[3])) * .5
+            : mixed ? (double(values[0]) + double(values[2]) + double(values[3])) * .4
             : pairs ? (double(values[1]) + double(values[3])) * .5 : double(values[1]);
         output[sub - 1] = float(combined * velocity_ * volume_ * .7);
     }

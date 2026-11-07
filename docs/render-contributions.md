@@ -116,7 +116,9 @@ original source summation order; actual output still matches an independent
 uninstrumented player bit-for-bit. Late parts have an implicit zero prefix.
 Mixing8x and16x within one channel, raising pitch and lowering it again, new
 notes, source stops, tiny final-frame tails and shared limiting are tested.
-24 adaptive mixed cases cover graphs0/5/7, Exact/Hermite and four block sizes.
+48 adaptive mixed cases cover graphs0/5/7 and the stopped-attack reduced forms
+of graphs3/4/6, Exact/Hermite and four block sizes. Fixed-density mixed coverage
+also includes48 cases. See [reduced-graph eligibility](fm-reduced-graphs.md).
 Six CLI checks include metadata exclusion and a high-note match to fixed16x.
 Twelve legacy controls preserve all old report fields and values exactly;
 additional metadata is additive under schema1.
