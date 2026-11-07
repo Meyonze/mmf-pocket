@@ -425,3 +425,7 @@ FM高調波については、単独キャリア4波形・3音域の[スペクト
 録音の条件と比較方法は[比較録音の手順](reference-capture.md)、波形側の素材は
 [比較用音声の生成](audio-probes.md)にまとめています。詳細な実装・検証記録は
 [audio-fidelity.md](audio-fidelity.md)と[DSP review evidence](dsp-review.md)を参照してください。
+
+[演奏中のFM診断](fm-eligibility-audit.md)では、318の自作素材で通常出力とのサンプル一致を
+確認し、実際の生存時間・同時発音数と定常側帯波の倍率目安を測っています。
+低音域の単音だけで適用倍率を決めず、高い変調・多重発音と対象外の接続も調査します。
