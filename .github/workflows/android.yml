@@ -345,6 +345,13 @@ jobs:
           ./render-pressure-audit-test
           PYTHONDONTWRITEBYTECODE=1 python3 tools/render-pressure-audit-cli-test.py ./render-pressure-audit
 
+      - name: Check native channel and ATR contribution diagnostics
+        run: |
+          c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Ithird_party/yamaha-smaf-player/src tools/render-contribution-audit-test.cpp build/native-sanitizer/libsmaf.a -o render-contribution-audit-test
+          ./render-contribution-audit-test
+          c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Ithird_party/yamaha-smaf-player/src tools/render-contribution-audit.cpp build/native-sanitizer/libsmaf.a -o render-contribution-audit
+          PYTHONDONTWRITEBYTECODE=1 python3 tools/render-contribution-audit-cli-test.py --binary ./render-contribution-audit
+
       - name: Build and run scheduled tone inventory tests
         run: |
           c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Ithird_party/yamaha-smaf-player/src tools/tone-usage-audit.cpp build/native-sanitizer/libsmaf.a -o tone-usage-audit

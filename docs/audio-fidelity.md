@@ -3229,3 +3229,17 @@ note84 is already close to the ideal-band reference at8x. Corresponding RMS
 losses of~11.4/~14.1dB remain reported, not compensated. No auto-quality policy
 or default/cache/release change. Four CLI checks pass Release andASan/UBSan.
 See [scope, measurements and usage](fm-player-sidebands.md).
+
+### Channel and independent ATR contribution diagnostic
+
+Added a host-only channel contribution study for native and explicitly selected
+experimental sine policies. Voice copies plus independent original-order shadow
+mixing are checked against a separate uninstrumented block renderer. Per-part
+FIR/FIFO, low-pass and actual shared limiter/fade contributions report peak,
+RMS, AC RMS and DC; powers are nonadditive. Existing trigger counters are
+attributed to score channels or independent ATR domains without changing gain.
+2,121 encoded native inputs match exactly; maximum component residual is
+1.49011611938e-8. Analytical cancellation/limiter/domain tests,512 FM cases,
+16 mixed quality cases and five CLI tests cover bounds, privacy and tails.
+See [usage and interpretation limits](render-contributions.md). Application
+source/default/cache/release remain unchanged.
