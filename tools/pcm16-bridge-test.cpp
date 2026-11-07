@@ -37,9 +37,17 @@ Bytes chunk(const char* id,const Bytes& body,int last=-1){
 }
 Bytes fixture(int kind){
     Bytes body;
-    if(kind==0){
+    if(kind==0||kind==3){
         Bytes score{2,0,0x10,0x10};score.resize(20,0);
-        append(score,chunk("Mtsq",{0,0x90,60,100,10,10,0xff,0x2f,0}));append(body,chunk("MTR0",score));
+        if(kind==3){
+            // Original high-PM VM5 setup; the normal app initializer must
+            // actually use its filtered route, not only pass bridge plumbing.
+            Bytes voice{0x43,0x79,7,0x7f,1,0,0,0,0,0,0,0x79,0};
+            for(int multiple:{7,5})append(voice,{0,0xa0,0xf0,0,0,uint8_t(multiple<<4),0});
+            Bytes setup{0xf0,uint8_t(voice.size()+1)};append(setup,voice);setup.push_back(0xf7);
+            append(score,chunk("Mtsu",setup));
+        }
+        append(score,chunk("Mtsq",{0,0x90,uint8_t(kind==3?84:60),100,10,10,0xff,0x2f,0}));append(body,chunk("MTR0",score));
     }else{
         Bytes atr{0,0,uint8_t(kind==1?1:0x11),uint8_t(kind==1?0x10:0),0,0};
         append(atr,chunk("Atsq",{0,1,100}));Bytes pcm;
@@ -65,10 +73,31 @@ std::vector<int16_t> expected(const Bytes& bytes,bool phone){
     while((n=p.render(b,1024))>0){if(phone)filter.process(b,n);for(int i=0;i<n*2;++i)out.push_back(int16_t(oracle(b[i])));}
     return out;
 }
+void appQuality(){
+    for(int kind=0;kind<4;++kind){
+        const auto bytes=fixture(kind);fxchain::smaf::SmafFile file;
+        require(file.parse(bytes.data(),bytes.size()),"quality fixture parses");
+        fxchain::smaf::MaPlayer app,reference,native;
+        require(initializePlayer(bytes.data(),bytes.size(),app).empty(),"app quality initializes");
+        require(reference.init(file,44100,false,{8,fxchain::smaf::FmSubframeMath::Hermite}),"independent explicit policy initializes");
+        require(native.init(file,44100),"native comparison initializes");
+        require(app.renderLatencySamples()==72,"normal app enables aligned FM reconstruction");
+        std::vector<float> a(4096*2),b(a.size()),original(a.size());
+        require(app.render(a.data(),4096)==4096&&reference.render(b.data(),4096)==4096&&native.render(original.data(),4096)==4096,"quality comparison window renders");
+        require(a==b,"app samples match independently selected8x Hermite policy");
+        if(kind==3){
+            double delta=0;for(int i=72;i<4096;++i)delta+=std::abs(double(a[size_t(i)*2])-original[size_t(i-72)*2]);
+            require(delta>1,"bound high-PM output changes beyond common latency");
+            require(app.diagnostics().fmNotes==1&&app.diagnostics().fallbackNotes==0,"filtered fixture uses authored FM, not fallback");
+        }
+        app.seekToStart();std::vector<float> again(a.size());require(app.render(again.data(),4096)==4096&&again==a,"app seek resets quality history exactly");
+    }
+    std::cout<<"App quality PASS: normal initializer8x Hermite, independent explicit reference, high-PM change, FM/ATR routing and seek.\n";
+}
 void paths(const std::filesystem::path& folder){
     JNINativeInterface_ table{};table.GetArrayLength=length;table.SetShortArrayRegion=setShorts;table.ExceptionCheck=exception;
     JNIEnv env{};env.functions=&table;
-    for(int kind=0;kind<3;++kind)for(bool phone:{false,true}){
+    for(int kind=0;kind<4;++kind)for(bool phone:{false,true}){
         auto bytes=fixture(kind);const auto oraclePcm=expected(bytes,phone);
         const auto path=folder/("synthetic-"+std::to_string(kind)+(phone?"-phone.wav":"-normal.wav"));
         require(render(bytes.data(),bytes.size(),path.string().c_str(),phone).empty(),"actual WAV renderer succeeds");
@@ -231,7 +260,9 @@ void outputFaults(const std::filesystem::path& folder){
         require(error=="一時音声ファイルの書き込みに失敗しました","output failure must never report WAV success");
         const uint64_t expectedFrames=fault==OutputFault::InitialHeader?0:
             fault==OutputFault::FirstPayload?1024:fault==OutputFault::SecondPayload?2048:fullFrames;
-        require(player.cursor_==expectedFrames,"write failure aborts without rendering remaining song");
+        const uint64_t physicalFrames=player.sineRender_?player.sineRender_->outputCursor:player.cursor_;
+        require(physicalFrames==expectedFrames,"write failure aborts without rendering remaining song");
+        if(expectedFrames<=2048)require(player.cursor_==expectedFrames,"early write failure also stops native source clocks");
         if(fault==OutputFault::Close)require(output.closed,"close failure tested after actual close call");
         else require(!output.closed,"failed stream is never treated as successfully finalized file");
     }
@@ -251,6 +282,7 @@ void outputFaults(const std::filesystem::path& folder){
 }
 int main(int argc,char** argv){
     if(argc!=2)return 2;bridgeTest::paths(std::filesystem::path(argv[1]));
+    bridgeTest::appQuality();
     bridgeTest::quietPaths(std::filesystem::path(argv[1]));
     bridgeTest::outputFaults(std::filesystem::path(argv[1]));
     std::cout<<"Actual bridge PASS: WAV/JNI PCM exact, FM/ATR PCM8/ADPCM, phone off/on,1/31/1024-frame blocks, odd capacity, EOF and nonfinite rejection. Host JNI callbacks only; no Android device/VM.\n";

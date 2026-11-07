@@ -3253,3 +3253,15 @@ attack-history shortcut or changes to recorded Audio/ATR.528conditions and
 405,504samples/states compare exactly against the uncertified original path;
 2,121 complete encoded-input WAVs remain byte-identical. See
 [scope and validation](pcm-zero-reconstruction.md). Cache/version unchanged.
+
+### r83 application FM quality policy
+
+The actual app initializer now selects8x Hermite sine reconstruction for the
+validated feedback-free serial2/parallel4 graphs. Native API/CLI defaults remain
+unchanged. Other synthesis routes retain native clocks and72-frame alignment;
+the existing shared output filter/limiter and optional phone processing follow.
+Bump converted cache to r83 so playback/export cannot reuse r82 audio. No version
+bump or release publication yet. Expanded actual WAV/JNI bridge tests assert the
+app policy against an independent explicit8x reference, a real high-PM change,
+seek and existing failure/silence contracts in Release and ASan/UBSan.
+See [scope, evidence and remaining limits](app-fm-quality-r83.md).
