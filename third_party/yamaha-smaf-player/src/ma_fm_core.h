@@ -116,6 +116,8 @@ public:
         return isFinished() || (atkStep_ == 0.0 && level_ == 0.0);
     }
 private:
+    friend class FmVoice; // native-clock sine subframe snapshots, no extra EG advance
+
     enum class Phase { Idle, Attack, Decay, Sustain, Release };
     Phase phase_ = Phase::Idle;
     double level_ = 0.0;             // 0 (silent) .. 1 (peak), linear
@@ -164,6 +166,8 @@ public:
     void  setBaseFreq(double f) { freqHz_ = f; recalc_(); }
     void setBandlimited(bool enabled); // FmVoice restricts this to unmodulated final carriers.
 private:
+    friend class FmVoice; // owning voice reads the post-tick oscillator state
+
     void recalc_();
     FmOpPatch  patch_{};
     FmEnvelope env_{};
@@ -183,6 +187,8 @@ private:
     static float waveform_(uint8_t wave, double phase01);
 };
 
+enum class FmSubframeMath : uint8_t { Exact, Hermite };
+
 // ── a playing voice ─────────────────────────────────────────────────────────
 class FmVoice {
 public:
@@ -194,6 +200,14 @@ public:
     void setPitch(double freqHz);         // pitch bend / portamento
     void setVolume(float v) { volume_ = v; }   // channel volume 0..1
     float tick();                          // one mono sample, ~[-1,1]
+    // Additive source API: serial2/parallel4 sine graphs without feedback only.
+    // Advances tick() ONCE and emits2/4/8/16/32 samples ending at that result.
+    // EG/LFO/allocation timing stay native; intermediate gains are held per frame.
+    // False leaves state/output untouched (bad shape/count/math/null output).
+    // Caller owns FIR filtering, common delay, source routing and EOF policy.
+    bool supportsSineSubframes() const;
+    bool tickSineSubframes(float* output, int factor,
+                          FmSubframeMath math = FmSubframeMath::Exact);
     bool  active() const { return active_; }
     // Exact zero gain or provably silent carriers, never a level threshold.
     // Used only at score EOF, after future controllers/notes are exhausted;
@@ -230,6 +244,7 @@ private:
     // one modulator step: run op[i] with its own feedback + an external phase-mod
     // input (in cycles). returns its output. keeps the FM index musical.
     float modOp_(int i, double extModCycles);
+    template<bool Fast> bool tickSineSubframesImpl_(float* output, int factor);
 };
 
 } // namespace fxchain::smaf

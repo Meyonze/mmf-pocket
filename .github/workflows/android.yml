@@ -259,6 +259,11 @@ jobs:
           c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Ithird_party/yamaha-smaf-player/src tools/fm-parallel-pair-prototype-test.cpp build/native-sanitizer/libsmaf.a -o fm-parallel-pair-prototype-test
           ./fm-parallel-pair-prototype-test
 
+      - name: Check public native-clock FM source API
+        run: |
+          c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Ithird_party/yamaha-smaf-player/src tools/fm-core-subframes-test.cpp build/native-sanitizer/libsmaf.a -o fm-core-subframes-test
+          ./fm-core-subframes-test
+
       - name: Check bounded extra-subframe sine interpolation
         run: |
           c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer tools/fm-subframe-sine-test.cpp -o fm-subframe-sine-test

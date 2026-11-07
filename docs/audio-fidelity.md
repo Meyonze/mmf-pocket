@@ -3169,3 +3169,13 @@ controls, eleven total control pairs match, and100 of108 WAVs are byte-identical
 Genuine MA7 FM/WT OFF/max modulation controls remain distinct and unchanged.
 This enforces existing support policy, not hardware calibration or a new Mobile
 modulation implementation. See [DSP evidence](dsp-review.md#mobile-cc1-source-grammar-isolation-r59).
+
+### Additive native-clock sine subframe source API (cache r82 unchanged)
+
+Moved the tested serial2/parallel4 sine source into `FmVoice::tickSineSubframes`.
+Normal `tick()` and player rendering retain their existing path. Rejected requests
+leave voice state and output untouched; successful calls advance the native clock
+once and retain its endpoint. Exact math is the default, with optional bounded
+Hermite math for interior samples only. No automatic admission, routing, FIR or
+quality mode is enabled. See [API contract and validation](fm-core-subframes.md).
+All2,121 existing normal-render WAVs match the verified pre-API output byte-for-byte.

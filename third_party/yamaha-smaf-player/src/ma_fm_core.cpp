@@ -8,6 +8,7 @@
 // semantics and rate timing; this is not measured or bit-exact handset emulation.
 
 #include "ma_fm_core.h"
+#include "ma_subframe_sine.h"
 
 #include <cmath>
 #include <algorithm>
@@ -895,6 +896,61 @@ float FmVoice::tick() {
     float result = float(out * velocity_ * volume_ * 0.7);
     recentLevel_ += (std::fabs(result) - recentLevel_) * 0.01f;
     return result;
+}
+
+bool FmVoice::supportsSineSubframes() const {
+    const bool serial = !fourOp_ && algo_ == 0;
+    const bool pairs = fourOp_ && algo_ == 5;
+    if (!serial && !pairs) return false;
+    for (int i = 0; i < (pairs ? 4 : 2); ++i)
+        if (patch_.ops[size_t(i)].wave != 0 || opFb_[i] != 0) return false;
+    return true;
+}
+
+bool FmVoice::tickSineSubframes(float* output, int factor, FmSubframeMath math) {
+    if (!output || factor < 2 || factor > 32 || (factor & (factor - 1)) != 0
+        || !supportsSineSubframes()) return false;
+    switch (math) {
+        case FmSubframeMath::Exact: return tickSineSubframesImpl_<false>(output, factor);
+        case FmSubframeMath::Hermite: return tickSineSubframesImpl_<true>(output, factor);
+    }
+    return false;
+}
+
+template<bool Fast> bool FmVoice::tickSineSubframesImpl_(float* output, int factor) {
+    const bool wasActive = active_, pairs = algo_ == 5;
+    const int count = pairs ? 4 : 2;
+    double before[4]{};
+    for (int j = 0; j < count; ++j) before[j] = ops_[j].phase_;
+    const float native = tick();
+    if (!wasActive) { std::fill_n(output, factor, 0.0f); return true; }
+    double inc[4]{};
+    float level[4]{}, am[4]{};
+    bool mute[4]{};
+    for (int j = 0; j < count; ++j) {
+        const auto& op = ops_[j];
+        inc[j] = op.phaseInc_;
+        if (op.vibAmt_ != 0) inc[j] *= 1 + op.vibAmt_ * lfoSin_ * vibratoScale_;
+        mute[j] = op.modernTimbre_ && op.vibAmt_ != 0 ? inc[j] >= .5 : op.cachedMute_;
+        level[j] = float(op.env_.level_);
+        am[j] = op.amAmt_ != 0 ? 1 - op.amAmt_ * float(.5 + .5 * lfoSin_) : 1;
+    }
+    for (int sub = 1; sub < factor; ++sub) {
+        float values[4]{};
+        for (int j = 0; j < count; ++j) {
+            if (mute[j]) continue;
+            const auto& op = ops_[j];
+            double phase = before[j] + inc[j] * double(sub) / factor;
+            if (phase >= 1) phase -= std::floor(phase);
+            if (j == 1 || j == 3) phase += double(values[j - 1]) * modDepth_;
+            const float sine = subframeMath::sample<Fast>(phase, false);
+            values[j] = float(sine * op.tlGain_ * op.kslGain_ * level[j] * am[j]);
+        }
+        const double combined = pairs ? (double(values[1]) + double(values[3])) * .5 : double(values[1]);
+        output[sub - 1] = float(combined * velocity_ * volume_ * .7);
+    }
+    output[factor - 1] = native;
+    return true;
 }
 
 } // namespace fxchain::smaf

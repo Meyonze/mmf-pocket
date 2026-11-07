@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Host-only experimental sine source. Keep this include before ma_fm_core.h.
+// Host validation of the public sine source. Include before ma_fm_core.h.
 #pragma once
 #include <cstdint>
 #include <array>
@@ -23,7 +23,7 @@ template<bool Fast> inline Frame frameImpl(FmVoice& v,std::span<float> out) {
     const size_t factor=out.size();if(factor<2||factor>32||(factor&(factor-1)))throw std::runtime_error("invalid subframe count");
     const bool active=v.active_;
     const double before[2]={v.ops_[0].phase_,v.ops_[1].phase_};
-    Frame result;result.native=v.tick();
+    Frame result;if(!v.tickSineSubframes(out.data(),int(factor),Fast?FmSubframeMath::Hermite:FmSubframeMath::Exact))throw std::runtime_error("core rejected supported sine subframes");result.native=out.back();
     if(!active){std::fill(out.begin(),out.end(),0);return result;}
     double inc[2];float gain[2],am[2];bool mute[2];
     for(int j=0;j<2;++j){const auto& op=v.ops_[j];inc[j]=op.phaseInc_;
@@ -42,7 +42,6 @@ template<bool Fast> inline Frame frameImpl(FmVoice& v,std::span<float> out) {
             values[j]=float(sine*op.tlGain_*op.kslGain_*gain[j]*am[j]);}
         return float(double(values[1])*v.velocity_*v.volume_*.7);
     };
-    for(size_t i=0;i+1<factor;++i)out[i]=sample(i+1);
     result.reconstructedEndpoint=sample(factor);
     // Preserve the exact public native endpoint and its allocation-level update.
     out.back()=result.native;return result;
