@@ -33,7 +33,7 @@ void timelines(){constexpr int frames=720;size_t checks=0;
                     auto y=actual.frame(std::span<const Stereo>(high.data()+n*factor,size_t(factor)),native[size_t(n)],event(mode,n));
                     const auto oldReplay=replay.frame(std::span<const Stereo>(high.data()+n*factor,size_t(factor)),native[size_t(n)],event(mode,n));
                     require(std::abs(y.left-oldReplay.left)<2e-13&&std::abs(y.right-oldReplay.right)<2e-13,"fast path differs from frozen replay baseline");
-                    require(actual.pendingFrames()==replay.pendingFrames(),"fast path changed pending audio/control lifetime");
+                    require(actual.pendingFrames()==replay.pendingFrames()&&actual.hasPendingWork()==(replay.pendingFrames()!=0),"fast path changed pending audio/control lifetime");
                     if(mode==0){const auto old=unchanged.frame(high.data()+n*factor,size_t(factor),native[size_t(n)]);
                         require(y.left==old.left&&y.right==old.right,"no-stop output changed from existing bus");}
                     Stereo expected{};const int latest=(n-pad+1)*factor-1;

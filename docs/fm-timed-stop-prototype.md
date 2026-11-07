@@ -102,3 +102,6 @@ build/fm-timed-stop-prototype/cost > build/fm-timed-stop-prototype/cost.json
 採用する停止方針、音色ごとの適用条件と倍率、倍率変更、WAVの先頭・末尾と時刻表示、
 4演算器・フィードバック・非正弦波、端末負荷も引き続き確認します。
 本体へはまだ適用していません。
+
+続く[複数音源の試作](fm-render-prototype.md)では、チャンネルごとの停止、
+ネイティブ経路と独立した録音入力の混在を検証し、同じ倍率の係数を共有しています。

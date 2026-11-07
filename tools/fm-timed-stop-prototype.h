@@ -3,18 +3,28 @@
 #pragma once
 #include "fm-causal-decimator.h"
 #include <span>
+#include <memory>
 namespace fm_causal {
 class TimedStopPrototype {
+public:
+    class Kernel {
+        friend class TimedStopPrototype;
+        int factor_;
+        std::vector<double> values_;
+        Kernel(int factor,std::vector<double> values):factor_(factor),values_(std::move(values)){}
+    };
+    using KernelHandle=std::shared_ptr<const Kernel>;
+private:
     static constexpr size_t delay=AlignedBus::commonDelay,maxStopGap=4,historyFrames=delay+maxStopGap+1;
     int factor_,padding_;
     AlignedBus bus_;
-    std::vector<double> impulse_;
+    KernelHandle impulse_;
     std::vector<Stereo> fmHistory_;
     std::array<Stereo,historyFrames> nativeHistory_{};
     std::array<bool,historyFrames> stops_{},nonzero_{};
     size_t cursor_=0,cutAge_=0;
     bool direct_=false;
-    int audioPending_=0;
+    int audioPending_=0,queuedStops_=0;
     uint64_t replayedFrames_=0,directFrames_=0;
     static std::vector<double> impulse(int factor) {
         const auto config=alignedConfig(factor);std::vector<double> h{1};size_t stride=1;
@@ -44,7 +54,7 @@ class TimedStopPrototype {
         // terms before the latest cut without replaying intermediate outputs.
         for(size_t age=size_t(padding_);age<=cutAge_;++age){
             const auto* x=fmHistory_.data()+((cursor_+historyFrames-age)%historyFrames)*size_t(factor_);
-            const auto* h=impulse_.data()+(age-size_t(padding_))*size_t(factor_);
+            const auto* h=impulse_->values_.data()+(age-size_t(padding_))*size_t(factor_);
             for(int k=0;k<factor_;++k)if(h[k]!=0){const auto v=x[factor_-1-k];y.left+=h[k]*v.left;y.right+=h[k]*v.right;}
         }
         const auto native=nativeHistory_[(cursor_+historyFrames-delay)%historyFrames];
@@ -52,9 +62,11 @@ class TimedStopPrototype {
         return y;
     }
 public:
-    explicit TimedStopPrototype(int factor):factor_(factor),
+    static KernelHandle prepareKernel(int factor){validateFactor(factor);return KernelHandle(new Kernel(factor,impulse(factor)));}
+    explicit TimedStopPrototype(int factor,KernelHandle sharedKernel={}):factor_(factor),
         padding_(AlignedBus::commonDelay-int(Decimator(alignedConfig(factor)).delayFrames())),
-        bus_(factor),impulse_(impulse(factor)),fmHistory_(historyFrames*size_t(factor)){}
+        bus_(factor),impulse_(sharedKernel?std::move(sharedKernel):prepareKernel(factor)),fmHistory_(historyFrames*size_t(factor)){
+        check(impulse_->factor_==factor,"shared kernel factor mismatch");}
     // Caller kills source voices in score order before submitting this frame.
     // Stop at input n takes effect at n+72, retaining NoteOn ordered after it.
     // Ordinary NoteOff/Hold remain source-envelope operations.
@@ -66,10 +78,10 @@ public:
             nonzero=nonzero||x.left!=0||x.right!=0;}
         auto* dest=fmHistory_.data()+cursor_*size_t(factor_);
         if(fm.empty())std::fill_n(dest,size_t(factor_),Stereo{});else std::copy(fm.begin(),fm.end(),dest);
-        nativeHistory_[cursor_]=native;stops_[cursor_]=hardStop;nonzero_[cursor_]=nonzero;
+        nativeHistory_[cursor_]=native;stops_[cursor_]=hardStop;queuedStops_+=hardStop;nonzero_[cursor_]=nonzero;
         const size_t due=(cursor_+historyFrames-delay)%historyFrames;Stereo y;
         if(stops_[due]) {
-            stops_[due]=false;cutAge_=delay;direct_=nextStopSoon(due);
+            stops_[due]=false;--queuedStops_;cutAge_=delay;direct_=nextStopSoon(due);
             if(direct_)y=directOutput();
             else {
                 bus_.reset();audioPending_=0;
@@ -83,8 +95,10 @@ public:
         cursor_=(cursor_+1)%historyFrames;return y;
     }
     void reset(){bus_.reset();std::fill(fmHistory_.begin(),fmHistory_.end(),Stereo{});nativeHistory_.fill({});
-        stops_.fill(false);nonzero_.fill(false);cursor_=cutAge_=0;direct_=false;audioPending_=0;replayedFrames_=directFrames_=0;}
+        stops_.fill(false);nonzero_.fill(false);cursor_=cutAge_=0;direct_=false;audioPending_=queuedStops_=0;replayedFrames_=directFrames_=0;}
+    bool hasPendingWork()const{return audioPending_!=0||queuedStops_!=0;}
     int pendingFrames()const {
+        if(queuedStops_==0)return audioPending_;
         int remaining=audioPending_;
         for(size_t age=0;age<delay;++age)if(stops_[(cursor_+historyFrames-1-age)%historyFrames])
             remaining=std::max(remaining,int(delay-age));
