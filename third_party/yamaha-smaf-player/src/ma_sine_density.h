@@ -22,7 +22,7 @@ inline bool needs16(double beta,double carrier,double modulator) {
     // Folded energy can enter the final +/-0.5 band near8 +/-0.5,
     // not merely when it crosses the8x source Nyquist at4.
     if(beta<=0||modulator<=0)return false;
-    const double available=std::floor((7.5-carrier)/modulator)+1;
+    const double available=std::ceil((7.5-carrier)/modulator);
     const int first=int(std::clamp(available,1.,256.));
     return tailBound(beta,first)>1e-4;
 }

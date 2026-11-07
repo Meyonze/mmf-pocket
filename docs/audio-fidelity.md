@@ -3292,3 +3292,10 @@ final-frame tails/blocks/seek, Release/ASan, actual JNI/WAV paths and Androidall
 lint/Debug/Release pass.32 encoded app cases change only the intended one;
 31 remain exact. Cache85; official1.6.6 unchanged. Fixed-density contribution
 audit explicitly rejects adaptive players. See [scope and limits](fm-adaptive-density.md).
+
+### r86 folded-Nyquist edge inclusion
+
+Use ceil for the first relevant sideband order so an exactly representable
+8±0.5 boundary is included. A regression with beta8π, fc.109375 and fm.171875
+fails the old floor+1 estimate and passes the correction. Existing48 spectral
+policies/selection and mixed/endpoint results remain unchanged. Cache86.

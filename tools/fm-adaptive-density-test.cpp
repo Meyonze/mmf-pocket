@@ -48,6 +48,7 @@ void bounds(){size_t checks=0;
  bool scaleCrossing=false;
  for(int note=72;note<96;++note){auto q=patch(0);for(auto& o:q.ops){o.vib=true;o.dvb=3;}FmVoice v;v.setSampleRate(rate);v.noteOn(q,hz(note),1);int low=v.sineDensityHint();v.setVibratoScale(8);if(low==8&&v.sineDensityHint()==16)scaleCrossing=true;}
  require(scaleCrossing,"vibrato scale never triggers denser source");
+ require(sine_density::needs16(tau*4,.109375,.171875),"sideband exactly on folded Nyquist edge was omitted");
  std::cout<<checks<<" independent Bessel tail bounds, note/density reset and vibrato guards PASS\n";
 }
 std::vector<double> renderAdaptive(const Case& c,int graph){
