@@ -3216,3 +3216,16 @@ channel's original summation order, decimation phase and finite support.
 and full states match (only signed interior zero is normalized in transport).
 2,121 normal WAVs and24 experimental full WAVs remain byte-identical.
 See [cost/validation](fm-render-cost-reduction.md). Default/cache/release unchanged.
+
+### Public-player steady PM/FIR/output-level audit
+
+Added an original VM5 setup/Mobile-score study using only public player APIs.
+24note/ratio/TL combinations,12policies each, compare actual source/mix/FIR/LP
+output with frozen independent PM/Bessel and dense complex FIR/LP references.
+No engine-private parameter readback, power normalization, ROM samples or
+hardware-fidelity claim. All288conditions agree within maximumRMS7.94e-8 locally.
+A strong PM case needs16x at note96 where8x retains large alias energy, while
+note84 is already close to the ideal-band reference at8x. Corresponding RMS
+losses of~11.4/~14.1dB remain reported, not compensated. No auto-quality policy
+or default/cache/release change. Four CLI checks pass Release andASan/UBSan.
+See [scope, measurements and usage](fm-player-sidebands.md).
