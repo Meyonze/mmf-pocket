@@ -193,7 +193,7 @@ void clocksAndGuards() {
         }
         ++cases;
     }
-    for (int graph : {3,4,6}) for (int kind=0;kind<13;++kind) {
+    for (int graph : {3,4,6}) for (int kind=0;kind<14;++kind) {
         auto p=patch(graph,2);
         if(kind==0)p.fourOp=false;
         if(kind==1)p.ops[size_t(stopped(graph))].ar=1;
@@ -202,6 +202,7 @@ void clocksAndGuards() {
         if(kind>=4&&kind<8)p.ops[size_t(kind-4)].wave=6;
         if(kind>=8&&kind<12)p.ops[size_t(kind-8)].fb=3;
         if(kind==12)p.ops[size_t(modulator(graph))].ar=0;
+        if(kind==13)p.ops[3].ar=0;
         FmVoice v;v.setSampleRate(rate);v.noteOn(p,317,1);auto original=v;
         std::array<float,8> out;out.fill(123);
         require(!v.supportsSineSubframes()&&!v.tickSineSubframes(out.data(),8),"unsafe reduced shape admitted");
@@ -222,6 +223,9 @@ void clocksAndGuards() {
         odd.ops[size_t(modulator(graph))].rateLowBits=8;
         v.noteOn(odd,317,1);
         require(v.supportsSineSubframes(),"odd active modulator incorrectly treated as stopped");
+        odd=patch(graph,2);odd.ops[3].ar=0;odd.ops[3].rateLowBits=8;
+        v.noteOn(odd,317,1);
+        require(v.supportsSineSubframes(),"odd active carrier incorrectly treated as stopped");
     }
     std::cout<<cases<<" reduced clock/Hold/retrigger cases and "<<guards<<" unsafe-shape guards PASS\n";
 }

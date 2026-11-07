@@ -51,7 +51,8 @@ Bytes fixture(int kind){
                 if(reducedGraph==6&&j==0)tl=18;
                 const bool stopped=reducedGraph&&j==size_t(reducedGraph==3?2:1);
                 int ar=stopped?(kind>=13&&kind<=15?1:0):15;
-                if(kind>=16&&j==size_t(reducedGraph==3?0:2))ar=0;
+                if(kind>=16&&kind<=18&&j==size_t(reducedGraph==3?0:2))ar=0;
+                if(kind>=19&&j==3)ar=0;
                 append(voice,{0,0xa0,uint8_t(ar<<4),uint8_t(tl<<2),0,uint8_t(multiples[j]<<4),0});}
             Bytes setup{0xf0,uint8_t(voice.size()+1)};append(setup,voice);setup.push_back(0xf7);
             append(score,chunk("Mtsu",setup));
@@ -83,7 +84,7 @@ std::vector<int16_t> expected(const Bytes& bytes,bool phone){
     return out;
 }
 void appQuality(){
-    for(int kind=0;kind<19;++kind){
+    for(int kind=0;kind<22;++kind){
         const auto bytes=fixture(kind);fxchain::smaf::SmafFile file;
         require(file.parse(bytes.data(),bytes.size()),"quality fixture parses");
         fxchain::smaf::MaPlayer app,reference,native;
@@ -108,9 +109,14 @@ void appQuality(){
 void paths(const std::filesystem::path& folder){
     JNINativeInterface_ table{};table.GetArrayLength=length;table.SetShortArrayRegion=setShorts;table.ExceptionCheck=exception;
     JNIEnv env{};env.functions=&table;
-    for(int kind=0;kind<19;++kind)for(bool phone:{false,true}){
+    for(int kind=0;kind<22;++kind)for(bool phone:{false,true}){
         auto bytes=fixture(kind);const auto oraclePcm=expected(bytes,phone);
         const auto path=folder/("synthetic-"+std::to_string(kind)+(phone?"-phone.wav":"-normal.wav"));
+        if(kind==19||kind==20){
+            require(!oraclePcm.empty()&&std::all_of(oraclePcm.begin(),oraclePcm.end(),[](int16_t x){return x==0;}),"stopped carrier fixture must be silent");
+            require(render(bytes.data(),bytes.size(),path.string().c_str(),phone)=="音声データを生成できませんでした","silent stopped carrier keeps existing WAV rejection");
+            continue;
+        }
         require(render(bytes.data(),bytes.size(),path.string().c_str(),phone).empty(),"actual WAV renderer succeeds");
         std::ifstream wav(path,std::ios::binary);Bytes saved{std::istreambuf_iterator<char>(wav),{}};
         require(saved.size()==44+oraclePcm.size()*2,"WAV header/data length exact");
