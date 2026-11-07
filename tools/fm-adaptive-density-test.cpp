@@ -118,6 +118,25 @@ void mixedDense(){
  require(allocationProbe::count==0,"adaptive render performed ordinary C++ heap allocation");
  std::cout<<"900 mixed native/8x/16x frames with pitch raise/lower, retrigger, Hold and stop PASS; max error "<<maxError<<"; ordinary C++ new0\n";
 }
+
+void transientCompatibility(){size_t cases=0;
+ for(int graph:{0,7})for(int note:{85,86})for(int gate:{1,44,441})for(bool hard:{false,true}){
+  std::array<std::vector<double>,2> outputs;
+  for(int i=0;i<2;++i){MaPlayer p;const Case c{note,5,7,0};const auto f=graph==7?algorithm7::fixture(c):player_sideband::fixture(c);
+   require(p.init(f,rate,false,{i?16:8,FmSubframeMath::Hermite,i==0}),"transient reference init");
+   const auto events=p.events_;p.events_.clear();for(const auto& e:events)if(e.sample==0)p.events_.push_back(e);
+   if(hard)p.events_.push_back({uint64_t(gate),MaPlayer::Ev::AllSoundOff,0,0,0});
+   else {const auto off=std::find_if(events.begin(),events.end(),[](const auto& e){return e.type==MaPlayer::Ev::NoteOff;});require(off!=events.end(),"transient authored note-off missing");auto e=*off;e.sample=gate;p.events_.push_back(e);}
+   const int length=gate+8192;p.events_.push_back({uint64_t(length),MaPlayer::Ev::ScoreNop,0,0,0});p.nonAtrGateEventEnd_=p.events_.size();p.endSample_=length+4096;p.scoreEndSample_=length;
+   std::vector<float> data(size_t(length+72)*2);require(p.render(data.data(),length+72)==length+72,"transient window ended early");
+   for(int n=0;n<length+72;++n)outputs[size_t(i)].push_back(data[size_t(n)*2]);
+  }
+  double peak=0;for(size_t j=0;j<outputs[0].size();++j)peak=std::max(peak,std::abs(outputs[0][j]-outputs[1][j]));
+  require(peak<1e-5&&error(outputs[0],outputs[1])<1e-6,"density policy changes protected onset/gate transient");++cases;
+ }
+ std::cout<<cases<<" onset/short-gate cases retain independent16x reference PASS\n";
+}
+
 void boundaries(){
  for(int factor:{0,1,2,4,16,32}){MaPlayer p;require(!p.init(algorithm7::fixture({96,5,7,0}),rate,false,{factor,FmSubframeMath::Hermite,true}),"invalid boost baseline accepted");}
  for(int block:{1,17,512,1024})for(float gain:{1.f,1e-12f}){
@@ -136,5 +155,5 @@ void boundaries(){
 }
 }
 #ifndef FM_ADAPTIVE_DENSITY_TEST_NO_MAIN
-int main(){try{adaptive::bounds();adaptive::spectra();adaptive::mixedDense();adaptive::boundaries();return 0;}catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}
+int main(){try{adaptive::bounds();adaptive::spectra();adaptive::mixedDense();adaptive::transientCompatibility();adaptive::boundaries();return 0;}catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}
 #endif

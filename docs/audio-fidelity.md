@@ -3311,3 +3311,13 @@ bit-for-bit.24 mixed/late-part cases, tiny final-frame tails, heavy shared limit
 and six CLI checks pass;12 legacy controls preserve every previous field/value.
 Application source, cache86 and release are unchanged by this diagnostic update.
 See [interpretation](render-contributions.md).
+
+### Adaptive density transient protection
+
+Added24 public-player comparisons for graphs0/7, notes85/86, gates1/44/441
+frames and normal NoteOff/hard AllSoundOff. Peak/RMS differences must stay
+below1e-5/1e-6 against an independent fixed16x player. A tighter stationary
+tail-bound candidate passed steady-state checks but changed onset/gate
+transients, so it was rejected. Production density selection and cache86 remain
+unchanged; these tests protect those specific transient cases, not all timbres
+or hardware fidelity.
