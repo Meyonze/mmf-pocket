@@ -45,13 +45,19 @@ struct SmafFile {
 #include "smaf_file.h"
 #include <limits>
 namespace fxchain::smaf {
+enum class FmSubframeMath { Exact, Hermite };
+struct SineRenderOptions { int factor=0; FmSubframeMath math=FmSubframeMath::Exact; };
 struct MaPlayer {
     uint8_t mode = 0;
-    bool init(const SmafFile& file, uint32_t) { mode = file.mode; return true; }
+    SineRenderOptions sine;
+    bool init(const SmafFile& file, uint32_t, bool, SineRenderOptions options) {
+        mode = file.mode; sine=options; return true;
+    }
     int render(float* out, int frames) {
         const float samples[] = {0.5f, -0.5f, 2.0f, -2.0f};
         for (int i = 0; i < frames * 2; ++i)
-            out[i] = mode == 0 ? 0.0f : mode == 5 ? 0.000001f : mode == 1 ? 0.0001f :
+            out[i] = sine.factor ? float(sine.factor)/64 * (sine.math==FmSubframeMath::Hermite?-1:1) :
+                     mode == 0 ? 0.0f : mode == 5 ? 0.000001f : mode == 1 ? 0.0001f :
                      mode == 2 ? samples[i % 4] : mode == 3 ?
                      std::numeric_limits<float>::quiet_NaN() :
                      std::numeric_limits<float>::infinity();
@@ -132,6 +138,30 @@ struct MaPlayer {
         self.assertEqual(result.returncode, 3)
         with wave.open(str(output)) as reader:
             self.assertEqual(reader.getnframes(), 30 * 44100)
+
+    def test_experimental_policy_reaches_engine(self):
+        for factor in (1, 2, 4, 8, 16, 32):
+            for math in ("exact", "hermite"):
+                with self.subTest(factor=factor, math=math):
+                    result = self.run_cli(extra=(f"--experimental-sine-factor={factor}",
+                                                 f"--experimental-sine-math={math}"))
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    expected = round(factor / 64 * 32767) * (-1 if math == "hermite" else 1)
+                    self.assertEqual(set(self.read_pcm()), {expected})
+
+    def test_experimental_policy_validation(self):
+        bad = [(f"--experimental-sine-factor={v}",) for v in
+               ("", "0", "3", "64", "-1", "+2", "2x", "nan", "99999999999999999999")]
+        bad += [("--experimental-sine-math=hermite",),
+                ("--experimental-sine-factor=8", "--experimental-sine-math=other"),
+                ("--experimental-sine-factor=8", "--experimental-sine-factor=8"),
+                ("--unknown",)]
+        for extra in bad:
+            with self.subTest(extra=extra):
+                output = self.root / "invalid-policy.wav"
+                self.assertFalse(output.exists())
+                self.assertEqual(self.run_cli(output=output, extra=extra).returncode, 2)
+                self.assertFalse(output.exists())
 
     def test_input_size_and_missing_file(self):
         source = self.root / "oversized.mmf"

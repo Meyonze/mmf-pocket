@@ -3179,3 +3179,17 @@ once and retain its endpoint. Exact math is the default, with optional bounded
 Hermite math for interior samples only. No automatic admission, routing, FIR or
 quality mode is enabled. See [API contract and validation](fm-core-subframes.md).
 All2,121 existing normal-render WAVs match the verified pre-API output byte-for-byte.
+
+### Opt-in fixed-factor sine player routing (default cache r82 unchanged)
+
+Added explicit `SineRenderOptions` to native player initialization and experimental
+host CLI flags. Factor0 retains the original render loop; factor1 is an exact
+72-frame native alignment control. Factors2..32 use the validated sine source API
+and shared stereo halfband FIR, with equally delayed native FM/PCM/Audio/ATR.
+Source and output clocks are separate; finite FIFO/FIR tails survive natural EOF,
+while the old hard safety fade/cap moves72frames. Channel stops retain shared
+filter tails, and seek resets all clocks/histories. No Java/JNI setting or default
+policy, ROM gain adjustment, release or cache change was made.
+All2,121 default WAVs remain byte-identical. Source scheduling and hot limiting
+match an independent dense FIR/output-stage reference over12,000frames.
+See [routing contract and validation](fm-player-sine-render.md).

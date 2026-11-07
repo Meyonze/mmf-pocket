@@ -24,20 +24,31 @@
 #include "pcm_silence.h"
 #include "smaf_voice.h"
 #include "score_audit.h"
+#include "ma_sine_output.h"
 
 #include <cstdint>
 #include <vector>
 #include <array>
 #include <map>
+#include <optional>
 
 namespace fxchain::smaf {
+
+// Explicit experimental source policy, fixed for an init/seek lifecycle.
+// 0: original renderer. 1: native-only72-frame alignment control.
+// 2/4/8/16/32: filter supported sine sources; delay all others equally.
+struct SineRenderOptions {
+    int factor = 0;
+    FmSubframeMath math = FmSubframeMath::Exact;
+};
 
 class MaPlayer {
 public:
     // build the engine from a parsed file. returns false only if there is
     // nothing playable at all. sampleRate is the output/device rate.
     bool init(const SmafFile& file, uint32_t sampleRate,
-              bool suppressHpsSlapbackDuplicates = false);
+              bool suppressHpsSlapbackDuplicates = false,
+              SineRenderOptions sine = {});
 
     // render interleaved stereo float. returns frames produced (< frames at
     // end of song). safe to call after the song ends (returns 0).
@@ -45,7 +56,10 @@ public:
 
     void  seekToStart();
     // Upper bound including release safety allowance, not exact WAV duration.
-    uint64_t totalSamples() const { return endSample_; }
+    uint64_t totalSamples() const {
+        return endSample_ + (sineRender_ && endSample_ ? sine_output::Bus::latency : 0);
+    }
+    int renderLatencySamples() const { return sineRender_ ? sine_output::Bus::latency : 0; }
     // Estimated event/ATR-source endpoint; slot stealing may finish earlier.
     uint64_t scoreEndSamples() const { return scoreEndSample_; }
     // Coarse note-on activity used only for the UI mascot: 0 slow, 1 normal, 2 fast.
@@ -71,6 +85,19 @@ public:
     const ScoreAudit& scoreAudit() const { return scoreAudit_; }
 
 private:
+    struct SineRenderState {
+        sine_output::Bus bus;
+        FmSubframeMath math;
+        uint64_t outputCursor = 0, nativeFlushUntil = 0, fmFlushUntil = 0;
+        bool inputFinished = false;
+        explicit SineRenderState(SineRenderOptions options) : bus(options.factor), math(options.math) {}
+        void reset() {
+            bus.reset(); outputCursor = nativeFlushUntil = fmFlushUntil = 0; inputFinished = false;
+        }
+    };
+    std::optional<SineRenderState> sineRender_;
+    int renderSine_(float* interleaved, int frames);
+
     // ── the decoded event stream ────────────────────────────────────────────
     struct Ev {
         uint64_t sample;

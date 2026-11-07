@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <charconv>
 #include <cmath>
 #include <cstdio>
 #include <cstdint>
@@ -15,6 +16,7 @@
 #include <fstream>
 #include <filesystem>
 #include <stdexcept>
+#include <string_view>
 #include <vector>
 
 using namespace fxchain::smaf;
@@ -59,12 +61,13 @@ static void writeHeader(std::ostream& f, uint32_t frames, uint32_t rate) {
 }
 
 int main(int argc, char** argv) {
-    if (argc < 3 || argc > 4) {
-        std::fprintf(stderr, "usage: smaf-render <tune.mmf> <out.wav> [seconds]\n");
+    if (argc < 3 || argc > 6) {
+        std::fprintf(stderr, "usage: smaf-render <tune.mmf> <out.wav> [seconds] [--experimental-sine-factor=1|2|4|8|16|32] [--experimental-sine-math=exact|hermite]\n");
         return 2;
     }
     double seconds = 30.0;
-    if (argc == 4) {
+    int option = 3;
+    if (argc > 3 && !std::string_view(argv[3]).starts_with("--")) {
         char* end = nullptr;
         errno = 0;
         seconds = std::strtod(argv[3], &end);
@@ -73,6 +76,30 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "seconds must be a finite number greater than 0 and at most 600\n");
             return 2;
         }
+        ++option;
+    }
+    SineRenderOptions sine;
+    bool factorSeen = false, mathSeen = false;
+    for (; option < argc; ++option) {
+        std::string_view arg(argv[option]);
+        if (arg.starts_with("--experimental-sine-factor=") && !factorSeen) {
+            auto value = arg.substr(std::string_view("--experimental-sine-factor=").size());
+            const auto parsed = std::from_chars(value.data(), value.data() + value.size(), sine.factor);
+            if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size() ||
+                sine.factor < 1 || sine.factor > 32 || (sine.factor & (sine.factor - 1)) != 0) {
+                std::fprintf(stderr, "experimental sine factor must be1/2/4/8/16/32\n"); return 2;
+            }
+            factorSeen = true;
+        } else if (arg.starts_with("--experimental-sine-math=") && !mathSeen) {
+            auto value = arg.substr(std::string_view("--experimental-sine-math=").size());
+            if (value == "exact") sine.math = FmSubframeMath::Exact;
+            else if (value == "hermite") sine.math = FmSubframeMath::Hermite;
+            else { std::fprintf(stderr, "experimental sine math must be exact/hermite\n"); return 2; }
+            mathSeen = true;
+        } else { std::fprintf(stderr, "unknown or duplicate renderer option\n"); return 2; }
+    }
+    if (mathSeen && !factorSeen) {
+        std::fprintf(stderr, "experimental sine math requires an explicit factor\n"); return 2;
     }
     constexpr uint32_t rate = 44100;
     try {
@@ -83,7 +110,7 @@ int main(int argc, char** argv) {
         std::printf("SMAF: title='%s' vendor='%s' tracks=%zu\n",
                     file.title.c_str(), file.vendor.c_str(), file.tracks.size());
         MaPlayer player;
-        if (!player.init(file, rate)) throw std::runtime_error("no playable track");
+        if (!player.init(file, rate, false, sine)) throw std::runtime_error("no playable track");
 
         std::error_code aliasError;
         if (std::filesystem::equivalent(argv[1], argv[2], aliasError))

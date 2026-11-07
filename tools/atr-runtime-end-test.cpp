@@ -108,4 +108,6 @@ void wtReplacement() {
     }
 }
 }
+#ifndef MMF_ATR_RUNTIME_NO_MAIN
 int main(){stolen();liveSources();wtReplacement();std::cout<<"PASS: stolen ATR lifetime, held FM/WT,16/32 slots,future events,seek,WT replacement and live recordings\n";}
+#endif

@@ -13,6 +13,7 @@
 
 #include "ma_player.h"
 #include "pcm_interpolation.h"
+#include "ma_subframe_sine.h"
 #include "yamaha_adpcm.h"   // unused until m1 (embedded pcm voices); included so
                             // the codec always compiles alongside the engine.
 
@@ -304,7 +305,14 @@ std::vector<uint8_t> smafHuffmanInflate(const uint8_t* p, size_t n) {
 
 // ── build ────────────────────────────────────────────────────────────────────
 bool MaPlayer::init(const SmafFile& file, uint32_t sampleRate,
-                    bool suppressHpsSlapbackDuplicates) {
+                    bool suppressHpsSlapbackDuplicates, SineRenderOptions sine) {
+    if ((sine.factor != 0 && !sine_output::validFactor(sine.factor)) ||
+        (sine.math != FmSubframeMath::Exact && sine.math != FmSubframeMath::Hermite)) return false;
+    sineRender_.reset();
+    if (sine.factor != 0) {
+        sineRender_.emplace(sine);
+        if (sine.math == FmSubframeMath::Hermite) (void)subframeMath::coefficients();
+    }
     rate_ = sampleRate ? sampleRate : 48000;
     events_.clear(); voiceTable_.clear();
     nextEvent_ = 0; nonAtrGateEventEnd_ = 0; atrPlaybackEndSample_ = 0;
@@ -2092,6 +2100,7 @@ void MaPlayer::fireEvent_(const Ev& e) {
 
 // ── render ───────────────────────────────────────────────────────────────────
 int MaPlayer::render(float* out, int frames) {
+    if (sineRender_) return renderSine_(out, frames);
     // A malformed or pathological envelope must not keep a conversion alive
     // after the song safety limit. Previously the inner loop broke here but a
     // following render() call produced one more frame again, so a caller could
@@ -2200,7 +2209,116 @@ int MaPlayer::render(float* out, int frames) {
     return produced;
 }
 
+
+// Opt-in source experiment: keep the original render loop above untouched.
+// Source time stops at exhaustion; physical output continues through the bus.
+int MaPlayer::renderSine_(float* out, int frames) {
+    auto& state = *sineRender_;
+    if (ended_ || endSample_ == 0) { ended_ = true; return 0; }
+    const int factor = state.bus.factor();
+    int produced = 0;
+    while (produced < frames) {
+        if (!state.inputFinished) {
+            if (cursor_ >= endSample_) {
+                state.inputFinished = true;
+                diagnostics_.tailLimitReached = activeVoices_() > 0;
+            } else {
+                while (nextEvent_ < events_.size() && events_[nextEvent_].sample <= cursor_) {
+                    fireEvent_(events_[nextEvent_]); ++nextEvent_;
+                }
+                if (atrEndPending_ && nextEvent_ >= nonAtrGateEventEnd_ &&
+                    std::none_of(pcmPool_.begin(), pcmPool_.end(),
+                        [](const PcmVoice& v) { return v.active && v.keyNote < 0; })) {
+                    atrEndPending_ = false;
+                    const uint64_t authoredEnd = events_[nonAtrGateEventEnd_ - 1].sample;
+                    scoreEndSample_ = std::min(scoreEndSample_, std::max(authoredEnd, completedAtrEndSample_));
+                    endSample_ = std::min(endSample_, scoreEndSample_ + uint64_t(rate_) * 10);
+                }
+                if (nextEvent_ >= nonAtrGateEventEnd_ &&
+                    (activeVoices_() == 0 || (cursor_ >= scoreEndSample_ && !hasOutputVoices_())))
+                    state.inputFinished = true;
+            }
+        }
+        // The hard source cap still fades at the delayed original boundary.
+        // Natural endings flush finite FIR support and then the existing LP.
+        const uint64_t outputEnd = endSample_ + sine_output::Bus::latency;
+        if (state.outputCursor >= outputEnd) { ended_ = true; break; }
+        if (state.inputFinished &&
+            state.outputCursor >= std::max(state.nativeFlushUntil, state.fmFlushUntil) &&
+            std::max({std::fabs(lp1L_), std::fabs(lp1R_),
+                      std::fabs(lp2L_), std::fabs(lp2R_)}) < 1e-7f) {
+            ended_ = true; break;
+        }
+
+        float l = 0.0f, r = 0.0f;
+        std::array<sine_output::Stereo, 32> high{};
+        constexpr float kMixGain = .32f;
+        if (!state.inputFinished) {
+            for (int i = 0; i < kPoolSize; ++i) {
+                auto& voice = pool_[i]; if (!voice.active()) continue;
+                std::array<float, 32> samples;
+                if (factor > 1 && voice.tickSineSubframes(samples.data(), factor, state.math)) {
+                    for (int k = 0; k < factor; ++k) {
+                        high[size_t(k)].left += samples[size_t(k)] * kMixGain * poolPanLeft_[i];
+                        high[size_t(k)].right += samples[size_t(k)] * kMixGain * poolPanRight_[i];
+                    }
+                } else {
+                    const float sample = voice.tick();
+                    l += sample * kMixGain * poolPanLeft_[i]; r += sample * kMixGain * poolPanRight_[i];
+                }
+            }
+            for (int i = 0; i < kPcmPool; ++i) {
+                if (!pcmPool_[i].active) continue;
+                const float sample = pcmPool_[i].tick();
+                if (atrEndPending_ && pcmPool_[i].keyNote < 0 && !pcmPool_[i].active)
+                    completedAtrEndSample_ = std::max(completedAtrEndSample_, pcmPool_[i].atrEndSample);
+                l += sample * kMixGain * pcmPool_[i].panLeft;
+                r += sample * kMixGain * pcmPool_[i].panRight;
+            }
+            for (auto& voice : audioPool_) {
+                if (!voice.active) continue;
+                const float sample = voice.tick();
+                l += sample * kMixGain * voice.panLeft; r += sample * kMixGain * voice.panRight;
+            }
+            state.nativeFlushUntil = state.outputCursor + 1 + sine_output::Bus::latency;
+            ++cursor_;
+        }
+        // Only actual nonzero input can extend FIR support. This is exact
+        // zero detection, preserving arbitrarily small nonzero samples.
+        if (factor > 1 && std::any_of(high.begin(), high.begin() + factor,
+                [](const sine_output::Stereo& x) { return x.left != 0 || x.right != 0; }))
+            state.fmFlushUntil = state.outputCursor + 1 + uint64_t(state.bus.tailBoundFrames());
+        const auto aligned = state.bus.frame(std::span<const sine_output::Stereo>(high.data(), size_t(factor)), {l, r});
+        l = float(aligned.left); r = float(aligned.right);
+        lp1L_ += lpCoef_ * (l - lp1L_); lp2L_ += lpCoef_ * (lp1L_ - lp2L_);
+        lp1R_ += lpCoef_ * (r - lp1R_); lp2R_ += lpCoef_ * (lp1R_ - lp2R_);
+        l = lp2L_; r = lp2R_;
+        const float peak = std::max(std::fabs(l), std::fabs(r));
+        limEnv_ = std::max(peak, limEnv_ * limRelease_);
+        if (limEnv_ > .92f) {
+            ++diagnostics_.limitedFrames;
+            const float gain = .92f / limEnv_; l *= gain; r *= gain;
+            if (gain <= .7079457843841379) ++diagnostics_.limited3DbFrames;
+            if (gain <= .5011872336272722) ++diagnostics_.limited6DbFrames;
+            if (gain <= .2511886431509580) ++diagnostics_.limited12DbFrames;
+        }
+        const uint64_t fadeFrames = std::max<uint64_t>(2, rate_ / 50);
+        const uint64_t remaining = outputEnd - state.outputCursor;
+        if (remaining <= fadeFrames) {
+            const float gain = float(remaining - 1) / float(fadeFrames - 1); l *= gain; r *= gain;
+        }
+        out[produced * 2] = l; out[produced * 2 + 1] = r;
+        ++produced; ++state.outputCursor;
+        if (state.outputCursor >= outputEnd) {
+            diagnostics_.tailLimitReached = diagnostics_.tailLimitReached || activeVoices_() > 0;
+            ended_ = true; break;
+        }
+    }
+    return produced;
+}
+
 void MaPlayer::seekToStart() {
+    if (sineRender_) sineRender_->reset();
     nextEvent_ = 0; cursor_ = 0;
     resetEnd_();
     atrChans_.clear();
