@@ -38,6 +38,7 @@ class CliTest(unittest.TestCase):
         self.assertEqual(sum(r['reason_voice_frames'].values()), r['active_fm_voice_frames'])
         self.assertEqual(sum(r['steady_model_factor_voice_frames'].values()), r['eligible_voice_frames'])
         self.assertEqual(sum(r['sine_graph_algorithm_voice_frames'].values()), r['sine_graph_no_feedback_voice_frames'])
+        self.assertEqual(sum(r['parallel_pair_model_factor_voice_frames'].values()), r['parallel_pair_candidate_voice_frames'])
         self.assertLessEqual(r['peak_eligible_channels'], r['peak_eligible_fm'])
         self.assertLessEqual(r['peak_eligible_fm'], r['peak_active_fm'])
         self.assertLessEqual(r['peak_active_fm'], 32)
@@ -75,6 +76,17 @@ class CliTest(unittest.TestCase):
         r = self.report('15')
         self.assertGreater(r['maximum_pm_index_upper'], 20)
         self.assertGreater(sum(v for k, v in r['steady_model_factor_voice_frames'].items() if k != '1'), 0)
+
+    def test_parallel_pair_candidate_is_separate(self):
+        probe = replace(FM.CASES[1], name='high-pairs', note=96, algorithm=5,
+                        operators=(FM.Operator(tl=0, multi=3), FM.Operator(tl=0, multi=2),
+                                   FM.Operator(tl=0, multi=7), FM.Operator(tl=0, multi=5)))
+        self.original = FM.encode(probe)
+        self.path.write_bytes(self.original)
+        r = self.report('15')
+        self.assertEqual(r['eligible_voice_frames'], 0)
+        self.assertGreater(r['parallel_pair_candidate_voice_frames'], 0)
+        self.assertGreater(sum(v for k, v in r['parallel_pair_model_factor_voice_frames'].items() if k != '1'), 0)
 
     def test_polyphony_and_native_stealing(self):
         load_spec = importlib.util.spec_from_file_location('eligibility_load', Path(__file__).with_name('generate-fm-load-probes.py'))

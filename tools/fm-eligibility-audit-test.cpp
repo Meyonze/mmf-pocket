@@ -17,15 +17,16 @@ void model(){for(double x:{0.,.01,.1,1.,2.64,25.132741228718345,64.}){auto b=fm_
     std::cout<<"Independent Bessel tail and factor-bound controls PASS\n";
 }
 void classify(){MaPlayer p;require(p.init(fixture(),rate),"classification init");
-    for(int i=0;i<6;++i){auto q=patch();if(i==0)q.ops[0].ar=0;if(i==1)for(auto&o:q.ops){o.ma35Multipliers=true;o.vib=true;o.dvb=2;}
-        if(i==2){q.fourOp=true;q.algorithm=4;}if(i==3)q.algorithm=1;if(i==4)q.ops[0].wave=4;if(i==5)q.feedback=2;
+    for(int i=0;i<7;++i){auto q=patch();if(i==0)q.ops[0].ar=0;if(i==1)for(auto&o:q.ops){o.ma35Multipliers=true;o.vib=true;o.dvb=2;}
+        if(i==2){q.fourOp=true;q.algorithm=4;}if(i==3)q.algorithm=1;if(i==4)q.ops[0].wave=4;if(i==5)q.feedback=2;if(i==6){q.fourOp=true;q.algorithm=5;}
         p.pool_[size_t(i)].setSampleRate(rate);p.pool_[size_t(i)].noteOn(q,440,.7f);p.pool_[size_t(i)].channel=i==1?16:0;}
-    p.pool_[0].setVolume(0);std::array<Cache,MaPlayer::kPoolSize> cache{};auto s=snapshot(p,cache);
-    require(s.active==6&&s.eligible==2&&s.channels==2&&s.muted==1&&s.lfo==1,"live eligibility/liveness/channel classification");
-    require(s.sineGraphs==4&&s.graph[0]==2&&s.graph[1]==1&&s.graph[4]==1,"no-feedback sine graph opportunity counts");
-    require(s.reason==std::array<uint64_t,5>{2,1,1,1,1},"unsupported reasons must partition voice frames");
+    p.pool_[0].setVolume(0);CacheBank cache{};auto s=snapshot(p,cache);
+    require(s.active==7&&s.eligible==2&&s.channels==2&&s.muted==1&&s.lfo==1,"live eligibility/liveness/channel classification");
+    require(s.sineGraphs==5&&s.graph[0]==2&&s.graph[1]==1&&s.graph[4]==1,"no-feedback sine graph opportunity counts");
+    require(s.reason==std::array<uint64_t,5>{2,2,1,1,1},"unsupported reasons must partition voice frames");
+    uint64_t pairSum=0;for(auto n:s.pairFactor)pairSum+=n;require(s.pairs==1&&pairSum==1,"parallel pair planning remains separate from two-op eligibility");
     uint64_t sum=0;for(auto n:s.factor)sum+=n;require(sum==2,"factor groups must partition eligible voice frames");
-    require(cache[0].index==0&&cache[0].tail.order==0,"permanently stopped modulator cannot create sidebands");
+    require(cache[0][0].index==0&&cache[0][0].tail.order==0,"permanently stopped modulator cannot create sidebands");
     require(s.maxIndex>0&&s.maxCarrier>0,"actual PM index and phase increment captured");
     std::cout<<"Eligibility, unsupported paths, muted revival and live channel counts PASS\n";
 }

@@ -254,6 +254,11 @@ jobs:
           c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Ithird_party/yamaha-smaf-player/src tools/fm-eligibility-audit.cpp build/native-sanitizer/libsmaf.a -o fm-eligibility-audit
           PYTHONDONTWRITEBYTECODE=1 python3 tools/fm-eligibility-audit-cli-test.py ./fm-eligibility-audit
 
+      - name: Check native-clock parallel sine FM pairs
+        run: |
+          c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Ithird_party/yamaha-smaf-player/src tools/fm-parallel-pair-prototype-test.cpp build/native-sanitizer/libsmaf.a -o fm-parallel-pair-prototype-test
+          ./fm-parallel-pair-prototype-test
+
       - name: Check unmodulated FM carrier bandlimiting
         run: |
           c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Ithird_party/yamaha-smaf-player/src tools/fm-bandlimit-test.cpp build/native-sanitizer/libsmaf.a -o fm-bandlimit-test

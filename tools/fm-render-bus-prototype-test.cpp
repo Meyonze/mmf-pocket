@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-#include "fm-native-clock-probe.h"
+#include "fm-parallel-pair-probe.h"
 #include "fm-render-bus-prototype.h"
 #include "fm-replay-stop-reference.h"
 #include <cstdlib>
@@ -72,7 +72,7 @@ void realSources(){using namespace fxchain::smaf;const std::array<int,3> ids{0,1
     for(int rate:{8000,44100})for(int factor:{2,8,32}){
         RenderBusPrototype bus(factor,ids);std::array<ReplayStopReference,3> ref{ReplayStopReference(factor),ReplayStopReference(factor),ReplayStopReference(factor)};
         std::array<FmVoice,4> voice,oracle;std::array<FmVoicePatch,4> patch;
-        for(int j=0;j<4;++j){auto&p=patch[size_t(j)];p.modernTimbre=j!=2;p.algorithm=0;p.fourOp=j==3;p.feedback=j==1?3:0;p.lfo=2;
+        for(int j=0;j<4;++j){auto&p=patch[size_t(j)];p.modernTimbre=j!=2;p.algorithm=j==3?4:0;p.fourOp=j==3;p.feedback=j==1?3:0;p.lfo=2;
             for(auto&o:p.ops){o.wave=0;o.ar=15;o.dr=o.sr=o.sl=0;o.rr=15;o.multi=2;o.tl=10;o.holdEnabled=true;o.am=o.vib=true;o.dam=o.dvb=2;}
             voice[size_t(j)].setSampleRate(rate);oracle[size_t(j)].setSampleRate(rate);voice[size_t(j)].noteOn(p,317+31*j,.6f);oracle[size_t(j)].noteOn(p,317+31*j,.6f);}
         std::array<Stereo,72> independentHistory{};size_t cursor=0;bool held=false,flipped=false;
@@ -82,13 +82,13 @@ void realSources(){using namespace fxchain::smaf;const std::array<int,3> ids{0,1
                 if(stops[size_t(owner[j])]){v=FmVoice{};v.setSampleRate(rate);}
                 if((n==80&&j==0)||(stops[1]&&n<111&&j==2))v.noteOn(patch[size_t(j)],503+31*j,.5f);
                 if(n==160){v.setPitch(419+23*j);v.setVolume(.4f);}
-                if(n==180&&j==3){auto p=patch[3];p.fourOp=false;v.noteOn(p,617,.5f);}
+                if(n==180&&j==3){auto p=patch[3];p.algorithm=5;v.noteOn(p,617,.5f);}
             }};events(voice);events(oracle);
-            if(n==79)held=voice[0].active()&&!voice[0].released();if(n==180)flipped=fm_probe::eligible(voice[3]);
+            if(n==79)held=voice[0].active()&&!voice[0].released();if(n==180)flipped=fm_pairs::eligible(voice[3]);
             if(n==300){bus.reset();for(auto&r:ref)r.reset();independentHistory.fill({});cursor=0;}
             std::array<std::array<Stereo,32>,3> high{};std::array<Stereo,3> native{};std::array<float,32> sub{};
             for(int j=0;j<4;++j){auto& v=voice[size_t(j)];const float expected=oracle[size_t(j)].tick();const size_t ch=size_t(owner[j]);
-                if(fm_probe::eligible(v)){const auto r=fm_probe::frame(v,std::span<float>(sub.data(),size_t(factor)));require(r.native==expected,"eligible source native clock changed");
+                if(fm_probe::eligible(v)||fm_pairs::eligible(v)){const auto r=fm_probe::eligible(v)?fm_probe::frame(v,std::span<float>(sub.data(),size_t(factor))):fm_pairs::frame(v,std::span<float>(sub.data(),size_t(factor)));require(r.native==expected,"eligible source native clock changed");
                     for(int k=0;k<factor;++k){high[ch][size_t(k)].left+=sub[size_t(k)]*.7;high[ch][size_t(k)].right+=sub[size_t(k)]*.3;}}
                 else{const float x=v.tick();require(x==expected,"native fallback clock changed");native[ch].left+=x*.4;native[ch].right+=x*.6;}}
             if(n<230)native[1]={native[1].left+.02*std::sin(n*.19),native[1].right-.01*std::cos(n*.13)};
