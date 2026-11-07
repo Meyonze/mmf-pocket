@@ -84,7 +84,7 @@ std::string initializePlayer(const uint8_t* bytes, size_t size,
     fxchain::smaf::SmafFile file;
     if (!file.parse(bytes, size)) return "有効なSMAF/MMFファイルではありません";
 
-    // Validated sine-only serial/pair graphs without feedback use bounded
+    // Validated sine-only graphs0/5/7 without feedback use bounded
     // 8x reconstruction. Other sources retain native synthesis and share the
     // same 72-frame alignment before the output filter/limiter.
     const bool initialized = player.init(file, kSampleRate, needsSo2SlapbackCorrection(bytes, size),

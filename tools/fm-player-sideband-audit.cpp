@@ -97,9 +97,11 @@ int run(){std::cout<<std::setprecision(12)<<"{\"schema_version\":1,\"sample_rate
  std::cout<<"]}\n";std::cout.flush();require(bool(std::cout),"report write failed");return 0;
 }
 }
+#ifndef FM_PLAYER_SIDEBAND_AUDIT_NO_MAIN
 int main(int argc,char** argv){try{
  if(argc==2&&std::string(argv[1])=="--help"){std::cout<<"Usage: fm-player-sideband-audit [--self-test]\n";return 0;}
  if(argc==2&&std::string(argv[1])=="--self-test"){player_sideband::caseReport({84,5,7,0},false);player_sideband::caseReport({96,5,7,24},false);std::cout<<"PASS: public player, fixed setup/score/gain, native alignment and independent PM/FIR/LP model\n";return 0;}
  if(argc!=1){std::cerr<<"Usage: fm-player-sideband-audit [--self-test]\n";return 2;}
  return player_sideband::run();
 }catch(const std::exception& e){std::cerr<<"fm-player-sideband-audit: "<<e.what()<<'\n';return 1;}}
+#endif

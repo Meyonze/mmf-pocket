@@ -901,8 +901,9 @@ float FmVoice::tick() {
 bool FmVoice::supportsSineSubframes() const {
     const bool serial = !fourOp_ && algo_ == 0;
     const bool pairs = fourOp_ && algo_ == 5;
-    if (!serial && !pairs) return false;
-    for (int i = 0; i < (pairs ? 4 : 2); ++i)
+    const bool mixed = fourOp_ && algo_ == 7;
+    if (!serial && !pairs && !mixed) return false;
+    for (int i = 0; i < (fourOp_ ? 4 : 2); ++i)
         if (patch_.ops[size_t(i)].wave != 0 || opFb_[i] != 0) return false;
     return true;
 }
@@ -918,8 +919,8 @@ bool FmVoice::tickSineSubframes(float* output, int factor, FmSubframeMath math) 
 }
 
 template<bool Fast> bool FmVoice::tickSineSubframesImpl_(float* output, int factor) {
-    const bool wasActive = active_, pairs = algo_ == 5;
-    const int count = pairs ? 4 : 2;
+    const bool wasActive = active_, pairs = algo_ == 5, mixed = algo_ == 7;
+    const int count = fourOp_ ? 4 : 2;
     double before[4]{};
     for (int j = 0; j < count; ++j) before[j] = ops_[j].phase_;
     const float native = tick();
@@ -946,11 +947,12 @@ template<bool Fast> bool FmVoice::tickSineSubframesImpl_(float* output, int fact
             const auto& op = ops_[j];
             double phase = before[j] + inc[j] * double(sub) / factor;
             if (phase >= 1) phase -= std::floor(phase);
-            if (j == 1 || j == 3) phase += double(values[j - 1]) * modDepth_;
+            if (mixed ? j == 2 : (j == 1 || j == 3)) phase += double(values[j - 1]) * modDepth_;
             const float sine = subframeMath::sample<Fast>(phase, false);
             values[j] = float(sine * op.tlGain_ * op.kslGain_ * level[j] * am[j]);
         }
-        const double combined = pairs ? (double(values[1]) + double(values[3])) * .5 : double(values[1]);
+        const double combined = mixed ? (double(values[0]) + double(values[2]) + double(values[3])) * .4
+            : pairs ? (double(values[1]) + double(values[3])) * .5 : double(values[1]);
         output[sub - 1] = float(combined * velocity_ * volume_ * .7);
     }
     output[factor - 1] = native;

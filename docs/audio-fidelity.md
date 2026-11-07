@@ -3265,3 +3265,15 @@ bump or release publication yet. Expanded actual WAV/JNI bridge tests assert the
 app policy against an independent explicit8x reference, a real high-PM change,
 seek and existing failure/silence contracts in Release and ASan/UBSan.
 See [scope, evidence and remaining limits](app-fm-quality-r83.md).
+
+### r84 sine algorithm7 app reconstruction
+
+Extended supported sine graphs to algorithm7: direct0 + PM(1→2) + direct3,
+retaining native0.4 mixing and original endpoint/clocks. All four sine operators
+must have zero effective feedback. Fixed8x app policy now applies to this graph;
+cache84 invalidates prior native algorithm7 audio.288 public-player policies
+match independent Bessel plus direct-sine/FIR/LP references (maxRMS3.23e-8).
+240 full-state cases,180 public clock cases, mixed-domain contributions, actual
+WAV/JNI and32 encoded app fixtures pass Release/ASan. Existing10 app fixtures
+and2,121 default native WAVs remain exact; AndroidallABI lint/Debug/Release pass.
+See [measurement scope](fm-algorithm7.md). No official release.

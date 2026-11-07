@@ -79,9 +79,9 @@ void triggerKinds(){
 }
 
 void qualityRoutes(){size_t cases=0;
- for(bool pairs:{false,true})for(int factor:{1,2,8,32})for(auto math:{FmSubframeMath::Exact,FmSubframeMath::Hermite}){
+ for(int algorithm:{0,5,7})for(int factor:{1,2,8,32})for(auto math:{FmSubframeMath::Exact,FmSubframeMath::Hermite}){
   MaPlayer p,b;init(p,factor,math);init(b,factor,math);
-  FmVoicePatch q;q.modernTimbre=true;q.fourOp=pairs;q.algorithm=pairs?5:0;q.lfo=2;
+  FmVoicePatch q;q.modernTimbre=true;q.fourOp=algorithm!=0;q.algorithm=uint8_t(algorithm);q.lfo=2;
   for(int j=0;j<4;++j){auto& o=q.ops[size_t(j)];o.ar=15;o.dr=o.sr=o.sl=0;o.rr=15;o.multi=uint8_t(j%2?2:3);o.tl=uint8_t(j%2?0:24);o.am=o.vib=true;o.dam=o.dvb=2;}
   for(auto* x:{&p,&b}){x->pool_[0].noteOn(q,317,.6f);x->pool_[0].channel=0;x->poolPanLeft_[0]=.7f;x->poolPanRight_[0]=.3f;
    pcm(*x,0,120,1000);pcm(*x,1,120,2000,true,7);

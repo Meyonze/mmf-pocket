@@ -200,7 +200,7 @@ public:
     void setPitch(double freqHz);         // pitch bend / portamento
     void setVolume(float v) { volume_ = v; }   // channel volume 0..1
     float tick();                          // one mono sample, ~[-1,1]
-    // Additive source API: serial2/parallel4 sine graphs without feedback only.
+    // Additive source API: sine graphs0/5/7 without feedback only.
     // Advances tick() ONCE and emits2/4/8/16/32 samples ending at that result.
     // EG/LFO/allocation timing stay native; intermediate gains are held per frame.
     // False leaves state/output untouched (bad shape/count/math/null output).

@@ -15,8 +15,8 @@ FmVoicePatch patch(bool pairs,int profile){FmVoicePatch p;p.fourOp=pairs;p.algor
     return p;}
 void publicState(const FmVoice&a,const FmVoice&b){require(a.active()==b.active()&&a.released()==b.released()&&a.recentLevel()==b.recentLevel()&&a.channel==b.channel&&a.note()==b.note(),"public voice state changed");}
 void clocks(){size_t cases=0;
-    for(int rate:{8000,44100})for(bool pairs:{false,true})for(int profile:{0,1,2})for(auto math:{FmSubframeMath::Exact,FmSubframeMath::Hermite})for(int factor:{2,4,8,16,32}){
-        auto p=patch(pairs,profile);FmVoice v,oracle;v.setSampleRate(rate);oracle.setSampleRate(rate);v.noteOn(p,317,.73f);oracle.noteOn(p,317,.73f);std::array<float,32> out;
+    for(int rate:{8000,44100})for(int algorithm:{0,5,7})for(int profile:{0,1,2})for(auto math:{FmSubframeMath::Exact,FmSubframeMath::Hermite})for(int factor:{2,4,8,16,32}){
+        auto p=patch(algorithm!=0,profile);p.algorithm=uint8_t(algorithm);FmVoice v,oracle;v.setSampleRate(rate);oracle.setSampleRate(rate);v.noteOn(p,317,.73f);oracle.noteOn(p,317,.73f);std::array<float,32> out;
         for(int n=0;n<320;++n){auto controls=[&](FmVoice&x){if(n==32)x.setVibratoScale(8);if(n==64)x.setPitch(rate*.71);if(n==96)x.setPitch(rate*.013);
                 if(n==128)x.setVolume(0);if(n==160)x.setVolume(.63f);if(n==192)x.noteOff(true);if(n==224)x.setHold(false);if(n==240)x.noteOn(p,419,.51f);};
             controls(v);controls(oracle);out.fill(123);require(v.supportsSineSubframes()&&v.tickSineSubframes(out.data(),factor,math),"supported source rejected");
