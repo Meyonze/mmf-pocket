@@ -50,7 +50,8 @@ Bytes fixture(int kind){
             for(size_t j=0;j<multiples.size();++j){int tl=graph7?(j==0?18:j==3?24:0):0;
                 if(reducedGraph==6&&j==0)tl=18;
                 const bool stopped=reducedGraph&&j==size_t(reducedGraph==3?2:1);
-                const int ar=stopped?(kind>=13?1:0):15;
+                int ar=stopped?(kind>=13&&kind<=15?1:0):15;
+                if(kind>=16&&j==size_t(reducedGraph==3?0:2))ar=0;
                 append(voice,{0,0xa0,uint8_t(ar<<4),uint8_t(tl<<2),0,uint8_t(multiples[j]<<4),0});}
             Bytes setup{0xf0,uint8_t(voice.size()+1)};append(setup,voice);setup.push_back(0xf7);
             append(score,chunk("Mtsu",setup));
@@ -82,7 +83,7 @@ std::vector<int16_t> expected(const Bytes& bytes,bool phone){
     return out;
 }
 void appQuality(){
-    for(int kind=0;kind<16;++kind){
+    for(int kind=0;kind<19;++kind){
         const auto bytes=fixture(kind);fxchain::smaf::SmafFile file;
         require(file.parse(bytes.data(),bytes.size()),"quality fixture parses");
         fxchain::smaf::MaPlayer app,reference,native;
@@ -99,7 +100,7 @@ void appQuality(){
             require(delta>1,"bound high-PM output changes beyond common latency");
             require(app.diagnostics().fmNotes==1&&app.diagnostics().fallbackNotes==0,"filtered fixture uses authored FM, not fallback");
         }
-        if(kind>=13)require(std::equal(original.begin(),original.end()-144,a.begin()+144),"active nested graph changed from native delayed route");
+        if(kind>=13)require(std::equal(original.begin(),original.end()-144,a.begin()+144),"excluded nested/direct graph changed from native delayed route");
         app.seekToStart();std::vector<float> again(a.size());require(app.render(again.data(),4096)==4096&&again==a,"app seek resets quality history exactly");
     }
     std::cout<<"App quality PASS: selective8x/16x Hermite, independent explicit reference, high-PM change, FM/ATR routing and seek.\n";
@@ -107,7 +108,7 @@ void appQuality(){
 void paths(const std::filesystem::path& folder){
     JNINativeInterface_ table{};table.GetArrayLength=length;table.SetShortArrayRegion=setShorts;table.ExceptionCheck=exception;
     JNIEnv env{};env.functions=&table;
-    for(int kind=0;kind<16;++kind)for(bool phone:{false,true}){
+    for(int kind=0;kind<19;++kind)for(bool phone:{false,true}){
         auto bytes=fixture(kind);const auto oraclePcm=expected(bytes,phone);
         const auto path=folder/("synthetic-"+std::to_string(kind)+(phone?"-phone.wav":"-normal.wav"));
         require(render(bytes.data(),bytes.size(),path.string().c_str(),phone).empty(),"actual WAV renderer succeeds");

@@ -909,9 +909,11 @@ bool FmVoice::supportsSineSubframes() const {
     // configured step, not a currently quiet/finished envelope, so eligibility
     // cannot switch from native to filtered output during a note. MA7 odd
     // attack rates have a nonzero step even when the coarse AR nibble is zero.
+    // Leave already bandlimited direct carriers on their native path when
+    // the surviving modulator is also permanently stopped.
     const bool reduced = fourOp_ &&
-        ((algo_ == 3 && ops_[2].env_.atkStep_ == 0.0) ||
-         ((algo_ == 4 || algo_ == 6) && ops_[1].env_.atkStep_ == 0.0));
+        ((algo_ == 3 && ops_[2].env_.atkStep_ == 0.0 && ops_[0].env_.atkStep_ != 0.0) ||
+         ((algo_ == 4 || algo_ == 6) && ops_[1].env_.atkStep_ == 0.0 && ops_[2].env_.atkStep_ != 0.0));
     if (!serial && !pairs && !mixed && !reduced) return false;
     for (int i = 0; i < (fourOp_ ? 4 : 2); ++i)
         if (patch_.ops[size_t(i)].wave != 0 || opFb_[i] != 0) return false;

@@ -3329,7 +3329,10 @@ attack, or graphs4/6 with a stopped op1 attack. Configured attack steps keep
 eligibility fixed for the note, excluding MA7 odd attack rates and naturally
 finished envelopes. Use the surviving PM pair for density selection and retain
 original mixing/clocks.864 independent spectral policies,72 density selections,
-180 clock cases,36 unsafe-shape guards and36 transient comparisons cover the
+180 clock cases,39 unsafe-shape guards and36 transient comparisons cover the
 extension.27 encoded app cases change only18 eligible sources;32 previous app
-WAVs and2,121 default native WAVs remain exact. Cache87; official1.6.6 unchanged.
+WAVs and2,121 default native WAVs remain exact. Official1.6.6 unchanged.
+Already bandlimited direct carriers stay native when the surviving modulator
+also has a stopped attack; eligibility uses configured rates throughout.
+This follow-up uses cache88 to invalidate interim cache87 output.
 See [scope and limitations](fm-reduced-graphs.md).
