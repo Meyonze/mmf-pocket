@@ -2244,7 +2244,7 @@ int MaPlayer::renderSine_(float* out, int frames) {
         const uint64_t outputEnd = endSample_ + sine_output::Bus::latency;
         if (state.outputCursor >= outputEnd) { ended_ = true; break; }
         if (state.inputFinished &&
-            state.outputCursor >= std::max(state.nativeFlushUntil, state.fmFlushUntil) &&
+            state.outputCursor >= state.nativeFlushUntil && state.bus.pendingFrames() == 0 &&
             std::max({std::fabs(lp1L_), std::fabs(lp1R_),
                       std::fabs(lp2L_), std::fabs(lp2R_)}) < 1e-7f) {
             ended_ = true; break;
@@ -2283,11 +2283,6 @@ int MaPlayer::renderSine_(float* out, int frames) {
             state.nativeFlushUntil = state.outputCursor + 1 + sine_output::Bus::latency;
             ++cursor_;
         }
-        // Only actual nonzero input can extend FIR support. This is exact
-        // zero detection, preserving arbitrarily small nonzero samples.
-        if (factor > 1 && std::any_of(high.begin(), high.begin() + factor,
-                [](const sine_output::Stereo& x) { return x.left != 0 || x.right != 0; }))
-            state.fmFlushUntil = state.outputCursor + 1 + uint64_t(state.bus.tailBoundFrames());
         const auto aligned = state.bus.frame(std::span<const sine_output::Stereo>(high.data(), size_t(factor)), {l, r});
         l = float(aligned.left); r = float(aligned.right);
         lp1L_ += lpCoef_ * (l - lp1L_); lp2L_ += lpCoef_ * (lp1L_ - lp2L_);

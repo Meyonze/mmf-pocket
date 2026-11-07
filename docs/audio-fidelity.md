@@ -3193,3 +3193,13 @@ policy, ROM gain adjustment, release or cache change was made.
 All2,121 default WAVs remain byte-identical. Source scheduling and hot limiting
 match an independent dense FIR/output-stage reference over12,000frames.
 See [routing contract and validation](fm-player-sine-render.md).
+
+### Exact finite-tail idle gating for the experimental sine bus
+
+The shared FIR now sleeps only after all finite support from the last exact
+nonzero input has drained. Native FIFO timing continues, and new/tiny input
+wakes canonical empty histories. The player queries the bus pending count,
+replacing duplicate FM deadline tracking.25,000 sparse/tiny/boundary frames match
+uninterrupted streaming;24 full default/aligned/filtered MMF WAVs and2,121 normal
+WAVs are byte-identical. Bus-only host measurements show idle/sparse savings,
+with small continuous-input overhead; no Android speed claim or default change.

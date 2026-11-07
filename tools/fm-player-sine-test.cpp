@@ -107,6 +107,31 @@ void bus() {
     }
     std::cout<<frames<<" core bus/validated streaming comparisons, reset and copy isolation PASS\n";
 }
+void idleWake() {
+    size_t checks=0;
+    for(int factor:{2,4,8,16,32}) {
+        sine_output::Bus bus(factor);fm_causal::AlignedBus reference(factor);
+        const int tail=bus.tailBoundFrames();bool heardTiny=false;
+        for(int n=0;n<5000;++n) {
+            std::array<sine_output::Stereo,32> x{};
+            std::array<fm_causal::Stereo,32> y{};
+            const bool pulse=n<factor||n==factor+tail||n==2000||n==2000+tail-1||n==2000+2*tail;
+            if(pulse){const int k=(n*7)%factor;const double scale=n>=2000?1e-280:.3;
+                x[size_t(k)]={scale,-scale*.37};y[size_t(k)]={scale,-scale*.37};}
+            const sine_output::Stereo native=n<1900?sine_output::Stereo{.001,-.002}:sine_output::Stereo{};
+            const auto actual=bus.frame(std::span(x.data(),size_t(factor)),native);
+            const auto expected=reference.frame(y.data(),size_t(factor),{native.left,native.right});
+            if(n>=2000&&(actual.left!=0||actual.right!=0))heardTiny=true;
+            require(actual.left==expected.left&&actual.right==expected.right,"idle/wake differs from uninterrupted FIR and native delay");
+            if(n==1999||n==4999)require(bus.pendingFrames()==0,"finite sine tail never entered idle");
+            if(pulse)require(bus.pendingFrames()==tail,"tiny/nonzero input did not retain full support");
+            ++checks;
+        }
+        require(heardTiny,"idle threshold discarded tiny input");
+    }
+    std::cout<<checks<<" sparse/tiny/boundary-wake frames equal uninterrupted FIR PASS\n";
+}
+
 void publicPaths() {
     size_t cases=0;
     for (unsigned rate : {8000u,44100u}) for (int kind=0;kind<5;++kind) {
@@ -289,4 +314,4 @@ void guards() {
     require(drain(p,17).empty(),"empty audible render gained delayed padding");
     std::cout<<"Policy guards, empty score and zero output block PASS\n";
 }
-int main() {bus();publicPaths();scheduledDense();replayAndCaps();finalFrame();zeroFm();guards();}
+int main() {bus();idleWake();publicPaths();scheduledDense();replayAndCaps();finalFrame();zeroFm();guards();}

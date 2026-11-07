@@ -71,11 +71,15 @@ public:
 };
 
 class Bus {
-    int factor_, padding_, support_;
+    int factor_, padding_, support_, pending_ = 0;
     std::vector<Stage> left_, right_;
     std::array<Stereo, 72> native_{};
     std::array<Stereo, 8> paddingHistory_{};
     size_t nativeCursor_ = 0, paddingCursor_ = 0;
+    void resetSine_() {
+        for (auto& s : left_) s.reset(); for (auto& s : right_) s.reset();
+        paddingHistory_.fill({}); paddingCursor_ = 0; pending_ = 0;
+    }
 public:
     static constexpr int latency = 72;
     explicit Bus(int factor) : factor_(factor), padding_(0), support_(0) {
@@ -94,7 +98,9 @@ public:
     Stereo frame(std::span<const Stereo> fm, Stereo native) {
         if (fm.size() != size_t(factor_)) throw std::invalid_argument("wrong sine bus block");
         Stereo filtered;
-        if (factor_ > 1) {
+        const bool nonzero = factor_ > 1 && std::any_of(fm.begin(), fm.end(),
+            [](const Stereo& x) { return x.left != 0 || x.right != 0; });
+        if (factor_ > 1 && (nonzero || pending_ != 0)) {
             for (const auto& x : fm) {
                 Stereo value = x;
                 for (size_t i = 0; i < left_.size(); ++i) {
@@ -109,16 +115,19 @@ public:
                 paddingHistory_[paddingCursor_] = filtered; filtered = old;
                 paddingCursor_ = (paddingCursor_ + 1) % size_t(padding_);
             }
+            if (nonzero) pending_ = support_;
+            else if (--pending_ == 0) resetSine_();
         }
         const auto old = native_[nativeCursor_]; native_[nativeCursor_] = native;
         nativeCursor_ = (nativeCursor_ + 1) % native_.size();
         return {filtered.left + old.left, filtered.right + old.right};
     }
     void reset() {
-        for (auto& s : left_) s.reset(); for (auto& s : right_) s.reset();
-        native_.fill({}); paddingHistory_.fill({}); nativeCursor_ = paddingCursor_ = 0;
+        resetSine_(); native_.fill({}); nativeCursor_ = 0;
     }
     int factor() const { return factor_; }
     int tailBoundFrames() const { return support_; }
+    // Remaining FIR/padding support only; the native FIFO is separate.
+    int pendingFrames() const { return pending_; }
 };
 } // namespace fxchain::smaf::sine_output

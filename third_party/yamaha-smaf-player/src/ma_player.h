@@ -88,11 +88,11 @@ private:
     struct SineRenderState {
         sine_output::Bus bus;
         FmSubframeMath math;
-        uint64_t outputCursor = 0, nativeFlushUntil = 0, fmFlushUntil = 0;
+        uint64_t outputCursor = 0, nativeFlushUntil = 0;
         bool inputFinished = false;
         explicit SineRenderState(SineRenderOptions options) : bus(options.factor), math(options.math) {}
         void reset() {
-            bus.reset(); outputCursor = nativeFlushUntil = fmFlushUntil = 0; inputFinished = false;
+            bus.reset(); outputCursor = nativeFlushUntil = 0; inputFinished = false;
         }
     };
     std::optional<SineRenderState> sineRender_;
