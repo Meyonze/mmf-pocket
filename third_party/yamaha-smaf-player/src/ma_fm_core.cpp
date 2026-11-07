@@ -974,6 +974,11 @@ template<bool Fast> bool FmVoice::tickSineSubframesImpl_(float* output, int fact
         level[j] = float(op.env_.level_);
         am[j] = op.amAmt_ != 0 ? 1 - op.amAmt_ * float(.5 + .5 * lfoSin_) : 1;
     }
+    // Only omit an interior value when its sole reader is itself skipped.
+    // Native tick() above still advances every operator. Keep the full path
+    // when EVB makes a stopped gate execute: its signed zero is then observed.
+    if (algo_ == 3 && mute[2]) mute[1] = true;
+    if (algo_ == 4 && mute[1]) mute[0] = true;
     for (int sub = 1; sub < factor; ++sub) {
         float values[4]{};
         for (int j = 0; j < count; ++j) {

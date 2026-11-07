@@ -3336,3 +3336,14 @@ Already bandlimited direct carriers stay native when either end of the surviving
 PM pair has a stopped attack; eligibility uses configured rates throughout.
 Follow-ups use cache88/89 to invalidate earlier interim output.
 See [scope and limitations](fm-reduced-graphs.md).
+
+### Exact omission of unobserved FM interior samples
+
+Skip op1 in graph3 only when its sole reader op2 is already skipped, or op0 in
+graph4 when op1 is skipped. Keep native ticks and the full EVB path where a
+signed zero is observed.1,440 frozen-library cases preserve4,571,136float
+samples and per-frame states byte-for-byte, including signed zero. Reduced
+clock coverage now includes360 cases. Paired pinned shared-host source timing
+observes7.6–18.2% lower CPU time in four32-voice target cases; controls vary and
+this excludes FIR/mixing/I/O, with no Android speed claim. Cache89 unchanged.
+See [method and limits](fm-dead-branch.md).

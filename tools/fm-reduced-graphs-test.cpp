@@ -166,8 +166,10 @@ void clocksAndGuards() {
     size_t cases=0, guards=0;
     for (int graph : {3,4,6}) for (int sampleRate : {8000,44100})
     for (int profile : {0,1,2}) for (int factor : {2,4,8,16,32})
-    for (auto math : {FmSubframeMath::Exact,FmSubframeMath::Hermite}) {
-        const auto p=patch(graph,profile);
+    for (auto math : {FmSubframeMath::Exact,FmSubframeMath::Hermite})
+    for (bool gateVibrato : {false,true}) {
+        auto p=patch(graph,profile);
+        p.ops[size_t(stopped(graph))].vib=gateVibrato;
         FmVoice v,original;
         for (auto* x : {&v,&original}) { x->setSampleRate(sampleRate); x->noteOn(p,317,.63f); }
         std::array<float,32> output{};
