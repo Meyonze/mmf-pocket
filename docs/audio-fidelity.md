@@ -3203,3 +3203,16 @@ replacing duplicate FM deadline tracking.25,000 sparse/tiny/boundary frames matc
 uninterrupted streaming;24 full default/aligned/filtered MMF WAVs and2,121 normal
 WAVs are byte-identical. Bus-only host measurements show idle/sparse savings,
 with small continuous-input overhead; no Android speed claim or default change.
+
+### Exact-zero subframe gain and shared stereo FIR work
+
+Only the explicit experimental source path now bypasses interior synthesis for
+exact zero velocity/channel gain, after the original native tick. EG/LFO/phase,
+Hold/release/allocation timing and native endpoint bits remain unchanged.
+Envelope/unused-modulator shortcuts were measured but rejected for active-source
+cost. The FIR now shares stereo indexing/coefficient work while retaining each
+channel's original summation order, decimation phase and finite support.
+3,145,728 ordinary FM samples match bit-for-bit;960cases/2,285,568 source samples
+and full states match (only signed interior zero is normalized in transport).
+2,121 normal WAVs and24 experimental full WAVs remain byte-identical.
+See [cost/validation](fm-render-cost-reduction.md). Default/cache/release unchanged.

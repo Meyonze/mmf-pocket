@@ -47,37 +47,41 @@ inline const std::vector<double>& coefficients(int taps) {
     throw std::invalid_argument("unsupported aligned sine kernel");
 }
 
-class Stage {
+class StereoStage {
     const std::vector<double>* h_;
-    std::vector<double> history_;
+    std::vector<Stereo> history_;
     size_t cursor_ = 0, mask_;
     bool odd_ = false;
 public:
-    explicit Stage(int taps) : h_(&coefficients(taps)),
-        history_(std::bit_ceil(size_t(taps)), 0.0), mask_(history_.size() - 1) {}
-    bool push(double input, double& output) {
+    explicit StereoStage(int taps) : h_(&coefficients(taps)),
+        history_(std::bit_ceil(size_t(taps))), mask_(history_.size() - 1) {}
+    bool push(Stereo input, Stereo& output) {
         cursor_ = (cursor_ + 1) & mask_; history_[cursor_] = input;
         odd_ = !odd_; if (odd_) return false;
         const auto& h = *h_; const size_t middle = (h.size() - 1) / 2;
-        double sum = h[middle] * history_[(cursor_ - middle) & mask_];
-        for (size_t k = 1; k < middle; k += 2)
-            sum += h[k] * (history_[(cursor_ - k) & mask_]
-                       + history_[(cursor_ - (h.size() - 1 - k)) & mask_]);
+        const auto center = history_[(cursor_ - middle) & mask_];
+        Stereo sum{h[middle] * center.left, h[middle] * center.right};
+        for (size_t k = 1; k < middle; k += 2) {
+            const auto a = history_[(cursor_ - k) & mask_];
+            const auto b = history_[(cursor_ - (h.size() - 1 - k)) & mask_];
+            sum.left += h[k] * (a.left + b.left);
+            sum.right += h[k] * (a.right + b.right);
+        }
         output = sum; return true;
     }
     void reset() {
-        std::fill(history_.begin(), history_.end(), 0.0); cursor_ = 0; odd_ = false;
+        std::fill(history_.begin(), history_.end(), Stereo{}); cursor_ = 0; odd_ = false;
     }
 };
 
 class Bus {
     int factor_, padding_, support_, pending_ = 0;
-    std::vector<Stage> left_, right_;
+    std::vector<StereoStage> stages_;
     std::array<Stereo, 72> native_{};
     std::array<Stereo, 8> paddingHistory_{};
     size_t nativeCursor_ = 0, paddingCursor_ = 0;
     void resetSine_() {
-        for (auto& s : left_) s.reset(); for (auto& s : right_) s.reset();
+        for (auto& s : stages_) s.reset();
         paddingHistory_.fill({}); paddingCursor_ = 0; pending_ = 0;
     }
 public:
@@ -87,7 +91,7 @@ public:
         int stride = 1, delayNumerator = 0;
         for (int n = factor; n > 1; n /= 2) {
             const int taps = n == 2 ? 257 : factor == 32 && n == 4 ? 37 : 33;
-            left_.emplace_back(taps); right_.emplace_back(taps);
+            stages_.emplace_back(taps);
             delayNumerator += (taps - 1) / 2 * stride; stride *= 2;
         }
         if (factor > 1) {
@@ -103,11 +107,10 @@ public:
         if (factor_ > 1 && (nonzero || pending_ != 0)) {
             for (const auto& x : fm) {
                 Stereo value = x;
-                for (size_t i = 0; i < left_.size(); ++i) {
-                    const bool produced = left_[i].push(value.left, value.left);
-                    right_[i].push(value.right, value.right);
+                for (size_t i = 0; i < stages_.size(); ++i) {
+                    const bool produced = stages_[i].push(value, value);
                     if (!produced) break;
-                    if (i + 1 == left_.size()) filtered = value;
+                    if (i + 1 == stages_.size()) filtered = value;
                 }
             }
             if (padding_ != 0) {

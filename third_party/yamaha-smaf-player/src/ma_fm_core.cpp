@@ -923,7 +923,11 @@ template<bool Fast> bool FmVoice::tickSineSubframesImpl_(float* output, int fact
     double before[4]{};
     for (int j = 0; j < count; ++j) before[j] = ops_[j].phase_;
     const float native = tick();
-    if (!wasActive) { std::fill_n(output, factor, 0.0f); return true; }
+    // Advance the original native clocks above, even while output gain is zero.
+    if (!wasActive || velocity_ == 0 || volume_ == 0) {
+        std::fill_n(output, factor - 1, 0.0f); output[factor - 1] = native;
+        return true;
+    }
     double inc[4]{};
     float level[4]{}, am[4]{};
     bool mute[4]{};
