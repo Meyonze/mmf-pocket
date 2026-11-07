@@ -3277,3 +3277,18 @@ match independent Bessel plus direct-sine/FIR/LP references (maxRMS3.23e-8).
 WAV/JNI and32 encoded app fixtures pass Release/ASan. Existing10 app fixtures
 and2,121 default native WAVs remain exact; AndroidallABI lint/Debug/Release pass.
 See [measurement scope](fm-algorithm7.md). No official release.
+
+### r85 selective8/16 sine density
+
+App playback/export now opts into8x baseline with selected16x voices. Cached
+per-note PM tail bounds use maximum EG/AM, vibrato span, TL/KSL with float
+rounding headroom; density can rise during a note and resets at retrigger.
+Two independently aligned72-frame buses drain their finite tails before ending;
+native FIFO and shared limiter/LP/phone processing remain common. No gain makeup.
+48 independent public-player spectral cases boost only2; strong note96 C5/M7
+errors fall from.0969059 to8.49e-6 (graph0) and.0387624 to3.09e-6 (graph7).
+112 tail-bound checks,900 mixed dense-FIR frames with no ordinary C++new,
+final-frame tails/blocks/seek, Release/ASan, actual JNI/WAV paths and AndroidallABI
+lint/Debug/Release pass.32 encoded app cases change only the intended one;
+31 remain exact. Cache85; official1.6.6 unchanged. Fixed-density contribution
+audit explicitly rejects adaptive players. See [scope and limits](fm-adaptive-density.md).

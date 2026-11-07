@@ -9,10 +9,12 @@
 
 #include "ma_fm_core.h"
 #include "ma_subframe_sine.h"
+#include "ma_sine_density.h"
 
 #include <cmath>
 #include <algorithm>
 #include <limits>
+#include <numbers>
 
 namespace fxchain::smaf {
 
@@ -690,6 +692,7 @@ constexpr double kVm35ModDepth = 4.0;
 }
 
 void FmVoice::noteOn(const FmVoicePatch& patch, double freqHz, float velocity) {
+    densityFactor_ = 8; densityPhase_ = -1;
     patch_ = patch;
     fourOp_ = patch.fourOp;
     algo_ = patch.algorithm & 7;
@@ -906,6 +909,25 @@ bool FmVoice::supportsSineSubframes() const {
     for (int i = 0; i < (fourOp_ ? 4 : 2); ++i)
         if (patch_.ops[size_t(i)].wave != 0 || opFb_[i] != 0) return false;
     return true;
+}
+
+int FmVoice::sineDensityHint() {
+    if (densityPhase_ == ops_[0].phaseInc_ && densityVibrato_ == vibratoScale_) return densityFactor_;
+    densityPhase_ = ops_[0].phaseInc_; densityVibrato_ = vibratoScale_;
+    if (!supportsSineSubframes()) { densityFactor_ = 0; return 0; }
+    if (densityFactor_ == 16) return densityFactor_;
+    auto peak = [&](int j) { const auto& op = ops_[j];
+        return std::abs(op.phaseInc_) * (1 + std::abs(op.vibAmt_ * vibratoScale_)); };
+    auto branch = [&](int m, int c) {
+        if (ops_[m].muted(vibratoScale_) || ops_[c].muted(vibratoScale_)) return false;
+        const float peakGain = std::nextafter(float(double(ops_[m].tlGain_) * ops_[m].kslGain_),
+                                             std::numeric_limits<float>::infinity());
+        const double beta = 2 * std::numbers::pi * modDepth_ * peakGain;
+        return sine_density::needs16(beta, peak(c), peak(m));
+    };
+    const bool high = algo_ == 7 ? branch(1, 2) : branch(0, 1) || (algo_ == 5 && branch(2, 3));
+    if (high) densityFactor_ = 16;
+    return densityFactor_;
 }
 
 bool FmVoice::tickSineSubframes(float* output, int factor, FmSubframeMath math) {

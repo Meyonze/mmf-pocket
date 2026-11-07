@@ -307,6 +307,7 @@ std::vector<uint8_t> smafHuffmanInflate(const uint8_t* p, size_t n) {
 bool MaPlayer::init(const SmafFile& file, uint32_t sampleRate,
                     bool suppressHpsSlapbackDuplicates, SineRenderOptions sine) {
     if ((sine.factor != 0 && !sine_output::validFactor(sine.factor)) ||
+        (sine.boostHighNotes && sine.factor != 8) ||
         (sine.math != FmSubframeMath::Exact && sine.math != FmSubframeMath::Hermite)) return false;
     sineRender_.reset();
     if (sine.factor != 0) {
@@ -2249,6 +2250,7 @@ int MaPlayer::renderSine_(float* out, int frames) {
         if (state.outputCursor >= outputEnd) { ended_ = true; break; }
         if (state.inputFinished &&
             state.outputCursor >= state.nativeFlushUntil && state.bus.pendingFrames() == 0 &&
+            (!state.highBus || state.highBus->pendingFrames() == 0) &&
             std::max({std::fabs(lp1L_), std::fabs(lp1R_),
                       std::fabs(lp2L_), std::fabs(lp2R_)}) < 1e-7f) {
             ended_ = true; break;
@@ -2256,15 +2258,21 @@ int MaPlayer::renderSine_(float* out, int frames) {
 
         float l = 0.0f, r = 0.0f;
         std::array<sine_output::Stereo, 32> high{};
+        std::array<sine_output::Stereo, 16> boosted{};
+        bool boostedThisFrame = false;
         constexpr float kMixGain = .32f;
         if (!state.inputFinished) {
             for (int i = 0; i < kPoolSize; ++i) {
                 auto& voice = pool_[i]; if (!voice.active()) continue;
                 std::array<float, 32> samples;
-                if (factor > 1 && voice.tickSineSubframes(samples.data(), factor, state.math)) {
-                    for (int k = 0; k < factor; ++k) {
-                        high[size_t(k)].left += samples[size_t(k)] * kMixGain * poolPanLeft_[i];
-                        high[size_t(k)].right += samples[size_t(k)] * kMixGain * poolPanRight_[i];
+                const bool boost = state.highBus && voice.sineDensityHint() == 16;
+                boostedThisFrame = boostedThisFrame || boost;
+                const int density = boost ? 16 : factor;
+                if (density > 1 && voice.tickSineSubframes(samples.data(), density, state.math)) {
+                    auto* target = boost ? boosted.data() : high.data();
+                    for (int k = 0; k < density; ++k) {
+                        target[size_t(k)].left += samples[size_t(k)] * kMixGain * poolPanLeft_[i];
+                        target[size_t(k)].right += samples[size_t(k)] * kMixGain * poolPanRight_[i];
                     }
                 } else {
                     const float sample = voice.tick();
@@ -2287,7 +2295,11 @@ int MaPlayer::renderSine_(float* out, int frames) {
             state.nativeFlushUntil = state.outputCursor + 1 + sine_output::Bus::latency;
             ++cursor_;
         }
-        const auto aligned = state.bus.frame(std::span<const sine_output::Stereo>(high.data(), size_t(factor)), {l, r});
+        auto aligned = state.bus.frame(std::span<const sine_output::Stereo>(high.data(), size_t(factor)), {l, r});
+        if (state.highBus && (boostedThisFrame || state.highBus->pendingFrames() != 0)) {
+            const auto extra = state.highBus->frame(boosted, {});
+            aligned.left += extra.left; aligned.right += extra.right;
+        }
         l = float(aligned.left); r = float(aligned.right);
         lp1L_ += lpCoef_ * (l - lp1L_); lp2L_ += lpCoef_ * (lp1L_ - lp2L_);
         lp1R_ += lpCoef_ * (r - lp1R_); lp2R_ += lpCoef_ * (lp1R_ - lp2R_);

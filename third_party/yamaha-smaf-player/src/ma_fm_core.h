@@ -206,6 +206,9 @@ public:
     // False leaves state/output untouched (bad shape/count/math/null output).
     // Caller owns FIR filtering, common delay, source routing and EOF policy.
     bool supportsSineSubframes() const;
+    // Conservative8/16 density hint for supported PM graphs. Within a note it
+    // can only rise; a new note resets it. Does not advance synthesis clocks.
+    int sineDensityHint();
     bool tickSineSubframes(float* output, int factor,
                           FmSubframeMath math = FmSubframeMath::Exact);
     bool  active() const { return active_; }
@@ -241,6 +244,8 @@ private:
     double  lfoSin_   = 0.0;                           // this sample's LFO value
     double vibratoScale_ = 1.0; // channel modulation affects pitch only, not AM
     double modDepth_ = 0.42; // selected once per note; compatibility default
+    int densityFactor_ = 8;
+    double densityPhase_ = -1, densityVibrato_ = 0;
     // one modulator step: run op[i] with its own feedback + an external phase-mod
     // input (in cycles). returns its output. keeps the FM index musical.
     float modOp_(int i, double extModCycles);

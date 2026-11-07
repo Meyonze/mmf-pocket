@@ -280,6 +280,8 @@ jobs:
 
       - name: Check public player steady sidebands and output level
         run: |
+          c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Ithird_party/yamaha-smaf-player/src tools/fm-adaptive-density-test.cpp build/native-sanitizer/libsmaf.a -o fm-adaptive-density-test
+          ./fm-adaptive-density-test
           c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Ithird_party/yamaha-smaf-player/src tools/fm-algorithm7-test.cpp build/native-sanitizer/libsmaf.a -o fm-algorithm7-test
           ./fm-algorithm7-test
           c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Ithird_party/yamaha-smaf-player/src tools/fm-player-sideband-audit.cpp build/native-sanitizer/libsmaf.a -o fm-player-sideband-audit

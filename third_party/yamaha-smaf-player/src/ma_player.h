@@ -34,12 +34,14 @@
 
 namespace fxchain::smaf {
 
-// Explicit experimental source policy, fixed for an init/seek lifecycle.
+// Source policy, fixed for an init/seek lifecycle. Boosting is opt-in.
 // 0: original renderer. 1: native-only72-frame alignment control.
 // 2/4/8/16/32: filter supported sine sources; delay all others equally.
+// With8x plus boostHighNotes, selected voices use the aligned16x bus.
 struct SineRenderOptions {
     int factor = 0;
     FmSubframeMath math = FmSubframeMath::Exact;
+    bool boostHighNotes = false; //8x baseline, selected voices use aligned16x
 };
 
 class MaPlayer {
@@ -87,12 +89,16 @@ public:
 private:
     struct SineRenderState {
         sine_output::Bus bus;
+        std::optional<sine_output::Bus> highBus;
         FmSubframeMath math;
         uint64_t outputCursor = 0, nativeFlushUntil = 0;
         bool inputFinished = false;
-        explicit SineRenderState(SineRenderOptions options) : bus(options.factor), math(options.math) {}
+        explicit SineRenderState(SineRenderOptions options) : bus(options.factor), math(options.math) {
+            if (options.boostHighNotes) highBus.emplace(16);
+        }
         void reset() {
-            bus.reset(); outputCursor = nativeFlushUntil = 0; inputFinished = false;
+            bus.reset(); if (highBus) highBus->reset();
+            outputCursor = nativeFlushUntil = 0; inputFinished = false;
         }
     };
     std::optional<SineRenderState> sineRender_;

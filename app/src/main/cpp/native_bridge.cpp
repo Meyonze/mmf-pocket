@@ -85,10 +85,10 @@ std::string initializePlayer(const uint8_t* bytes, size_t size,
     if (!file.parse(bytes, size)) return "有効なSMAF/MMFファイルではありません";
 
     // Validated sine-only graphs0/5/7 without feedback use bounded
-    // 8x reconstruction. Other sources retain native synthesis and share the
-    // same 72-frame alignment before the output filter/limiter.
+    // 8x reconstruction, boosting high sideband spans to16x. Other sources
+    // retain native synthesis with72-frame alignment before output filtering.
     const bool initialized = player.init(file, kSampleRate, needsSo2SlapbackCorrection(bytes, size),
-        {8, fxchain::smaf::FmSubframeMath::Hermite});
+        {8, fxchain::smaf::FmSubframeMath::Hermite, true});
 #ifdef MMF_SCORE_AUDIT_LOG
     const auto& audit = player.scoreAudit();
     using S = fxchain::smaf::ScoreAudit::Status;

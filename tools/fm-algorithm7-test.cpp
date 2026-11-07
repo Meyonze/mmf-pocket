@@ -73,4 +73,6 @@ void clocks(){size_t cases=0;
  std::cout<<cases<<" algorithm7 complete clock/Hold/tiny/gain cases and8 unsafe-graph guards PASS\n";
 }
 }
+#ifndef FM_ALGORITHM7_TEST_NO_MAIN
 int main(){try{algorithm7::clocks();algorithm7::spectral();return 0;}catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}
+#endif

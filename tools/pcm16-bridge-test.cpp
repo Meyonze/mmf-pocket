@@ -42,14 +42,15 @@ Bytes fixture(int kind){
         if(kind>=3){
             // Original high-PM VM5 setup; the normal app initializer must
             // actually use its filtered route, not only pass bridge plumbing.
-            Bytes voice{0x43,0x79,7,0x7f,1,0,0,0,0,0,0,0x79,uint8_t(kind==4?7:0)};
-            const std::vector<int> multiples=kind==4?std::vector<int>{1,7,5,2}:std::vector<int>{7,5};
-            for(size_t j=0;j<multiples.size();++j){int tl=kind==4?(j==0?18:j==3?24:0):0;
+            const bool graph7=kind==4||kind==6;
+            Bytes voice{0x43,0x79,7,0x7f,1,0,0,0,0,0,0,0x79,uint8_t(graph7?7:0)};
+            const std::vector<int> multiples=graph7?std::vector<int>{1,7,5,2}:std::vector<int>{7,5};
+            for(size_t j=0;j<multiples.size();++j){int tl=graph7?(j==0?18:j==3?24:0):0;
                 append(voice,{0,0xa0,0xf0,uint8_t(tl<<2),0,uint8_t(multiples[j]<<4),0});}
             Bytes setup{0xf0,uint8_t(voice.size()+1)};append(setup,voice);setup.push_back(0xf7);
             append(score,chunk("Mtsu",setup));
         }
-        append(score,chunk("Mtsq",{0,0x90,uint8_t(kind>=3?84:60),100,10,10,0xff,0x2f,0}));append(body,chunk("MTR0",score));
+        append(score,chunk("Mtsq",{0,0x90,uint8_t(kind>=5?96:kind>=3?84:60),100,10,10,0xff,0x2f,0}));append(body,chunk("MTR0",score));
     }else{
         Bytes atr{0,0,uint8_t(kind==1?1:0x11),uint8_t(kind==1?0x10:0),0,0};
         append(atr,chunk("Atsq",{0,1,100}));Bytes pcm;
@@ -76,17 +77,17 @@ std::vector<int16_t> expected(const Bytes& bytes,bool phone){
     return out;
 }
 void appQuality(){
-    for(int kind=0;kind<5;++kind){
+    for(int kind=0;kind<7;++kind){
         const auto bytes=fixture(kind);fxchain::smaf::SmafFile file;
         require(file.parse(bytes.data(),bytes.size()),"quality fixture parses");
         fxchain::smaf::MaPlayer app,reference,native;
         require(initializePlayer(bytes.data(),bytes.size(),app).empty(),"app quality initializes");
-        require(reference.init(file,44100,false,{8,fxchain::smaf::FmSubframeMath::Hermite}),"independent explicit policy initializes");
+        require(reference.init(file,44100,false,{kind>=5?16:8,fxchain::smaf::FmSubframeMath::Hermite}),"independent explicit policy initializes");
         require(native.init(file,44100),"native comparison initializes");
         require(app.renderLatencySamples()==72,"normal app enables aligned FM reconstruction");
         std::vector<float> a(4096*2),b(a.size()),original(a.size());
         require(app.render(a.data(),4096)==4096&&reference.render(b.data(),4096)==4096&&native.render(original.data(),4096)==4096,"quality comparison window renders");
-        require(a==b,"app samples match independently selected8x Hermite policy");
+        require(a==b,"app samples match independently selected8x/16x Hermite policy");
         if(kind>=3){
             double delta=0;for(int i=72;i<4096;++i)delta+=std::abs(double(a[size_t(i)*2])-original[size_t(i-72)*2]);
             require(delta>1,"bound high-PM output changes beyond common latency");
@@ -94,12 +95,12 @@ void appQuality(){
         }
         app.seekToStart();std::vector<float> again(a.size());require(app.render(again.data(),4096)==4096&&again==a,"app seek resets quality history exactly");
     }
-    std::cout<<"App quality PASS: normal initializer8x Hermite, independent explicit reference, high-PM change, FM/ATR routing and seek.\n";
+    std::cout<<"App quality PASS: selective8x/16x Hermite, independent explicit reference, high-PM change, FM/ATR routing and seek.\n";
 }
 void paths(const std::filesystem::path& folder){
     JNINativeInterface_ table{};table.GetArrayLength=length;table.SetShortArrayRegion=setShorts;table.ExceptionCheck=exception;
     JNIEnv env{};env.functions=&table;
-    for(int kind=0;kind<5;++kind)for(bool phone:{false,true}){
+    for(int kind=0;kind<7;++kind)for(bool phone:{false,true}){
         auto bytes=fixture(kind);const auto oraclePcm=expected(bytes,phone);
         const auto path=folder/("synthetic-"+std::to_string(kind)+(phone?"-phone.wav":"-normal.wav"));
         require(render(bytes.data(),bytes.size(),path.string().c_str(),phone).empty(),"actual WAV renderer succeeds");

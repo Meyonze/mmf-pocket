@@ -39,6 +39,7 @@ struct Report {
  std::map<Key,Part> parts;
 };
 Report analyzePlayers(MaPlayer& player,MaPlayer& reference,uint64_t cap,int block=512){
+ require((!player.sineRender_||!player.sineRender_->highBus)&&(!reference.sineRender_||!reference.sineRender_->highBus),"contribution audit requires a fixed source density");
  require(&player!=&reference&&player.rate_==reference.rate_,"independent players with equal sample rates required");
  const int factor=player.sineRender_?player.sineRender_->bus.factor():0;
  const auto math=player.sineRender_?player.sineRender_->math:FmSubframeMath::Exact;

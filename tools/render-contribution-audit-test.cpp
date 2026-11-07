@@ -61,6 +61,8 @@ void hardBoundaryAndGuards(){
   try{if(kind==0)(void)analyzePlayers(p,p,128);if(kind==1)(void)analyzePlayers(p,b,0);if(kind==2)(void)analyzePlayers(p,b,128,0);if(kind==3)(void)analyzePlayers(p,b,128,1025);if(kind==4)(void)analyzePlayers(p,b,8000ULL*600+1);}
   catch(const std::runtime_error&){rejected=true;}require(rejected,"bad independent-player/render bound accepted");
  }
+ {MaPlayer p,b;init(p);init(b);p.sineRender_.emplace(SineRenderOptions{8,FmSubframeMath::Hermite,true});bool rejected=false;
+  try{(void)analyzePlayers(p,b,128);}catch(const std::runtime_error&){rejected=true;}require(rejected,"fixed-density diagnostic accepted adaptive policy");}
  std::cout<<"Hard fade/endpoints/future-event exclusion and bounded input guards PASS\n";
 }
 

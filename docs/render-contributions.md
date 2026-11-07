@@ -92,3 +92,7 @@ An additional28 encoded-input runs cover seven observed source combinations
 (FM, PCM, Audio, ATR, ATR+FM, ATR+PCM, and silence), each with factor1/exact,
 2/exact,8/Hermite and32/Hermite. Reference samples and attributed trigger totals
 match in every run; component sums are exact for this representative subset.
+
+The fixed-density diagnostic rejects players initialized with adaptive8/16
+boosting. Its fixed8/16 comparisons do not describe the whole r85 app adaptive
+mix; see [adaptive policy and validation](fm-adaptive-density.md).
