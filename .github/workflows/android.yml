@@ -168,6 +168,8 @@ jobs:
         run: |
           c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Ithird_party/yamaha-smaf-player/src tools/pcm-silence-index-test.cpp -o pcm-silence-index-test
           ./pcm-silence-index-test
+          c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Ithird_party/yamaha-smaf-player/src tools/pcm-zero-source-test.cpp build/native-sanitizer/libsmaf.a -o pcm-zero-source-test
+          ./pcm-zero-source-test
 
       - name: Build and run remaining fixed-wave carrier tests
         run: |

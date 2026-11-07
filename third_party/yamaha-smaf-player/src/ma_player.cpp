@@ -1631,8 +1631,12 @@ float MaPlayer::PcmVoice::tick() {
     // accumulating it into rate/baseRate on each sample or controller event.
     const double advance = rate * (1.0 + vibDepth * lfo);
     float allocationSample;
+    // The immutable decoded playback range was certified exactly zero at
+    // allocation. Linear and FIR reconstruction both produce positive zero;
+    // retain the normal sample/clock/envelope path without the FIR work.
+    // A zero loop with nonzero attack history does not carry this certificate.
     const float s = pcm_detail::interpolatePcm(pcm, end, i, frac, loop,
-        loopStart, loopTravel, qualityInterpolation, advance,
+        loopStart, loopTravel, qualityInterpolation && !zeroSource, advance,
         &allocationSample);
     pos += advance;
     float e;

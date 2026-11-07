@@ -3243,3 +3243,13 @@ attributed to score channels or independent ATR domains without changing gain.
 16 mixed quality cases and five CLI tests cover bounds, privacy and tails.
 See [usage and interpretation limits](render-contributions.md). Application
 source/default/cache/release remain unchanged.
+
+### Certified zero keyed-PCM reconstruction cost
+
+Use the existing immutable playback-range silence certificate to bypass FIR
+reconstruction for an all-zero keyed-PCM source. Preserve normal linear lookup,
+source/LFO/envelope/Hold clocks and allocation-level history. No gain threshold,
+attack-history shortcut or changes to recorded Audio/ATR.528conditions and
+405,504samples/states compare exactly against the uncertified original path;
+2,121 complete encoded-input WAVs remain byte-identical. See
+[scope and validation](pcm-zero-reconstruction.md). Cache/version unchanged.
