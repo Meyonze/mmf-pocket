@@ -3347,3 +3347,15 @@ clock coverage now includes360 cases. Paired pinned shared-host source timing
 observes7.6–18.2% lower CPU time in four32-voice target cases; controls vary and
 this excludes FIR/mixing/I/O, with no Android speed claim. Cache89 unchanged.
 See [method and limits](fm-dead-branch.md).
+
+### Host-only nested graph6 sine source
+
+Added graph6 direct0 plus nested1→2→3 source with one native tick and exact native
+endpoints. Independent double-Bessel coefficients, finite FIR and output LP
+match40 reconstructed policies on4 stationary VM35 TL24/24 fixtures (maxRMS
+1.54e-8); the actual native player matches within2.04e-8.240 clock cases,4
+retirement cases and15 atomic rejections pass Release/ASan/NDKClang Linuxhost.
+Normal adaptive playback remains native for this moving nested graph and is
+checked against a72-frame shifted reference. No app integration/cache change.
+Independent transient errors, stronger PM, player mixing/lifetime integration,
+density policy and device cost remain open. See [model and limits](fm-nested-sine-prototype.md).
