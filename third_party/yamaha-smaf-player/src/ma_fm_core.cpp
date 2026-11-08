@@ -8,6 +8,7 @@
 // semantics and rate timing; this is not measured or bit-exact handset emulation.
 
 #include "ma_fm_core.h"
+#include <cfloat>
 #include "ma_subframe_sine.h"
 #include "ma_sine_density.h"
 #include "ma_nested_density.h"
@@ -1150,11 +1151,49 @@ template<bool Fast> bool FmVoice::tickNestedSubframesImpl_(float* target,int fac
         mute[j]=op.modernTimbre_&&op.vibAmt_!=0?inc[j]>=.5:op.cachedMute_;
         level[j]=float(op.env_.level_);am[j]=op.amAmt_!=0?1-op.amAmt_*float(.5+.5*lfoSin_):1;
     }
+#if FLT_EVAL_METHOD == 0
+    // Valid factors are powers of two. Replacing division with multiplication
+    // is exact when both the product and scaled result stay normal. Preserve
+    // the original expression for tiny/huge/nonfinite increments and x87.
+    // Keep inc*sub first: pre-scaling inc could move an FMA rounding point.
+    const double inverseFactor=1.0/factor;
+    const double minimumIncrement=std::numeric_limits<double>::min()*factor;
+    const double maximumIncrement=std::numeric_limits<double>::max()*inverseFactor;
+#endif
     // All observed cells are filled before their readers. No frame allocation.
     std::array<std::array<float,128>,4> rows;
     for(int j=0;j<4;++j) {
         if(mute[j]){std::fill_n(rows[j].begin(),factor-1,0.f);continue;}
         const auto& op=ops_[j];
+#if FLT_EVAL_METHOD == 0
+        const double magnitude=std::abs(inc[j]);
+        const bool reciprocal=magnitude>=minimumIncrement&&magnitude<=maximumIncrement;
+        const double phase=2*std::numbers::pi*(before[j]-std::floor(before[j]));
+        bool recurrent=false;
+        if constexpr(Fast)if(j<2) {
+            const double rotationStep=reciprocal?(2*std::numbers::pi*inc[j])*inverseFactor:2*std::numbers::pi*inc[j]/factor;
+            recurrent=sine_rotation::linearSines(phase,rotationStep,std::span<float>(rows[j].data(),factor-1));
+        }
+        // Hoist the invariant choice out of the sample loop; the rare
+        // division path remains independent of the common multiply path.
+        auto renderRow=[&]<bool Reciprocal>() {
+            for(size_t sub=1;sub<size_t(factor);++sub) {
+                float sine;
+                if(recurrent)sine=rows[j][sub-1];
+                else {
+                    double position;
+                    if constexpr(Reciprocal)position=before[j]+(inc[j]*double(sub))*inverseFactor;
+                    else position=before[j]+inc[j]*double(sub)/factor;
+                    if(position>=1)position-=std::floor(position);
+                    if(j>=2)position+=double(rows[j-1][sub-1])*modDepth_;
+                    sine=subframeMath::sample<Fast>(position,false);
+                }
+                rows[j][sub-1]=float(sine*op.tlGain_*op.kslGain_*level[j]*am[j]);
+            }
+        };
+        if(reciprocal) [[likely]] renderRow.template operator()<true>();
+        else renderRow.template operator()<false>();
+#else
         const double phase=2*std::numbers::pi*(before[j]-std::floor(before[j]));
         const bool recurrent=Fast&&j<2&&sine_rotation::linearSines(phase,2*std::numbers::pi*inc[j]/factor,
                                               std::span<float>(rows[j].data(),factor-1));
@@ -1169,6 +1208,7 @@ template<bool Fast> bool FmVoice::tickNestedSubframesImpl_(float* target,int fac
             }
             rows[j][sub-1]=float(sine*op.tlGain_*op.kslGain_*level[j]*am[j]);
         }
+#endif
     }
     for(size_t sub=1;sub<factor;++sub)
         output[sub-1]=float((double(rows[0][sub-1])+double(rows[3][sub-1]))*.5*velocity_*volume_*.7);
