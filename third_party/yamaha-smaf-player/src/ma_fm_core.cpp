@@ -564,7 +564,9 @@ float FmOperator::waveform_(uint8_t wave, double phase01) {
     // every value onto the eight OPL shapes with
     // `wave & 7`; that made most authored custom voices use the wrong oscillator
     // and was a major source of poor timbre reproduction.
-    double x = phase01 - std::floor(phase01);
+    // Native phases are almost always in(0,1); preserve the original
+    // normalization at zero (including signed zero), boundaries and outside.
+    double x = phase01>0&&phase01<1 ? phase01 : phase01-std::floor(phase01);
     auto positiveHalf = [](double value) { return value > 0.0 ? value : 0.0; };
     auto triangle = [](double phase) {
         return phase < 0.25 ? phase * 4.0
@@ -641,7 +643,8 @@ float FmOperator::tick(double modCycles, double lfoSin, double vibratoScale) {
     double inc = phaseInc_;
     if (vibAmt_ != 0.0) inc *= 1.0 + vibAmt_ * lfoSin * vibratoScale;
     phase_ += inc;
-    if (phase_ >= 1.0) phase_ -= std::floor(phase_);
+    // floor is exactly1 on[1,2); retain the general rule for larger jumps.
+    if (phase_ >= 1.0) phase_ -= (phase_<2 ? 1.0 : std::floor(phase_));
     // Nyquist suppression mutes output, not source time. Keep the oscillator
     // moving so a pitch bend back into range resumes the integrated phase.
     // Modern intrinsic vibrato can cross Nyquist in either direction. Use
