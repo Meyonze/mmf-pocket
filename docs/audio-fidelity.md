@@ -3399,3 +3399,18 @@ and actual Format3 score/expanded setup, including MA7 hard-left gain1.
 for75targets and preserve7negative controls.36WAV/JNI fixtures and64fixed+
 64adaptive contribution routes pass. Cache91; official1.6.6 unchanged.
 See [scope, evidence and limitations](fm-ma7-nested-r91.md).
+
+
+### Strong nested reference and64/128x host prototype
+
+Replace repeated standard-library Bessel calls in the nested reference with
+rescaled downward integer-order recurrence, checked at two recurrence depths,
+six frozen70-digit anchors and1024 standard-library overlap points. Select
+outer/inner truncations from the existing absolute-tail bound and validate
+pointwise reconstruction in long double. Existing1500 policies/108transients
+remain covered. Strong VM35 TL18/12/0 adds48 steady and48 dense-FIR transient
+comparisons,24native-clock checks and64/128x impulse/DC/stereo/reset guards.
+A host stationary analytic-continuation tail bound is compared against32
+coefficient sums; it is not an app/EG density policy. Paired host cost measurements
+show substantial high-density overhead; production routing/cache91 remain
+unchanged. See [evidence, formula and limits](fm-strong-nested-prototype.md).

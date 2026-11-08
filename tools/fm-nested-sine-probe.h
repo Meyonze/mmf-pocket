@@ -13,11 +13,12 @@ inline bool eligible(const FmVoice& v) {
     return true;
 }
 
-template<bool Fast>
+template<bool Fast,size_t MaxFactor=32>
 inline fm_probe::Frame frame(FmVoice& v, std::span<float> output) {
+    static_assert(MaxFactor==32||MaxFactor==128);
     const size_t factor=output.size();
-    if (!eligible(v) || !output.data() || factor<2 || factor>32 || (factor&(factor-1)))
-        throw std::runtime_error("nested probe requires graph6 sine/no-feedback and2/4/8/16/32 samples");
+    if (!eligible(v) || !output.data() || factor<2 || factor>MaxFactor || (factor&(factor-1)))
+        throw std::runtime_error("nested probe requires graph6 sine/no-feedback and a valid host factor");
     const bool active=v.active_;
     double before[4];
     for(int j=0;j<4;++j)before[j]=v.ops_[j].phase_;

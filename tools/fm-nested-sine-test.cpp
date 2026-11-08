@@ -5,6 +5,8 @@
 #include "fm-algorithm7-test.cpp"
 #include "ma_sine_density.h"
 #include "ma_sine_output.h"
+#include "fm-bessel-reference.h"
+#include "fm-high-density-probe.h"
 #include <iomanip>
 #include <map>
 
@@ -17,11 +19,6 @@ double ratio(int code,bool ma7) {
     constexpr double vm35[]={.5,1,2,3,4,5,6,7,8,9,10,10,12,12,15,15};
     constexpr double expanded[]={.5,1,2,3,4,5,6,7,8,9,10,1.414,12,1.498,.891,15};
     return ma7?expanded[code]:vm35[code];
-}
-double bessel(int n,double x) {
-    const int k=std::abs(n);
-    return std::cyl_bessel_j(double(k),std::abs(x))*
-        ((n<0&&(k&1))?-1:1)*((x<0&&(k&1))?-1:1);
 }
 SmafFile fixture(const Case& c) {
     auto f=player_sideband::fixture({c.note,c.carrier,c.inner,24});
@@ -56,21 +53,28 @@ struct Model {
         // sin(Ct+b2*sin(Mt+b1*sin(It))) expands as
         // sum J_n(b2) J_k(n*b1) sin((C+n*M+k*I)t).
         const double depth=c.ma7?.42:4;
-        const double beta=tau*depth*std::pow(10.,-.75*(c.ma7?0:24)/20);
+        const double beta=tau*depth*std::pow(10.,-.75*std::min(c.innerTl,c.middleTl)/20);
         const double base=440*std::pow(2.,double(c.note-69)/12)/rate;
         const double inner=ratio(c.inner,c.ma7),middle=ratio(c.middle,c.ma7),carrier=ratio(c.carrier,c.ma7);
         const double b1=base*inner>=.5?0:tau*depth*std::pow(10.,-.75*c.innerTl/20);
         const double b2=base*middle>=.5?0:tau*depth*std::pow(10.,-.75*c.middleTl/20);
-        constexpr int N=32,K=256;
+        int N=32,K=256;
+        while(sine_density::tailBound(beta,N+1)>1e-18&&N<128)N+=16;
+        while(std::exp(beta)*sine_density::tailBound(N*beta,K+1)>1e-18&&K<16384)K*=2;
         // |J_n|<=I_n and sum I_n(beta)=exp(beta) also bound the inner error.
         const double tail=sine_density::tailBound(beta,N+1)+
             std::exp(beta)*sine_density::tailBound(N*beta,K+1);
         require(tail<1e-15,"nested Bessel truncation too large");
-        if(base*carrier<.5)for(int n=-N;n<=N;++n)for(int k=-K;k<=K;++k) {
+        const auto outer=fm_bessel::coefficients(b2,N);
+        if(base*carrier<.5)for(int n=-N;n<=N;++n) {
+          const auto innerTerms=fm_bessel::coefficients(n*b1,K);
+          const double outerTerm=fm_bessel::signedOrder(outer,n);
+          for(int k=-K;k<=K;++k) {
             // All encoded ratios have at most three decimal places.
             const int h=int(std::lround(carrier*1000))+n*int(std::lround(middle*1000))+k*int(std::lround(inner*1000));
-            const double v=bessel(n,b2)*bessel(k,n*b1);
+            const double v=outerTerm*fm_bessel::signedOrder(innerTerms,k);
             if(h)harmonics[std::abs(h)]+=h<0?-v:v;
+          }
         }
         const double direct=base<.5?std::pow(10.,-.75*18/20):0;harmonics[1000]+=direct;
         double discarded=0;
@@ -80,9 +84,9 @@ struct Model {
         }
         require(discarded<1e-12,"nested coefficient pruning error too large");
         for(int j=0;j<128;++j) {
-            const double t=j*.372143;double sum=0;
-            for(auto [h,v]:harmonics)sum+=v*std::sin((h/1000.)*t);
-            const double expected=direct*std::sin(t)+
+            const long double t=j*.372143L;long double sum=0;
+            for(auto [h,v]:harmonics)sum+=v*std::sin((h/1000.L)*t);
+            const long double expected=direct*std::sin(t)+
                 (base*carrier<.5?std::sin(carrier*t+b2*std::sin(middle*t+b1*std::sin(inner*t))):0);
             require(std::abs(sum-expected)<2e-12,"double-Bessel signs/frequencies disagree with nested sine");
         }
@@ -91,13 +95,13 @@ struct Model {
         std::vector<double> out(frames);
         const double base=440*std::pow(2.,double(c.note-69)/12)/rate;
         const double a=float(1-std::exp(-2*3.14159265358979*10000/rate));
-        const auto config=factor>1?fm_causal::alignedConfig(factor):fm_causal::Config{1,{}};
+        const auto config=factor>32?fm_high_density::config(factor):factor>1?fm_causal::alignedConfig(factor):fm_causal::Config{1,{}};
         for(auto [k,v]:harmonics) {
             const double f=base*(k/1000.);if(ideal&&f>=.5)continue;
             const double omega=tau*f;const auto lp=a/(Complex(1)-std::polar(1-a,-omega));
             Complex h=lp*lp;
             if(!ideal&&factor>1)h*=fm_causal::response(config,omega/factor)*
-                std::polar(1.,omega*fm_causal::Decimator(config).delayFrames());
+                std::polar(1.,omega*fm_high_density::delayFrames(config));
             auto ph=std::polar(1.,omega*(warmup+1));const auto step=std::polar(1.,omega);
             for(auto& x:out){x+=.5*.7*double(.32f)*(c.ma7?1:2)*v*std::imag(h*ph);ph*=step;}
         }
@@ -201,7 +205,8 @@ std::vector<double> transientReference(const Case& c,int factor,int gate,bool re
     }
     // Dense effective FIR constructed separately from the production halfbands.
     std::vector<double> h{1};int stride=1;
-    for(int taps:fm_causal::alignedConfig(factor).taps) {
+    const auto config=factor>32?fm_high_density::config(factor):fm_causal::alignedConfig(factor);
+    for(int taps:config.taps) {
         const auto stage=fm_causal::kernel(taps);
         std::vector<double> next(h.size()+(stage.size()-1)*stride);
         for(size_t i=0;i<h.size();++i)for(size_t j=0;j<stage.size();++j)next[i+j*stride]+=h[i]*stage[j];
@@ -329,4 +334,6 @@ void policies() {
     std::cout<<"9 VM35 and16 MA7 TL policies,13 exclusions and existing reduced graph6 policy PASS\n";
 }
 }
+#ifndef FM_NESTED_SINE_TEST_NO_MAIN
 int main(){try{nested::policies();nested::clocks();nested::spectra();nested::transients();return 0;}catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}
+#endif
