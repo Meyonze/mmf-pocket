@@ -18,6 +18,9 @@ struct Stereo { double left = 0, right = 0; };
 inline bool validFactor(int factor) {
     return factor >= 1 && factor <= 32 && (factor & (factor - 1)) == 0;
 }
+inline bool validNestedFactor(int factor) {
+    return factor==16||factor==32||factor==64||factor==128;
+}
 
 inline const std::vector<double>& coefficients(int taps) {
     // These are the three already-tested integer-delay halfband designs.
@@ -86,11 +89,11 @@ class Bus {
     }
 public:
     static constexpr int latency = 72;
-    explicit Bus(int factor) : factor_(factor), padding_(0), support_(0) {
-        if (!validFactor(factor)) throw std::invalid_argument("invalid sine bus factor");
+    explicit Bus(int factor,bool nested=false) : factor_(factor), padding_(0), support_(0) {
+        if (!(nested?validNestedFactor(factor):validFactor(factor))) throw std::invalid_argument("invalid sine bus factor");
         int stride = 1, delayNumerator = 0;
         for (int n = factor; n > 1; n /= 2) {
-            const int taps = n == 2 ? 257 : factor == 32 && n == 4 ? 37 : 33;
+            const int taps = n == 2 ? 257 : factor >= 32 && n == factor/8 ? 37 : 33;
             stages_.emplace_back(taps);
             delayNumerator += (taps - 1) / 2 * stride; stride *= 2;
         }

@@ -286,6 +286,8 @@ jobs:
           ./fm-strong-nested-test
           c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Ithird_party/yamaha-smaf-player/src tools/fm-recursive-nested-test.cpp build/native-sanitizer/libsmaf.a -o fm-recursive-nested-test
           ./fm-recursive-nested-test
+          c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Ithird_party/yamaha-smaf-player/src tools/fm-nested-player-test.cpp build/native-sanitizer/libsmaf.a -o fm-nested-player-test
+          ./fm-nested-player-test
           c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Ithird_party/yamaha-smaf-player/src tools/fm-reduced-graphs-test.cpp build/native-sanitizer/libsmaf.a -o fm-reduced-graphs-test
           ./fm-reduced-graphs-test
           c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Ithird_party/yamaha-smaf-player/src tools/fm-adaptive-density-test.cpp build/native-sanitizer/libsmaf.a -o fm-adaptive-density-test
@@ -364,6 +366,7 @@ jobs:
           c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Ithird_party/yamaha-smaf-player/src tools/render-contribution-audit-test.cpp build/native-sanitizer/libsmaf.a -o render-contribution-audit-test
           ./render-contribution-audit-test
           c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Ithird_party/yamaha-smaf-player/src tools/render-contribution-audit.cpp build/native-sanitizer/libsmaf.a -o render-contribution-audit
+          PYTHONDONTWRITEBYTECODE=1 python3 tools/fm-nested-render-cli-test.py --binary ./sine-render-test-cli --audit ./render-contribution-audit
           PYTHONDONTWRITEBYTECODE=1 python3 tools/render-contribution-audit-cli-test.py --binary ./render-contribution-audit
 
       - name: Build and run scheduled tone inventory tests

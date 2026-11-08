@@ -306,7 +306,7 @@ std::vector<uint8_t> smafHuffmanInflate(const uint8_t* p, size_t n) {
 // ── build ────────────────────────────────────────────────────────────────────
 bool MaPlayer::init(const SmafFile& file, uint32_t sampleRate,
                     bool suppressHpsSlapbackDuplicates, SineRenderOptions sine) {
-    if ((sine.factor != 0 && !sine_output::validFactor(sine.factor)) ||
+    if ((sine.nestedSine ? !sine_output::validNestedFactor(sine.factor) : (sine.factor != 0 && !sine_output::validFactor(sine.factor))) ||
         (sine.boostHighNotes && sine.factor != 8) ||
         (sine.math != FmSubframeMath::Exact && sine.math != FmSubframeMath::Hermite)) return false;
     sineRender_.reset();
@@ -2218,6 +2218,11 @@ int MaPlayer::render(float* out, int frames) {
 // Opt-in source experiment: keep the original render loop above untouched.
 // Source time stops at exhaustion; physical output continues through the bus.
 int MaPlayer::renderSine_(float* out, int frames) {
+    // Keep ordinary scratch dimensions unchanged; extended buffers are opt-in.
+    if(sineRender_->nestedSine)return renderSineImpl_<128,true>(out,frames);
+    return renderSineImpl_<32,false>(out,frames);
+}
+template<int Capacity,bool Nested> int MaPlayer::renderSineImpl_(float* out,int frames) {
     auto& state = *sineRender_;
     if (ended_ || endSample_ == 0) { ended_ = true; return 0; }
     const int factor = state.bus.factor();
@@ -2257,18 +2262,21 @@ int MaPlayer::renderSine_(float* out, int frames) {
         }
 
         float l = 0.0f, r = 0.0f;
-        std::array<sine_output::Stereo, 32> high{};
+        std::array<sine_output::Stereo, Capacity> high{};
         std::array<sine_output::Stereo, 16> boosted{};
         bool boostedThisFrame = false;
         constexpr float kMixGain = .32f;
         if (!state.inputFinished) {
             for (int i = 0; i < kPoolSize; ++i) {
                 auto& voice = pool_[i]; if (!voice.active()) continue;
-                std::array<float, 32> samples;
+                std::array<float, Capacity> samples;
                 const bool boost = state.highBus && voice.sineDensityHint() == 16;
                 boostedThisFrame = boostedThisFrame || boost;
                 const int density = boost ? 16 : factor;
-                if (density > 1 && voice.tickSineSubframes(samples.data(), density, state.math)) {
+                bool filtered=false;
+                if constexpr(Nested)filtered=voice.tickNestedSubframes(samples.data(),density,state.math);
+                else filtered=density>1&&voice.tickSineSubframes(samples.data(),density,state.math);
+                if (filtered) {
                     auto* target = boost ? boosted.data() : high.data();
                     for (int k = 0; k < density; ++k) {
                         target[size_t(k)].left += samples[size_t(k)] * kMixGain * poolPanLeft_[i];

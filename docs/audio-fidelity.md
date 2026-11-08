@@ -3430,3 +3430,18 @@ premises. A host planner selects16/32/64/128 within a caller tail budget/cap,
 or returns unproven; it is not an app/controller/EG policy. Shared-host paired
 measurements compare scalar and recursive prototypes, not production or Android
 performance. See [derivation, scope and measurements](fm-recursive-nested-prototype.md).
+
+
+### Explicit fixed nested source/player/MMF route
+
+Add a separate modern coherent VM35/MA7 sine graph6 source API at16/32/64/128,
+with no feedback/fixed frequency/detune. Preserve the old source<=32 guard.
+Move only the pure rotation primitive into the core; Exact remains an oracle.
+Opt-in nested SineRenderOptions uses specialized128-entry scratch while normal
+r91 playback keeps32. Extended buses retain72-frame delay and144-frame support.
+Contribution diagnostics follow the actual route and append64/128 counts only
+for explicit nested reports.160core cases match independent prototype samples
+bit-for-bit,40public-player policies match the Bessel/FIR model (maxRMS1.70e-7),
+plus lifecycle/mixed/native fallback and actual MMF/PCM16 WAV checks.2344default
+PCM/state/counter reports and164full app WAV hashes remain exact;2legacy inputs
+are capped. Cache91 and official1.6.6 unchanged. See [scope and evidence](fm-nested-player.md).

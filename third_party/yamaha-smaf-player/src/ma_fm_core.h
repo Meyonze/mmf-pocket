@@ -209,6 +209,12 @@ public:
     // False leaves state/output untouched (bad shape/count/math/null output).
     // Caller owns FIR filtering, common delay, source routing and EOF policy.
     bool supportsSineSubframes() const;
+    // Explicit fixed-density graph6 experiment for coherent modern VM35/MA7
+    // sine/no-feedback patches without fixed frequency/detune.16/32/64/128.
+    // Strong modulation is allowed only through this separate opt-in API.
+    bool supportsNestedSubframes() const;
+    bool tickNestedSubframes(float* output,int factor,FmSubframeMath math=FmSubframeMath::Exact);
+
     // Conservative8/16 density hint for supported PM graphs. Within a note it
     // can only rise; a new note resets it. Does not advance synthesis clocks.
     int sineDensityHint();
@@ -254,6 +260,7 @@ private:
     float modOp_(int i, double extModCycles);
     template<bool Fast> bool tickSineSubframesImpl_(float* output, int factor);
     bool weakNestedSine_() const;
+    template<bool Fast> bool tickNestedSubframesImpl_(float* output,int factor);
 };
 
 } // namespace fxchain::smaf

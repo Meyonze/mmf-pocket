@@ -61,8 +61,8 @@ static void writeHeader(std::ostream& f, uint32_t frames, uint32_t rate) {
 }
 
 int main(int argc, char** argv) {
-    if (argc < 3 || argc > 6) {
-        std::fprintf(stderr, "usage: smaf-render <tune.mmf> <out.wav> [seconds] [--experimental-sine-factor=1|2|4|8|16|32] [--experimental-sine-math=exact|hermite]\n");
+    if (argc < 3 || argc > 7) {
+        std::fprintf(stderr, "usage: smaf-render <tune.mmf> <out.wav> [seconds] [--experimental-sine-factor=1|2|4|8|16|32|64|128] [--experimental-sine-math=exact|hermite] [--experimental-nested-sine]\n");
         return 2;
     }
     double seconds = 30.0;
@@ -86,8 +86,8 @@ int main(int argc, char** argv) {
             auto value = arg.substr(std::string_view("--experimental-sine-factor=").size());
             const auto parsed = std::from_chars(value.data(), value.data() + value.size(), sine.factor);
             if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size() ||
-                sine.factor < 1 || sine.factor > 32 || (sine.factor & (sine.factor - 1)) != 0) {
-                std::fprintf(stderr, "experimental sine factor must be1/2/4/8/16/32\n"); return 2;
+                sine.factor < 1 || sine.factor > 128 || (sine.factor & (sine.factor - 1)) != 0) {
+                std::fprintf(stderr, "experimental sine factor must be1/2/4/8/16/32/64/128\n"); return 2;
             }
             factorSeen = true;
         } else if (arg.starts_with("--experimental-sine-math=") && !mathSeen) {
@@ -96,10 +96,15 @@ int main(int argc, char** argv) {
             else if (value == "hermite") sine.math = FmSubframeMath::Hermite;
             else { std::fprintf(stderr, "experimental sine math must be exact/hermite\n"); return 2; }
             mathSeen = true;
+        } else if(arg=="--experimental-nested-sine"&&!sine.nestedSine) {
+            sine.nestedSine=true;
         } else { std::fprintf(stderr, "unknown or duplicate renderer option\n"); return 2; }
     }
     if (mathSeen && !factorSeen) {
         std::fprintf(stderr, "experimental sine math requires an explicit factor\n"); return 2;
+    }
+    if((sine.nestedSine&&(!factorSeen||sine.factor<16))||(!sine.nestedSine&&sine.factor>32)) {
+        std::fprintf(stderr,"nested sine requires explicit16/32/64/128 factor; factors above32 require nested mode\n");return 2;
     }
     constexpr uint32_t rate = 44100;
     try {

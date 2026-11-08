@@ -10,6 +10,7 @@
 #include "ma_fm_core.h"
 #include "ma_subframe_sine.h"
 #include "ma_sine_density.h"
+#include "ma_sine_rotation.h"
 
 #include <cmath>
 #include <algorithm>
@@ -1077,6 +1078,66 @@ template<bool Fast> bool FmVoice::tickSineSubframesImpl_(float* output, int fact
     }
     output[factor - 1] = native;
     return true;
+}
+
+bool FmVoice::supportsNestedSubframes() const {
+    if(!fourOp_||algo_!=6||!patch_.modernTimbre)return false;
+    bool vm35=true,ma7=true;
+    for(int j=0;j<4;++j) {
+        const auto& op=patch_.ops[size_t(j)];
+        if(op.wave!=0||opFb_[j]!=0||op.fixedFrequency||op.ma7Detune!=0)return false;
+        vm35=vm35&&op.ma35Multipliers&&!op.ma7Multipliers;
+        ma7=ma7&&op.ma7Multipliers;
+    }
+    return vm35||ma7;
+}
+bool FmVoice::tickNestedSubframes(float* output,int factor,FmSubframeMath math) {
+    if(!output||(factor!=16&&factor!=32&&factor!=64&&factor!=128)||!supportsNestedSubframes())return false;
+    switch(math) {
+        case FmSubframeMath::Exact:return tickNestedSubframesImpl_<false>(output,factor);
+        case FmSubframeMath::Hermite:return tickNestedSubframesImpl_<true>(output,factor);
+    }
+    return false;
+}
+template<bool Fast> bool FmVoice::tickNestedSubframesImpl_(float* target,int factor) {
+    const std::span<float> output(target,size_t(factor));
+    const bool active=active_;double before[4];
+    for(int j=0;j<4;++j)before[j]=ops_[j].phase_;
+    const float native=tick();
+    if(!active||velocity_==0||volume_==0) {
+        std::fill(output.begin(),output.end(),0);
+        output.back()=native;return true;
+    }
+    double inc[4];float level[4],am[4];bool mute[4];
+    for(int j=0;j<4;++j) {
+        const auto& op=ops_[j];inc[j]=op.phaseInc_;
+        if(op.vibAmt_!=0)inc[j]*=1+op.vibAmt_*lfoSin_*vibratoScale_;
+        mute[j]=op.modernTimbre_&&op.vibAmt_!=0?inc[j]>=.5:op.cachedMute_;
+        level[j]=float(op.env_.level_);am[j]=op.amAmt_!=0?1-op.amAmt_*float(.5+.5*lfoSin_):1;
+    }
+    // All observed cells are filled before their readers. No frame allocation.
+    std::array<std::array<float,128>,4> rows;
+    for(int j=0;j<4;++j) {
+        if(mute[j]){std::fill_n(rows[j].begin(),factor-1,0.f);continue;}
+        const auto& op=ops_[j];
+        const double phase=2*std::numbers::pi*(before[j]-std::floor(before[j]));
+        const bool recurrent=Fast&&j<2&&sine_rotation::linearSines(phase,2*std::numbers::pi*inc[j]/factor,
+                                              std::span<float>(rows[j].data(),factor-1));
+        for(size_t sub=1;sub<factor;++sub) {
+            float sine;
+            if(recurrent)sine=rows[j][sub-1];
+            else {
+                double position=before[j]+inc[j]*double(sub)/factor;
+                if(position>=1)position-=std::floor(position);
+                if(j>=2)position+=double(rows[j-1][sub-1])*modDepth_;
+                sine=subframeMath::sample<Fast>(position,false);
+            }
+            rows[j][sub-1]=float(sine*op.tlGain_*op.kslGain_*level[j]*am[j]);
+        }
+    }
+    for(size_t sub=1;sub<factor;++sub)
+        output[sub-1]=float((double(rows[0][sub-1])+double(rows[3][sub-1]))*.5*velocity_*volume_*.7);
+    output.back()=native;return true;
 }
 
 } // namespace fxchain::smaf

@@ -135,3 +135,9 @@ R91 also attributes the fixed16 [MA7 nested6 route](fm-ma7-nested-r91.md).
 Fixed-policy and adaptive mixed FM/PCM/ATR/late-part coverage is64 cases each,
 including gain revival, pitch changes, source-factor counts and shared-tail
 boundaries. Existing512 graph/wave/profile streams remain covered.
+
+
+The [explicit nested route](fm-nested-player.md) supports fixed16/32/64/128.
+Nested reports add `nested_sine: true` and64/128 voice-frame counters; ordinary
+reports retain their existing factor keys and values. The mirror uses the new
+core API only for this opt-in mode and remains checked against actual PCM.
