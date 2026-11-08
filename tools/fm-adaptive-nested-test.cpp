@@ -24,7 +24,7 @@ void bounds(){
         if(kind==4)patch.ops[2].ar=0;if(kind==5)patch.ops[1].vib=true;
         if(kind==6)patch.ops[3].fb=1;if(kind==7)patch.ops[0].fixedFrequency=true;
         if(kind==8)patch.algorithm=5;
-        FmVoice v;v.setSampleRate(44100);v.noteOn(patch,317,1);auto native=v;
+        FmVoice v;v.setSampleRate(44100);v.noteOn(patch,317,1);if(kind==5)v.setVibratoScale(std::nextafter(8.,9.));auto native=v;
         require(v.nestedSineDensityHint()==0&&v.tick()==native.tick(),"automatic nested admission changed unsupported/native clock");
     }
     FmVoice v;v.setSampleRate(44100);const auto patch=nested::patch({96,7,3,5,12,12});
@@ -33,15 +33,57 @@ void bounds(){
     v.noteOn(patch,100,1);require(v.nestedSineDensityHint()==16,"nested density did not reset on retrigger");
     std::cout<<count<<" stationary threshold certificates;9 admission guards;pitch latch/retrigger PASS\n";
 }
-void transitions(FmSubframeMath math){
+void vibratoBounds(){
+    int cases=0;std::array<bool,4> seen{};
+    for(int rate:{8000,44100})for(int depth=0;depth<4;++depth)for(int mask=0;mask<16;++mask)
+    for(double q:{.061,.123,.26,.49,.51,1.})for(double scale:{-8.,0.,1.,2.,4.,8.}){
+        auto patch=nested::patch({96,7,3,5,12,12});for(int j=0;j<4;++j){patch.ops[j].vib=mask&(1<<j);patch.ops[j].dvb=depth;}
+        FmVoice v;v.setSampleRate(rate);v.noteOn(patch,q*rate/7,1);v.setVibratoScale(scale);
+        const int factor=v.nestedSineDensityHint();require(factor>=16&&factor<=128,"bounded vibrato rejected");
+        const int index=std::countr_zero(unsigned(factor))-4;seen[size_t(index)]=true;
+        const double limit=factor==128?.5:nested_density::limits[0][0][index]/64.;
+        for(int n=0;n<=128;++n)for(const auto& op:v.ops_){
+            const double inc=op.phaseInc_*(1+op.vibAmt_*scale*std::sin(2*std::numbers::pi*n/128));
+            require(inc>=0,"valid vibrato envelope reversed frequency");
+            if(inc<.5)require(inc<=limit,"vibrato planner underestimated an audible instantaneous frequency");
+        }
+        require(v.ops_[0].phase_==0&&v.lfoPhase_==0,"vibrato hint advanced native clocks");++cases;
+    }
+    require(std::all_of(seen.begin(),seen.end(),[](bool x){return x;}),"vibrato grid lost density coverage");
+    for(auto [q,low,high]:{std::tuple{.061,16,32},std::tuple{.123,32,64},std::tuple{.26,64,128}}){
+        auto patch=nested::patch({96,7,3,5,12,12});for(auto& op:patch.ops){op.vib=true;op.dvb=3;}
+        FmVoice v;v.setSampleRate(44100);v.noteOn(patch,q*44100/7,1);v.setVibratoScale(0);
+        require(v.nestedSineDensityHint()==low,"vibrato OFF density");v.setVibratoScale(8);
+        require(v.nestedSineDensityHint()==high,"vibrato-only controller did not invalidate density cache");
+        v.setVibratoScale(0);require(v.nestedSineDensityHint()==high,"vibrato OFF demoted live density");
+    }
+    for(double invalid:{std::nextafter(8.,9.),-9.,10000.,std::numeric_limits<double>::infinity(),std::numeric_limits<double>::quiet_NaN()}){
+        auto patch=nested::patch({96,7,3,5,12,12});patch.ops[1].vib=true;patch.ops[1].dvb=3;
+        FmVoice v;v.setSampleRate(44100);v.noteOn(patch,100,1);v.setVibratoScale(invalid);
+        require(v.nestedSineDensityHint()==0,"invalid initial vibrato admitted");v.setVibratoScale(0);
+        require(v.nestedSineDensityHint()==0,"invalid-start voice switched late from native");v.noteOn(patch,100,1);
+        require(v.nestedSineDensityHint()==16,"valid retrigger after rejected vibrato");v.setVibratoScale(invalid);
+        require(v.nestedSineDensityHint()==128,"invalid live vibrato dropped admitted voice");v.setVibratoScale(0);
+        require(v.nestedSineDensityHint()==128,"invalid live vibrato recovery demoted density");
+    }
+    auto patch=nested::patch({96,7,3,5,12,12});for(auto& op:patch.ops){op.vib=true;op.dvb=3;}
+    FmVoice v;v.setSampleRate(44100);v.noteOn(patch,100,1);require(v.nestedSineDensityHint()==16,"live extreme init");v.setVibratoScale(10000);
+    require(v.nestedSineDensityHint()==128,"live extreme density");auto native=v;std::array<float,128> samples{};
+    for(int n=0;n<32;++n){require(v.tickNestedSubframes(samples.data(),128,FmSubframeMath::Hermite),"live extreme voice changed source path");
+        require(samples.back()==native.tick()&&std::all_of(samples.begin(),samples.end(),[](float x){return std::isfinite(x);}),"live extreme source endpoint/nonfinite");
+        for(int j=0;j<4;++j)require(v.ops_[j].phase_==native.ops_[j].phase_&&v.ops_[j].env_.level_==native.ops_[j].env_.level_,"live extreme native clocks");}
+    std::cout<<cases<<" vibrato full-LFO envelope cases;3 controller-only promotions;5 invalid-domain lifetime guards;32 live extreme clocks PASS\n";
+}
+void transitions(FmSubframeMath math,bool vibrato=false){
     constexpr int frames=640;MaPlayer p;require(p.init(nested_player::clockFile(),44100,false,{8,math,true,false,true}),"adaptive actual player init");
-    auto patch=nested::patch({96,7,3,5,12,12});FmVoice oracle;oracle.setSampleRate(44100);
+    auto patch=nested::patch({96,7,3,5,12,12});if(vibrato){patch.lfo=3;for(auto& op:patch.ops){op.vib=true;op.dvb=3;op.am=true;op.dam=2;}}FmVoice oracle;oracle.setSampleRate(44100);
     std::array<std::vector<double>,4> sources;for(int i=0;i<4;++i)sources[i].resize(size_t(frames*(16<<i)),0);
     std::vector<double> actual(frames);std::array<float,128> samples{};
     int factor=16;
     for(int n=0;n<frames;++n){
         for(auto* v:{&p.pool_[0],&oracle}){
-            if(n==0||n==200){v->noteOn(patch,.04*44100/7,.4f);v->channel=0;factor=16;}
+            if(n==0||n==200){v->noteOn(patch,.04*44100/7,.4f);v->channel=0;factor=16;if(vibrato)v->lfoPhase_=n==0?.25:.75;}
+            if(vibrato){if(n==1)v->setVibratoScale(0);if(n==9)v->setVibratoScale(8);if(n==25)v->setVibratoScale(1);if(n==81)v->setVibratoScale(4);}
             if(n==17)v->setPitch(.08*44100/7);if(n==33||n==240)v->setPitch(.16*44100/7);
             if(n==65)v->setPitch(.32*44100/7);if(n==97)v->setPitch(.01*44100/7);
             if(n==45)v->setVolume(0);if(n==55)v->setVolume(1e-12f);if(n==57)v->setVolume(1);
@@ -74,16 +116,17 @@ void transitions(FmSubframeMath math){
     require(peak<2e-7,"adaptive bank transition erased old FIR history or changed dense convolution");
     require(!p.sineRender_->nestedBanks->pending()&&p.sineRender_->highBus->pendingFrames()==0,"adaptive old banks did not drain");
     require(p.diagnostics().limitedFrames==0,"adaptive reference clipped");
-    std::cout<<"Actual16->32->64->128,descending pitch,retrigger/overlapping tails,mute/tiny revival/Hold: dense FIR max delta "<<peak<<" PASS\n";
+    std::cout<<(vibrato?"Vibrato+AM ":"")<<"Actual16->32->64->128,descending pitch,retrigger/overlapping tails,mute/tiny revival/Hold: dense FIR max delta "<<peak<<" PASS\n";
 }
-void lifecycle(){
+void lifecycle(bool vibrato=false){
     auto file=nested::fixture({96,7,3,5,12,12});file.tracks[0].sequenceData.resize(27);file.tracks[0].sequenceData.insert(file.tracks[0].sequenceData.end(),{0,0x90,96,127,5,12,0xff,0x2f,0});
+    if(vibrato){file.tracks[0].setupData[14]=0xc6;for(int j=0;j<4;++j)file.tracks[0].setupData[size_t(19+7*j)]=7;}
     MaPlayer a,b;require(a.init(file,44100,false,options)&&b.init(file,44100,false,options),"adaptive lifecycle init");
     const auto out=nested_player::drain(a,1);require(!out.empty()&&nested_player::drain(b,1024)==out,"adaptive block/EOF");a.seekToStart();require(nested_player::drain(a,17)==out,"adaptive seek bank state");
     a.seekToStart();require(!a.init(file,44100,false,{16,FmSubframeMath::Hermite,false,false,true}),"adaptive invalid config accepted");require(nested_player::drain(a,31)==out,"adaptive rejected init destroyed state");
     for(int cap:{1,17,441}){MaPlayer p;require(p.init(file,44100,false,options),"adaptive capped init");p.endSample_=cap;const auto pcm=nested_player::drain(p,31);require(pcm.size()==size_t(cap+72)*2&&pcm.back()==0&&pcm[pcm.size()-2]==0,"adaptive cap/fade length");}
     require(a.init(file,44100)&&!a.sineRender_,"adaptive reinit failed to restore ordinary renderer");
-    std::cout<<"Actual adaptive EOF/block1,17,1024/seek/reinit/atomic invalid init/3hard caps PASS\n";
+    std::cout<<(vibrato?"Vibrato ":"")<<"Actual adaptive EOF/block1,17,1024/seek/reinit/atomic invalid init/3hard caps PASS\n";
 }
 void legacy(){
     int count=0;
@@ -96,6 +139,24 @@ void legacy(){
         require(!b.sineRender_->nestedBanks->pending(),"legacy class incorrectly entered new banks");++count;
     }
     std::cout<<count<<" legacy family/graph policies with pitch/mute/release/PCM remain bit-exact PASS\n";
+}
+void vibratoControllers(){
+    MaPlayer a,b;for(auto* p:{&a,&b}){
+        require(p->init(nested_player::clockFile(),44100,false,options),"vibrato actual controller init");
+        auto patch=nested::patch({96,7,3,5,12,12});for(auto& op:patch.ops){op.vib=true;op.dvb=3;}
+        auto& voice=p->pool_[0];voice.noteOn(patch,.061*44100/7,.3f);voice.channel=0;voice.setVibratoScale(0);voice.lfoPhase_=.25;
+        p->poolSquaredControllers_[0]=true;p->poolBaseFreq_[0]=.061*44100/7;p->poolPanLeft_[0]=.7f;p->poolPanRight_[0]=.3f;
+        nested_player::pcm(*p,0,120,1000);nested_player::pcm(*p,1,121,2000,true,7);
+        std::vector<MaPlayer::Ev> controls{{0,MaPlayer::Ev::Modulation,0,0,0},{17,MaPlayer::Ev::Modulation,0,127,0},
+            {33,MaPlayer::Ev::Modulation,0,0,0},{65,MaPlayer::Ev::Modulation,0,64,0},{96,MaPlayer::Ev::ResetControllers,0,0,0},
+            {97,MaPlayer::Ev::Volume,0,0,0},{112,MaPlayer::Ev::Volume,0,127,0},{128,MaPlayer::Ev::Hold,0,127,0},
+            {144,MaPlayer::Ev::AllNotesOff,0,0,0},{160,MaPlayer::Ev::Hold,0,0,0},{192,MaPlayer::Ev::AllSoundOff,0,0,0}};
+        p->events_.insert(p->events_.begin(),controls.begin(),controls.end());p->nonAtrGateEventEnd_=p->events_.size();
+    }
+    const auto report=contribution::analyzePlayers(a,b,640,17);const auto& part=report.parts.at({0,-1,0});
+    require(part.sineFrames==192&&part.densityFrames[3]==17&&part.densityFrames[4]==175,"actual CC1 did not migrate16->32 and latch old bank");
+    require(report.sumErrorPeak<2e-5,"vibrato controller contributions mismatch");
+    std::cout<<"Actual CC1 OFF/8/OFF/4,reset,mute/revival,Hold/key-off/AllSoundOff +PCM/ATR: bank counters and block-exact reference PASS\n";
 }
 void mixed(){
     MaPlayer a,b;for(auto* p:{&a,&b}){require(p->init(nested_player::clockFile(),44100,false,options),"adaptive mixed init");
@@ -110,4 +171,4 @@ void mixed(){
     std::cout<<"Actual simultaneous16/32/64/128+PCM/ATR contributions and block-exact reference PASS\n";
 }
 }
-int main(){try{adaptive_nested::bounds();adaptive_nested::transitions(FmSubframeMath::Exact);adaptive_nested::transitions(FmSubframeMath::Hermite);adaptive_nested::lifecycle();adaptive_nested::legacy();adaptive_nested::mixed();return 0;}catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}
+int main(){try{adaptive_nested::bounds();adaptive_nested::vibratoBounds();adaptive_nested::transitions(FmSubframeMath::Exact);adaptive_nested::transitions(FmSubframeMath::Hermite);adaptive_nested::transitions(FmSubframeMath::Exact,true);adaptive_nested::transitions(FmSubframeMath::Hermite,true);adaptive_nested::lifecycle();adaptive_nested::lifecycle(true);adaptive_nested::vibratoControllers();adaptive_nested::legacy();adaptive_nested::mixed();return 0;}catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}

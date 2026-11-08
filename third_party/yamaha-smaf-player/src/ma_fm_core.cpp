@@ -695,7 +695,7 @@ constexpr double kVm35ModDepth = 4.0;
 
 void FmVoice::noteOn(const FmVoicePatch& patch, double freqHz, float velocity) {
     densityFactor_ = 8; densityPhase_ = -1;
-    nestedDensityFactor_ = -1; nestedDensityPhase_ = -1;
+    nestedDensityFactor_ = -1; nestedDensityPhase_ = nestedDensityVibrato_ = -1;
     patch_ = patch;
     fourOp_ = patch.fourOp;
     algo_ = patch.algorithm & 7;
@@ -1100,19 +1100,25 @@ int FmVoice::nestedSineDensityHint() {
            patch_.ops[1].tl<12||patch_.ops[2].tl<12)return 0;
         for(int j=0;j<4;++j) {
             if(!patch_.ops[j].ma35Multipliers||patch_.ops[j].ma7Multipliers||
-               ops_[j].vibAmt_!=0||!std::isfinite(ops_[j].phaseInc_)||ops_[j].phaseInc_<0)return 0;
+               !std::isfinite(ops_[j].phaseInc_)||ops_[j].phaseInc_<0)return 0;
+            if(ops_[j].vibAmt_!=0&&(!std::isfinite(vibratoScale_)||std::abs(vibratoScale_)>8))return 0;
             if(j>0&&ops_[j].env_.atkStep_==0)return 0;
         }
         nestedDensityFactor_=16;
     }
-    if(!nestedDensityFactor_||nestedDensityPhase_==ops_[0].phaseInc_)return nestedDensityFactor_;
-    nestedDensityPhase_=ops_[0].phaseInc_;
+    if(!nestedDensityFactor_||(nestedDensityPhase_==ops_[0].phaseInc_&&nestedDensityVibrato_==vibratoScale_))return nestedDensityFactor_;
+    nestedDensityPhase_=ops_[0].phaseInc_;nestedDensityVibrato_=vibratoScale_;
     double peak=0;
     for(const auto& op:ops_) {
         // Valid player pitches are finite/nonnegative. Invalid public-core
         // pitches retain the largest experimental density, never a live mute.
         if(!std::isfinite(op.phaseInc_)||op.phaseInc_<0){peak=.5;break;}
-        peak=std::max(peak,std::min(.5,op.phaseInc_));
+        // Player modulation uses0..8 (intrinsic depth<=.01548), so
+        // instantaneous increments stay positive throughout the LFO cycle.
+        // Beyond that public-core contract never drop an admitted live voice.
+        if(op.vibAmt_!=0&&(!std::isfinite(vibratoScale_)||std::abs(vibratoScale_)>8)){peak=.5;break;}
+        const double envelope=op.vibAmt_==0?1:1+std::abs(op.vibAmt_*vibratoScale_);
+        peak=std::max(peak,std::min(.5,op.phaseInc_*envelope));
     }
     nestedDensityFactor_=std::max(nestedDensityFactor_,nested_density::factor(peak,patch_.ops[1].tl,patch_.ops[2].tl));
     return nestedDensityFactor_;
