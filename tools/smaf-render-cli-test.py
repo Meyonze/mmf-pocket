@@ -48,7 +48,7 @@ namespace fxchain::smaf {
 enum class FmSubframeMath { Exact, Hermite };
 struct SineRenderOptions {
     int factor=0; FmSubframeMath math=FmSubframeMath::Exact;
-    bool boostSine=false; bool nestedSine=false;
+    bool boostHighNotes=false; bool nestedSine=false;
 };
 struct MaPlayer {
     uint8_t mode = 0;
