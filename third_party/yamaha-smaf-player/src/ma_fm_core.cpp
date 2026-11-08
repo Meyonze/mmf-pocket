@@ -996,29 +996,52 @@ template<bool Fast> bool FmVoice::tickSineSubframesImpl_(float* output, int fact
     // inc*sub ordering and scale afterward, avoiding a division per operator.
     const double inverseFactor = 1.0 / factor;
     if constexpr (Fast) {
-        if (algo_ == 6) {
-            // Samples within one operator are independent. Finish a row before
-            // its reader to expose parallel work across the nested sine chain.
-            // Every consumed entry is written, including skipped rows' +0.
+        // Each row has independent time points. Complete the producer's row
+        // before its readers, retaining the scalar path's arithmetic per point.
+        auto generate = [&]<int Algorithm>() {
+            constexpr int operators = Algorithm == 0 ? 2 : 4;
             std::array<std::array<float, 32>, 4> values;
-            for (int j = 0; j < 4; ++j) {
+            for (int j = 0; j < operators; ++j) {
                 if (mute[j]) { std::fill_n(values[j].begin(), factor - 1, 0.0f); continue; }
                 const auto& op = ops_[j];
                 for (int sub = 1; sub < factor; ++sub) {
                     double phase = before[j] + (inc[j] * double(sub)) * inverseFactor;
                     if (phase >= 1) phase -= std::floor(phase);
-                    if (j >= 2) phase += double(values[j - 1][sub - 1]) * modDepth_;
+                    if constexpr (Algorithm == 3) {
+                        if (j == 2) phase += double(values[1][sub - 1]) * modDepth_;
+                        if (j == 3) phase += (double(values[0][sub - 1]) + double(values[2][sub - 1])) * modDepth_;
+                    } else if constexpr (Algorithm == 4) {
+                        if (j > 0) phase += double(values[j - 1][sub - 1]) * modDepth_;
+                    } else if constexpr (Algorithm == 6) {
+                        if (j >= 2) phase += double(values[j - 1][sub - 1]) * modDepth_;
+                    } else if constexpr (Algorithm == 7) {
+                        if (j == 2) phase += double(values[1][sub - 1]) * modDepth_;
+                    } else {
+                        if (j == 1 || j == 3) phase += double(values[j - 1][sub - 1]) * modDepth_;
+                    }
                     const float sine = subframeMath::sample<true>(phase, false);
                     values[j][sub - 1] = float(sine * op.tlGain_ * op.kslGain_ * level[j] * am[j]);
                 }
             }
             for (int sub = 1; sub < factor; ++sub) {
-                const double combined = (double(values[0][sub - 1]) + double(values[3][sub - 1])) * .5;
+                double combined;
+                if constexpr (Algorithm == 0) combined = double(values[1][sub - 1]);
+                else if constexpr (Algorithm == 3 || Algorithm == 4) combined = double(values[3][sub - 1]);
+                else if constexpr (Algorithm == 5) combined = (double(values[1][sub - 1]) + double(values[3][sub - 1])) * .5;
+                else if constexpr (Algorithm == 6) combined = (double(values[0][sub - 1]) + double(values[3][sub - 1])) * .5;
+                else combined = (double(values[0][sub - 1]) + double(values[2][sub - 1]) + double(values[3][sub - 1])) * .4;
                 output[sub - 1] = float(combined * velocity_ * volume_ * .7);
             }
-            output[factor - 1] = native;
-            return true;
-        }
+        };
+        // supportsSineSubframes() admits exactly these topologies.
+        if (algo_ == 0) generate.template operator()<0>();
+        else if (algo_ == 3) generate.template operator()<3>();
+        else if (algo_ == 4) generate.template operator()<4>();
+        else if (pairs) generate.template operator()<5>();
+        else if (mixed) generate.template operator()<7>();
+        else generate.template operator()<6>();
+        output[factor - 1] = native;
+        return true;
     }
     for (int sub = 1; sub < factor; ++sub) {
         float values[4]{};
