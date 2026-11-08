@@ -3384,3 +3384,18 @@ within each compiler mode;82app WAVs are exact before/after interchange.
 Pinned paired source-only CPU medians observe5–8% lower cost from reciprocal
 scaling and a further37% for graph6 interchange, with graph7 control ratio1.001.
 These are shared-host component measurements, not Android/app-wide claims.
+
+
+### r91 MA7 nested graph6 app source
+
+Extend the fixed16 nested-sine policy to coherent modern MA7 operators without
+fixed-frequency or nonzero detune. MA7 maximum0.42cycle at TL0 is below the
+validated VM35 TL24 maximum, so all MA7 TL values are eligible. Mixed/compatibility
+families stay excluded; reduced graph6 retains its prior adaptive selection.
+The independent double-Bessel model now handles fractional MULTI in1/1000 units
+and actual Format3 score/expanded setup, including MA7 hard-left gain1.
+1500 finite-FIR policies across150 fixtures,108 dense-FIR transient cases and
+320 clock/Hold/retrigger cases pass.82 encoded MA7 app files match explicit16
+for75targets and preserve7negative controls.36WAV/JNI fixtures and64fixed+
+64adaptive contribution routes pass. Cache91; official1.6.6 unchanged.
+See [scope, evidence and limitations](fm-ma7-nested-r91.md).

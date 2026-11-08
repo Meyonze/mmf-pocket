@@ -81,12 +81,12 @@ void triggerKinds(){
 }
 
 void qualityRoutes(){size_t cases=0;
- for(int algorithm:{0,3,4,5,6,7,106})for(int factor:{1,2,8,32})for(auto math:{FmSubframeMath::Exact,FmSubframeMath::Hermite}){
+ for(int algorithm:{0,3,4,5,6,7,106,206})for(int factor:{1,2,8,32})for(auto math:{FmSubframeMath::Exact,FmSubframeMath::Hermite}){
   MaPlayer p,b;init(p,factor,math);init(b,factor,math);
-  FmVoicePatch q;q.modernTimbre=true;q.fourOp=algorithm!=0;q.algorithm=uint8_t(algorithm==106?6:algorithm);q.lfo=2;
+  FmVoicePatch q;q.modernTimbre=true;q.fourOp=algorithm!=0;q.algorithm=uint8_t(algorithm>=106?6:algorithm);q.lfo=2;
   for(int j=0;j<4;++j){auto& o=q.ops[size_t(j)];o.ar=15;o.dr=o.sr=o.sl=0;o.rr=15;o.multi=uint8_t(j%2?2:3);o.tl=uint8_t(j%2?0:24);o.am=o.vib=true;o.dam=o.dvb=2;}
   if(algorithm==3||algorithm==4||algorithm==6)q.ops[size_t(algorithm==3?2:1)].ar=0;
-  if(algorithm==106)for(auto& o:q.ops){o.ma35Multipliers=true;o.tl=24;}
+  if(algorithm>=106)for(auto& o:q.ops){o.ma35Multipliers=true;o.ma7Multipliers=algorithm==206;o.tl=algorithm==206?0:24;}
   for(auto* x:{&p,&b}){x->pool_[0].noteOn(q,317,.6f);x->pool_[0].channel=0;x->poolPanLeft_[0]=.7f;x->poolPanRight_[0]=.3f;
    pcm(*x,0,120,1000);pcm(*x,1,120,2000,true,7);
    std::vector<MaPlayer::Ev> events{{128,MaPlayer::Ev::Volume,0,0,0},{160,MaPlayer::Ev::Volume,0,127,0},{192,MaPlayer::Ev::AllSoundOff,0,0,0},{256,MaPlayer::Ev::AllSoundOff,120,0,0},{384,MaPlayer::Ev::NoteOn,16,69,100,1},{448,MaPlayer::Ev::AllSoundOff,16,0,0}};
@@ -119,16 +119,17 @@ void qualityRoutes(){size_t cases=0;
 
 void adaptiveRoutes(){size_t cases=0;
  const auto hz=[](int note){return 440*std::pow(2.,double(note-69)/12);};
- for(int graph:{0,3,4,5,6,7,106})for(auto math:{FmSubframeMath::Exact,FmSubframeMath::Hermite})for(int block:{1,17,512,1024}){
+ for(int graph:{0,3,4,5,6,7,106,206})for(auto math:{FmSubframeMath::Exact,FmSubframeMath::Hermite})for(int block:{1,17,512,1024}){
   MaPlayer p,b;for(auto* x:{&p,&b}){
    require(x->init(clockFile(),44100,false,{8,math,true}),"adaptive diagnostic init");
-   FmVoicePatch q;q.modernTimbre=true;q.algorithm=uint8_t(graph==106?6:graph);q.fourOp=graph!=0;
+   FmVoicePatch q;q.modernTimbre=true;q.algorithm=uint8_t(graph>=106?6:graph);q.fourOp=graph!=0;
    for(auto& o:q.ops){o.ar=15;o.dr=o.sr=o.sl=0;o.rr=15;o.ma35Multipliers=true;o.multi=1;}
    if(graph==7){q.ops[0].tl=18;q.ops[1].multi=7;q.ops[2].multi=5;q.ops[3].multi=2;q.ops[3].tl=24;}
    else if(graph==3){q.ops[0].multi=7;q.ops[2].ar=0;q.ops[3].multi=5;}
    else if(graph==4||graph==6){q.ops[1].ar=0;q.ops[2].multi=7;q.ops[3].multi=5;if(graph==6)q.ops[0].tl=18;}
-   else if(graph==106){q.ops[0].tl=18;q.ops[1].multi=7;q.ops[1].tl=24;q.ops[2].multi=3;q.ops[2].tl=24;q.ops[3].multi=5;}
+   else if(graph>=106){q.ops[0].tl=18;q.ops[1].multi=7;q.ops[1].tl=24;q.ops[2].multi=3;q.ops[2].tl=24;q.ops[3].multi=5;}
    else {q.ops[0].multi=7;q.ops[1].multi=5;if(graph==5){q.ops[2].multi=3;q.ops[2].tl=24;q.ops[3].multi=2;}}
+   if(graph==206)for(auto& o:q.ops){o.ma7Multipliers=true;o.tl=0;}
    for(int i=0;i<3;++i){auto& v=x->pool_[i];const double f=hz(i==0?84:96);v.noteOn(q,f,.2f);v.setVolume(.2f);v.channel=i==1?1:0;x->poolBaseFreq_[i]=f;x->poolPanLeft_[i]=i==2?.8f:.3f;x->poolPanRight_[i]=i==2?.2f:.7f;}
    pcm(*x,0,120,1000);pcm(*x,1,120,2000,true,7);
    std::vector<MaPlayer::Ev> events{{128,MaPlayer::Ev::PitchBend,0,8191,0},{256,MaPlayer::Ev::PitchBend,0,0,0},{256,MaPlayer::Ev::AllSoundOff,120,0,0},{384,MaPlayer::Ev::AllSoundOff,0,0,0},{512,MaPlayer::Ev::AllSoundOff,1,0,0},{640,MaPlayer::Ev::NoteOn,16,69,100,1},{704,MaPlayer::Ev::AllSoundOff,16,0,0}};
@@ -136,7 +137,7 @@ void adaptiveRoutes(){size_t cases=0;
   }
   const auto r=analyzePlayers(p,b,768,block);require(r.boostHighNotes&&r.frames==768&&!r.finished,"adaptive report policy/interval");
   const auto& a=r.parts.at({0,-1,0});const auto& high=r.parts.at({0,-1,1});
-  require(a.voiceFrames[0]==768&&a.sineFrames==768&&a.densityFrames[2]==uint64_t(graph==106?0:128)&&a.densityFrames[3]==uint64_t(graph==106?768:640)&&a.boostedFrames==uint64_t(graph==106?768:640),"mixed-density part/latching counts");
+  require(a.voiceFrames[0]==768&&a.sineFrames==768&&a.densityFrames[2]==uint64_t(graph>=106?0:128)&&a.densityFrames[3]==uint64_t(graph>=106?768:640)&&a.boostedFrames==uint64_t(graph>=106?768:640),"mixed-density part/latching counts");
   require(high.voiceFrames[0]==512&&high.boostedFrames==512&&high.densityFrames[3]==512,"high part source attribution");
   require(r.parts.at({0,-1,120}).voiceFrames[1]==256&&r.parts.at({1,7,120}).voiceFrames[3]==768,"adaptive mix changed score/ATR domains");
   require(r.parts.at({0,-1,16}).voiceFrames[0]==64&&r.sumErrorPeak<2e-5,"adaptive late part or contribution sum changed");++cases;

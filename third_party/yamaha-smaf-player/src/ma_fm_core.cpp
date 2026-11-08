@@ -903,12 +903,18 @@ float FmVoice::tick() {
 
 bool FmVoice::weakNestedSine_() const {
     if (!fourOp_ || algo_ != 6 || !patch_.modernTimbre ||
-        patch_.ops[1].tl < 24 || patch_.ops[2].tl < 24 ||
         ops_[1].env_.atkStep_ == 0.0 || ops_[2].env_.atkStep_ == 0.0 ||
         ops_[3].env_.atkStep_ == 0.0) return false;
+    bool vm35 = true, ma7 = true;
     for (const auto& op : patch_.ops)
-        if (!op.ma35Multipliers || op.ma7Multipliers) return false;
-    return true;
+    {
+        vm35 = vm35 && op.ma35Multipliers && !op.ma7Multipliers;
+        ma7 = ma7 && op.ma7Multipliers && !op.fixedFrequency && op.ma7Detune == 0;
+    }
+    // MA7's maximum0.42-cycle PM is below VM35's4 cycles at TL24.
+    // Keep the validated families coherent; mixed and compatibility patches
+    // must not enter merely because they use the same modulation-depth value.
+    return ma7 || (vm35 && patch_.ops[1].tl >= 24 && patch_.ops[2].tl >= 24);
 }
 
 bool FmVoice::supportsSineSubframes() const {
@@ -935,7 +941,7 @@ int FmVoice::sineDensityHint() {
     densityPhase_ = ops_[0].phaseInc_; densityVibrato_ = vibratoScale_;
     if (!supportsSineSubframes()) { densityFactor_ = 0; return 0; }
     // Do not apply the single-PM-pair tail estimate to a nested modulator.
-    // The initial supported VM35 range uses a fixed16x policy for the note.
+    // Supported bounded nested ranges use a fixed16x policy for the note.
     if (weakNestedSine_()) { densityFactor_ = 16; return 16; }
     if (densityFactor_ == 16) return densityFactor_;
     auto peak = [&](int j) { const auto& op = ops_[j];

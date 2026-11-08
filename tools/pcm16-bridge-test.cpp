@@ -37,7 +37,20 @@ Bytes chunk(const char* id,const Bytes& body,int last=-1){
 }
 Bytes fixture(int kind){
     Bytes body;
-    if(kind==0||kind>=3){
+    if(kind>=29){
+        // Expanded MA7 setup and Format3 score, including fractional MULTI.
+        Bytes score{3,0,0x10,0x10};score.resize(36,0);
+        Bytes voice{0x43,0x79,8,0x7f,0x21,0,0,0,0,0,0,0,0x79,6};
+        const int mult[4]={1,kind==30?11:7,kind==30?14:3,kind==30?13:5};
+        for(int j=0;j<4;++j){
+            const int ar=(kind==33&&j==2)||(kind==34&&j==3)?0:15;
+            append(voice,{uint8_t(kind==31&&j==1?4:0),0xa0,uint8_t(ar<<4),uint8_t((j==0?18:0)<<2),0,0,uint8_t(kind==35&&j==2?6<<3:0),0,0,uint8_t(mult[j]<<4|(kind==32&&j==2?1:0))});
+        }
+        Bytes setup{0xf0,uint8_t(voice.size()+1)};append(setup,voice);setup.push_back(0xf7);
+        append(score,chunk("Mtsu",setup));
+        append(score,chunk("Mtsq",{0,0x10,uint8_t(kind==30?108:96),100,10,10,0xff,0x2f,0}));
+        append(body,chunk("MTR0",score));
+    }else if(kind==0||kind>=3){
         Bytes score{2,0,0x10,0x10};score.resize(20,0);
         if(kind>=3){
             // Original high-PM VM5 setup; the normal app initializer must
@@ -86,19 +99,19 @@ std::vector<int16_t> expected(const Bytes& bytes,bool phone){
     return out;
 }
 void appQuality(){
-    for(int kind=0;kind<29;++kind){
+    for(int kind=0;kind<36;++kind){
         const auto bytes=fixture(kind);fxchain::smaf::SmafFile file;
         require(file.parse(bytes.data(),bytes.size()),"quality fixture parses");
         fxchain::smaf::MaPlayer app,reference,native;
         require(initializePlayer(bytes.data(),bytes.size(),app).empty(),"app quality initializes");
-        const int density=kind==5||kind==6||(kind>=10&&kind<=12)||kind==22||kind==23?16:8;
+        const int density=kind==5||kind==6||(kind>=10&&kind<=12)||kind==22||kind==23||kind==29||kind==30?16:8;
         require(reference.init(file,44100,false,{density,fxchain::smaf::FmSubframeMath::Hermite}),"independent explicit policy initializes");
         require(native.init(file,44100),"native comparison initializes");
         require(app.renderLatencySamples()==72,"normal app enables aligned FM reconstruction");
         std::vector<float> a(4096*2),b(a.size()),original(a.size());
         require(app.render(a.data(),4096)==4096&&reference.render(b.data(),4096)==4096&&native.render(original.data(),4096)==4096,"quality comparison window renders");
         require(a==b,"app samples match independently selected8x/16x Hermite policy");
-        const bool filtered=(kind>=3&&kind<13)||kind==22||kind==23||kind==26;
+        const bool filtered=(kind>=3&&kind<13)||kind==22||kind==23||kind==26||kind==29||kind==30;
         if(filtered){
             double delta=0;for(int i=72;i<4096;++i)delta+=std::abs(double(a[size_t(i)*2])-original[size_t(i-72)*2]);
             require(delta>1,"bound high-PM output changes beyond common latency");
@@ -112,7 +125,7 @@ void appQuality(){
 void paths(const std::filesystem::path& folder){
     JNINativeInterface_ table{};table.GetArrayLength=length;table.SetShortArrayRegion=setShorts;table.ExceptionCheck=exception;
     JNIEnv env{};env.functions=&table;
-    for(int kind=0;kind<29;++kind)for(bool phone:{false,true}){
+    for(int kind=0;kind<36;++kind)for(bool phone:{false,true}){
         auto bytes=fixture(kind);const auto oraclePcm=expected(bytes,phone);
         const auto path=folder/("synthetic-"+std::to_string(kind)+(phone?"-phone.wav":"-normal.wav"));
         if(kind==19||kind==20){

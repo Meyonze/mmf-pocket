@@ -129,3 +129,9 @@ additional metadata is additive under schema1.
 `suppressHpsSlapbackDuplicates=false` setting and absence of app phone EQ still
 apply. This is not a complete app post-processing or handset-fidelity study.
 See [adaptive policy and validation](fm-adaptive-density.md).
+
+
+R91 also attributes the fixed16 [MA7 nested6 route](fm-ma7-nested-r91.md).
+Fixed-policy and adaptive mixed FM/PCM/ATR/late-part coverage is64 cases each,
+including gain revival, pitch changes, source-factor counts and shared-tail
+boundaries. Existing512 graph/wave/profile streams remain covered.

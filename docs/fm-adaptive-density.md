@@ -116,3 +116,9 @@ NDK ClangをLinuxホスト向けにした実行でも、上記のモデル・混
 RMS差1e-6未満を要求する回帰検査を追加しました。定常時の検査に加えて、
 今後の密度選択変更がこの範囲の発音開始・終了を損なわないことを確認します。
 これは全音色の誤差保証や実機との一致を示すものではありません。
+
+
+R91 adds [coherent MA7 nested graph6](fm-ma7-nested-r91.md) without fixed frequency
+or detune. Like weak VM35 nested6, it selects16 at every pitch and does not use
+the single-pair tail bound. MA7 TL0 maximum PM is below the validated VM35 TL24
+maximum. Reduced graph6 keeps the existing8/16 rule.

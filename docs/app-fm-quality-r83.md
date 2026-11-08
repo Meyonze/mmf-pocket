@@ -44,3 +44,8 @@ ReleaseとASan/UBSanで通過しています。これはホストのJNIコール
 ホストの明示8倍・Hermite変換と比較し、WAV全体が一致しました。FMのないPCM・Audio・ATR・
 ATR+PCMでは、従来WAVに72フレームの無音を足したものと音声サンプルが完全一致します。
 Android全ABIのDebug/ReleaseビルドとLintも通過しています。
+
+
+r91では[MA7接続6](fm-ma7-nested-r91.md)も限定した範囲で16倍を使います。
+実WAV/JNIの検査は36構成へ拡張し、MA7のFormat3・展開音色・分数倍率、固定周波数・
+Detune・停止アタック・非正弦波の対象外条件を含めています。

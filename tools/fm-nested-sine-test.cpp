@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Host-only nested graph6 source against an independent double-Bessel model.
+// Nested graph6 source and player against an independent double-Bessel model.
 #include "fm-nested-sine-probe.h"
 #define FM_ALGORITHM7_TEST_NO_MAIN
 #include "fm-algorithm7-test.cpp"
@@ -10,8 +10,14 @@
 
 namespace nested {
 using namespace player_sideband;
-struct Case { int note,inner,middle,carrier; int innerTl=24,middleTl=24; };
+struct Case { int note,inner,middle,carrier; int innerTl=24,middleTl=24; bool ma7=false; };
 constexpr std::array<Case,4> cases{{{72,3,2,5},{84,3,2,5},{96,3,2,5},{96,7,3,5}}};
+double ratio(int code,bool ma7) {
+    // Frozen multiplier tables, independent of configured operator state.
+    constexpr double vm35[]={.5,1,2,3,4,5,6,7,8,9,10,10,12,12,15,15};
+    constexpr double expanded[]={.5,1,2,3,4,5,6,7,8,9,10,1.414,12,1.498,.891,15};
+    return ma7?expanded[code]:vm35[code];
+}
 double bessel(int n,double x) {
     const int k=std::abs(n);
     return std::cyl_bessel_j(double(k),std::abs(x))*
@@ -22,6 +28,14 @@ SmafFile fixture(const Case& c) {
     std::vector<uint8_t> v{0x43,0x79,7,0x7f,1,0,0,0,0,0,0,0x79,6};
     const int mult[]={1,c.inner,c.middle,c.carrier},tl[]={18,c.innerTl,c.middleTl,0};
     for(int i=0;i<4;++i)v.insert(v.end(),{0,0xa0,0xf0,uint8_t(tl[i]<<2),0,uint8_t(mult[i]<<4),0});
+    if(c.ma7) {
+        v={0x43,0x79,8,0x7f,0x21,0,0,0,0,0,0,0,0x79,6};
+        for(int i=0;i<4;++i)v.insert(v.end(),{0,0xa0,0xf0,uint8_t(tl[i]<<2),0,0,0,0,0,uint8_t(mult[i]<<4)});
+        auto& t=f.tracks[0];t.formatType=3;t.channelStatus.assign(32,0x81);t.sequenceData.clear();
+        for(auto [cc,value]:std::array<std::pair<int,int>,6>{{{0,0},{32,0},{7,127},{11,127},{10,0},{64,0}}})
+            t.sequenceData.insert(t.sequenceData.end(),{0,0x30,uint8_t(cc),uint8_t(value)});
+        t.sequenceData.insert(t.sequenceData.end(),{0,0x40,0,0,0x10,uint8_t(c.note),127,0x82,0x2c,0x83,0x10,0xff,0x2f,0});
+    }
     auto& t=f.tracks[0];t.setupData={0xf0,uint8_t(v.size()+1)};
     t.setupData.insert(t.setupData.end(),v.begin(),v.end());t.setupData.push_back(0xf7);
     return f;
@@ -31,7 +45,7 @@ FmVoicePatch patch(const Case& c) {
     const int mult[]={1,c.inner,c.middle,c.carrier},tl[]={18,c.innerTl,c.middleTl,0};
     for(int j=0;j<4;++j) {
         auto& o=p.ops[size_t(j)];o.ar=15;o.dr=o.sr=o.sl=0;o.rr=10;
-        o.multi=uint8_t(mult[j]);o.tl=uint8_t(tl[j]);o.ma35Multipliers=true;
+        o.multi=uint8_t(mult[j]);o.tl=uint8_t(tl[j]);o.ma35Multipliers=true;o.ma7Multipliers=c.ma7;
     }
     return p;
 }
@@ -41,21 +55,24 @@ struct Model {
     explicit Model(Case value):c(value) {
         // sin(Ct+b2*sin(Mt+b1*sin(It))) expands as
         // sum J_n(b2) J_k(n*b1) sin((C+n*M+k*I)t).
-        const double beta=tau*4*std::pow(10.,-.75*24/20);
+        const double depth=c.ma7?.42:4;
+        const double beta=tau*depth*std::pow(10.,-.75*(c.ma7?0:24)/20);
         const double base=440*std::pow(2.,double(c.note-69)/12)/rate;
-        const double b1=base*c.inner>=.5?0:tau*4*std::pow(10.,-.75*c.innerTl/20);
-        const double b2=base*c.middle>=.5?0:tau*4*std::pow(10.,-.75*c.middleTl/20);
+        const double inner=ratio(c.inner,c.ma7),middle=ratio(c.middle,c.ma7),carrier=ratio(c.carrier,c.ma7);
+        const double b1=base*inner>=.5?0:tau*depth*std::pow(10.,-.75*c.innerTl/20);
+        const double b2=base*middle>=.5?0:tau*depth*std::pow(10.,-.75*c.middleTl/20);
         constexpr int N=32,K=256;
         // |J_n|<=I_n and sum I_n(beta)=exp(beta) also bound the inner error.
         const double tail=sine_density::tailBound(beta,N+1)+
             std::exp(beta)*sine_density::tailBound(N*beta,K+1);
         require(tail<1e-15,"nested Bessel truncation too large");
-        if(base*c.carrier<.5)for(int n=-N;n<=N;++n)for(int k=-K;k<=K;++k) {
-            const int h=c.carrier+n*c.middle+k*c.inner;
+        if(base*carrier<.5)for(int n=-N;n<=N;++n)for(int k=-K;k<=K;++k) {
+            // All encoded ratios have at most three decimal places.
+            const int h=int(std::lround(carrier*1000))+n*int(std::lround(middle*1000))+k*int(std::lround(inner*1000));
             const double v=bessel(n,b2)*bessel(k,n*b1);
             if(h)harmonics[std::abs(h)]+=h<0?-v:v;
         }
-        const double direct=base<.5?std::pow(10.,-.75*18/20):0;harmonics[1]+=direct;
+        const double direct=base<.5?std::pow(10.,-.75*18/20):0;harmonics[1000]+=direct;
         double discarded=0;
         for(auto it=harmonics.begin();it!=harmonics.end();) {
             if(std::abs(it->second)<1e-15){discarded+=std::abs(it->second);it=harmonics.erase(it);}
@@ -64,9 +81,9 @@ struct Model {
         require(discarded<1e-12,"nested coefficient pruning error too large");
         for(int j=0;j<128;++j) {
             const double t=j*.372143;double sum=0;
-            for(auto [h,v]:harmonics)sum+=v*std::sin(h*t);
+            for(auto [h,v]:harmonics)sum+=v*std::sin((h/1000.)*t);
             const double expected=direct*std::sin(t)+
-                (base*c.carrier<.5?std::sin(c.carrier*t+b2*std::sin(c.middle*t+b1*std::sin(c.inner*t))):0);
+                (base*carrier<.5?std::sin(carrier*t+b2*std::sin(middle*t+b1*std::sin(inner*t))):0);
             require(std::abs(sum-expected)<2e-12,"double-Bessel signs/frequencies disagree with nested sine");
         }
     }
@@ -76,13 +93,13 @@ struct Model {
         const double a=float(1-std::exp(-2*3.14159265358979*10000/rate));
         const auto config=factor>1?fm_causal::alignedConfig(factor):fm_causal::Config{1,{}};
         for(auto [k,v]:harmonics) {
-            const double f=base*k;if(ideal&&f>=.5)continue;
+            const double f=base*(k/1000.);if(ideal&&f>=.5)continue;
             const double omega=tau*f;const auto lp=a/(Complex(1)-std::polar(1-a,-omega));
             Complex h=lp*lp;
             if(!ideal&&factor>1)h*=fm_causal::response(config,omega/factor)*
                 std::polar(1.,omega*fm_causal::Decimator(config).delayFrames());
             auto ph=std::polar(1.,omega*(warmup+1));const auto step=std::polar(1.,omega);
-            for(auto& x:out){x+=.5*.7*double(.32f)*2*v*std::imag(h*ph);ph*=step;}
+            for(auto& x:out){x+=.5*.7*double(.32f)*(c.ma7?1:2)*v*std::imag(h*ph);ph*=step;}
         }
         return out;
     }
@@ -96,7 +113,7 @@ template<bool Fast> std::vector<double> render(const Case& c,int factor) {
     std::vector<double> out;
     for(int n=0;n<warmup+72+frames;++n) {
         fm_nested::frame<Fast>(v,std::span<float>(source.data(),size_t(factor)));
-        for(int k=0;k<factor;++k)high[size_t(k)]={source[size_t(k)]*.32f*2,0};
+        for(int k=0;k<factor;++k)high[size_t(k)]={source[size_t(k)]*.32f*(c.ma7?1:2),0};
         const auto x=bus.frame(std::span<const sine_output::Stereo>(high.data(),size_t(factor)),{});
         lp1+=a*(float(x.left)-lp1);lp2+=a*(lp1-lp2);
         require(std::isfinite(lp2)&&std::abs(lp2)<.92f,"prototype linear reference outside limiter domain");
@@ -111,6 +128,9 @@ void spectra() {
     for(int note:{48,72,84,96,108,120})for(auto m:std::array<std::array<int,3>,3>{{{1,1,1},{3,2,5},{7,3,5}}})
     for(auto tl:std::array<std::pair<int,int>,4>{{{24,24},{24,36},{36,24},{63,63}}})study.push_back({note,m[0],m[1],m[2],tl.first,tl.second});
     for(int note:{124,125,127})study.push_back({note,2,2,2,24,24});
+    for(int note:{48,84,96,120})for(auto m:std::array<std::array<int,3>,6>{{{1,1,1},{3,2,5},{7,3,5},{0,11,13},{11,13,14},{14,15,0}}})
+    for(auto tl:std::array<std::pair<int,int>,3>{{{0,0},{12,24},{63,63}}})study.push_back({note,m[0],m[1],m[2],tl.first,tl.second,true});
+    for(int note:{124,125,127})study.push_back({note,2,2,2,0,0,true});
     for(const auto& c:study) {
         const Model model(c);MaPlayer p,app,explicit16;
         require(p.init(fixture(c),rate)&&app.init(fixture(c),rate,false,{8,FmSubframeMath::Hermite,true}),"nested fixture init");
@@ -139,8 +159,8 @@ void spectra() {
 }
 
 
-template<bool Fast> std::vector<double> transientRender(int factor,int gate,bool release) {
-    const auto c=cases.back();auto p=patch(c);for(auto& o:p.ops)o.rr=15;
+template<bool Fast> std::vector<double> transientRender(const Case& c,int factor,int gate,bool release) {
+    auto p=patch(c);for(auto& o:p.ops)o.rr=15;
     const double initial=440*std::pow(2.,double(c.note-69)/12);
     FmVoice v;v.setSampleRate(rate);v.noteOn(p,initial,1);
     sine_output::Bus bus(factor);std::array<float,32> source{};std::array<sine_output::Stereo,32> high{};
@@ -150,7 +170,7 @@ template<bool Fast> std::vector<double> transientRender(int factor,int gate,bool
         if(n==17)v.setPitch(initial*std::pow(2.,2./12));if(n==65)v.setPitch(initial);
         if(n==gate){if(release)v.noteOff(false);else v.active_=false;}
         fm_nested::frame<Fast>(v,std::span<float>(source.data(),size_t(factor)));
-        for(int k=0;k<factor;++k)high[size_t(k)]={source[size_t(k)]*.32f*2,0};
+        for(int k=0;k<factor;++k)high[size_t(k)]={source[size_t(k)]*.32f*(c.ma7?1:2),0};
         const auto x=bus.frame(std::span<const sine_output::Stereo>(high.data(),size_t(factor)),{});
         lp1+=a*(float(x.left)-lp1);lp2+=a*(lp1-lp2);out.push_back(lp2);
     }
@@ -158,10 +178,11 @@ template<bool Fast> std::vector<double> transientRender(int factor,int gate,bool
     return out;
 }
 
-std::vector<double> transientReference(int factor,int gate,bool release) {
-    const auto c=cases.back();const int length=gate+320;
+std::vector<double> transientReference(const Case& c,int factor,int gate,bool release) {
+    const int length=gate+320;
     const double initial=440*std::pow(2.,double(c.note-69)/12)/rate;
-    const double beta=tau*4*std::pow(10.,-.75*24/20),direct=std::pow(10.,-.75*18/20);
+    const double depth=c.ma7?.42:4,direct=std::pow(10.,-.75*18/20);
+    const double b1=tau*depth*std::pow(10.,-.75*c.innerTl/20),b2=tau*depth*std::pow(10.,-.75*c.middleTl/20);
     // Frozen RR15 software law: all effective rates>=60 use2.63ms to -96dB.
     // No envelope parameters or levels are read from a synthesized voice.
     const double decay=std::exp(-11.052408446/(.00263*rate));
@@ -172,9 +193,9 @@ std::vector<double> transientReference(int factor,int gate,bool release) {
         const double g=float(env);
         for(int sub=1;sub<=factor;++sub) {
             const double t=tau*(phase+increment*double(sub)/factor);
-            const double wave=direct*std::sin(t)+std::sin(c.carrier*t+beta*g*
-                std::sin(c.middle*t+beta*g*std::sin(c.inner*t)));
-            raw[size_t(n)*factor+sub-1]=.5*.7*double(.32f)*2*g*wave;
+            const double wave=direct*std::sin(t)+std::sin(ratio(c.carrier,c.ma7)*t+b2*g*
+                std::sin(ratio(c.middle,c.ma7)*t+b1*g*std::sin(ratio(c.inner,c.ma7)*t)));
+            raw[size_t(n)*factor+sub-1]=.5*.7*double(.32f)*(c.ma7?1:2)*g*wave;
         }
         phase+=increment;
     }
@@ -200,9 +221,10 @@ std::vector<double> transientReference(int factor,int gate,bool release) {
 
 void transients() {
     size_t count=0;double maxRms=0,maxPeak=0;
+    for(const Case c:std::array<Case,3>{{cases.back(),{96,7,3,5,0,0,true},{96,11,13,14,0,0,true}}})
     for(int factor:{8,16,32})for(int gate:{1,17,441})for(bool release:{false,true}) {
-        const auto expected=transientReference(factor,gate,release);
-        const auto exact=transientRender<false>(factor,gate,release),fast=transientRender<true>(factor,gate,release);
+        const auto expected=transientReference(c,factor,gate,release);
+        const auto exact=transientRender<false>(c,factor,gate,release),fast=transientRender<true>(c,factor,gate,release);
         for(const auto* actual:{&exact,&fast}) {
             const double e=error(*actual,expected);double peak=0;
             for(size_t j=0;j<actual->size();++j)peak=std::max(peak,std::abs((*actual)[j]-expected[j]));
@@ -215,13 +237,14 @@ void transients() {
 
 void clocks() {
     size_t count=0;
-    for(int sampleRate:{8000,44100})for(int profile:{0,1,2})for(int factor:{2,4,8,16,32})
+    for(int sampleRate:{8000,44100})for(int profile:{0,1,2,3})for(int factor:{2,4,8,16,32})
     for(bool fast:{false,true})for(int pattern=0;pattern<4;++pattern) {
         auto p=patch(cases[0]);p.modernTimbre=profile!=0;p.lfo=2;
-        for(auto& o:p.ops){o.am=o.vib=true;o.dam=o.dvb=2;o.holdEnabled=true;o.ma35Multipliers=profile==2;if(pattern==1){o.ar=8;o.sr=3;}}
+        for(auto& o:p.ops){o.am=o.vib=true;o.dam=o.dvb=2;o.holdEnabled=true;o.ma35Multipliers=profile>=2;o.ma7Multipliers=profile==3;if(pattern==1){o.ar=8;o.sr=3;}}
+        if(profile==3){p.ops[1].tl=p.ops[2].tl=0;p.ops[1].multi=11;p.ops[2].multi=13;p.ops[3].multi=14;}
         if(pattern==2){p.ops[1].ar=0;p.ops[1].rateLowBits=8;}
         FmVoice v,original;for(auto* x:{&v,&original}){x->setSampleRate(sampleRate);x->noteOn(p,317,.63f);}
-        auto core=v;const bool production=profile==2;
+        auto core=v;const bool production=profile>=2;
         require(v.supportsSineSubframes()==production,"weak nested profile scope changed");
         std::array<float,32> out{};
         for(int n=0;n<256;++n) {
@@ -271,6 +294,20 @@ void clocks() {
 }
 
 void policies() {
+    for(int tl1:{0,12,24,63})for(int tl2:{0,12,24,63}) {
+        auto c=cases.back();c.ma7=true;auto p=patch(c);p.ops[1].tl=uint8_t(tl1);p.ops[2].tl=uint8_t(tl2);
+        FmVoice v;v.setSampleRate(rate);v.noteOn(p,2093,1);
+        require(v.supportsSineSubframes()&&v.sineDensityHint()==16,"MA7 nested class must use16x");
+        v.setPitch(523);require(v.sineDensityHint()==16,"MA7 nested density decreased during note");
+    }
+    for(int kind=0;kind<6;++kind) {
+        auto c=cases.back();c.ma7=true;auto p=patch(c);
+        if(kind==0)p.ops[0].ma7Multipliers=false;if(kind==1)p.modernTimbre=false;
+        if(kind==2)p.ops[1].fixedFrequency=true;if(kind==3)p.ops[2].ma7Detune=1;
+        if(kind==4)p.ops[2].ar=0;if(kind==5)p.ops[3].ar=0;
+        FmVoice v;v.setSampleRate(rate);v.noteOn(p,1046,1);
+        require(!v.supportsSineSubframes()&&v.sineDensityHint()==0,"unsupported MA7 nested class admitted");
+    }
     for(int tl1:{24,36,63})for(int tl2:{24,36,63}) {
         auto p=patch(cases.back());p.ops[1].tl=uint8_t(tl1);p.ops[2].tl=uint8_t(tl2);
         FmVoice v;v.setSampleRate(rate);v.noteOn(p,2093,1);
@@ -289,7 +326,7 @@ void policies() {
     auto p=patch(cases.back());p.ops[1].ar=0;
     FmVoice v;v.setSampleRate(rate);v.noteOn(p,1046,1);
     require(v.supportsSineSubframes()&&v.sineDensityHint()==8,"existing reduced graph6 density changed");
-    std::cout<<"9 weak TL policies,7 exclusions and existing reduced graph6 policy PASS\n";
+    std::cout<<"9 VM35 and16 MA7 TL policies,13 exclusions and existing reduced graph6 policy PASS\n";
 }
 }
 int main(){try{nested::policies();nested::clocks();nested::spectra();nested::transients();return 0;}catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}
