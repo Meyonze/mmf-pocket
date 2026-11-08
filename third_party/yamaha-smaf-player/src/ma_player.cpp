@@ -12,6 +12,7 @@
 // thread and trivial to smoke-test.
 
 #include "ma_player.h"
+#include <type_traits>
 #include "pcm_interpolation.h"
 #include "ma_subframe_sine.h"
 #include "yamaha_adpcm.h"   // unused until m1 (embedded pcm voices); included so
@@ -308,6 +309,7 @@ bool MaPlayer::init(const SmafFile& file, uint32_t sampleRate,
                     bool suppressHpsSlapbackDuplicates, SineRenderOptions sine) {
     if ((sine.nestedSine ? !sine_output::validNestedFactor(sine.factor) : (sine.factor != 0 && !sine_output::validFactor(sine.factor))) ||
         (sine.boostHighNotes && sine.factor != 8) ||
+        (sine.adaptiveNested && (sine.factor!=8||!sine.boostHighNotes||sine.nestedSine)) ||
         (sine.math != FmSubframeMath::Exact && sine.math != FmSubframeMath::Hermite)) return false;
     sineRender_.reset();
     if (sine.factor != 0) {
@@ -2219,10 +2221,11 @@ int MaPlayer::render(float* out, int frames) {
 // Source time stops at exhaustion; physical output continues through the bus.
 int MaPlayer::renderSine_(float* out, int frames) {
     // Keep ordinary scratch dimensions unchanged; extended buffers are opt-in.
+    if(sineRender_->nestedBanks)return renderSineImpl_<128,false,true>(out,frames);
     if(sineRender_->nestedSine)return renderSineImpl_<128,true>(out,frames);
     return renderSineImpl_<32,false>(out,frames);
 }
-template<int Capacity,bool Nested> int MaPlayer::renderSineImpl_(float* out,int frames) {
+template<int Capacity,bool Nested,bool Adaptive> int MaPlayer::renderSineImpl_(float* out,int frames) {
     auto& state = *sineRender_;
     if (ended_ || endSample_ == 0) { ended_ = true; return 0; }
     const int factor = state.bus.factor();
@@ -2256,6 +2259,7 @@ template<int Capacity,bool Nested> int MaPlayer::renderSineImpl_(float* out,int 
         if (state.inputFinished &&
             state.outputCursor >= state.nativeFlushUntil && state.bus.pendingFrames() == 0 &&
             (!state.highBus || state.highBus->pendingFrames() == 0) &&
+            (!state.nestedBanks || !state.nestedBanks->pending()) &&
             std::max({std::fabs(lp1L_), std::fabs(lp1R_),
                       std::fabs(lp2L_), std::fabs(lp2R_)}) < 1e-7f) {
             ended_ = true; break;
@@ -2265,19 +2269,25 @@ template<int Capacity,bool Nested> int MaPlayer::renderSineImpl_(float* out,int 
         std::array<sine_output::Stereo, Capacity> high{};
         std::array<sine_output::Stereo, 16> boosted{};
         bool boostedThisFrame = false;
+        struct Empty {};
+        std::conditional_t<Adaptive,sine_output::NestedBankInput,Empty> extra;
         constexpr float kMixGain = .32f;
         if (!state.inputFinished) {
             for (int i = 0; i < kPoolSize; ++i) {
                 auto& voice = pool_[i]; if (!voice.active()) continue;
                 std::array<float, Capacity> samples;
-                const bool boost = state.highBus && voice.sineDensityHint() == 16;
+                int nestedDensity=0;
+                if constexpr(Adaptive)nestedDensity=voice.nestedSineDensityHint();
+                const bool boost = state.highBus && (nestedDensity==16||(!nestedDensity&&voice.sineDensityHint()==16));
                 boostedThisFrame = boostedThisFrame || boost;
-                const int density = boost ? 16 : factor;
+                const int density = nestedDensity ? nestedDensity : boost ? 16 : factor;
                 bool filtered=false;
                 if constexpr(Nested)filtered=voice.tickNestedSubframes(samples.data(),density,state.math);
+                else if constexpr(Adaptive)filtered=nestedDensity?voice.tickNestedSubframes(samples.data(),density,state.math):voice.tickSineSubframes(samples.data(),density,state.math);
                 else filtered=density>1&&voice.tickSineSubframes(samples.data(),density,state.math);
                 if (filtered) {
                     auto* target = boost ? boosted.data() : high.data();
+                    if constexpr(Adaptive)if(nestedDensity>=32)target=extra.use(nestedDensity);
                     for (int k = 0; k < density; ++k) {
                         target[size_t(k)].left += samples[size_t(k)] * kMixGain * poolPanLeft_[i];
                         target[size_t(k)].right += samples[size_t(k)] * kMixGain * poolPanRight_[i];
@@ -2307,6 +2317,9 @@ template<int Capacity,bool Nested> int MaPlayer::renderSineImpl_(float* out,int 
         if (state.highBus && (boostedThisFrame || state.highBus->pendingFrames() != 0)) {
             const auto extra = state.highBus->frame(boosted, {});
             aligned.left += extra.left; aligned.right += extra.right;
+        }
+        if constexpr(Adaptive) {
+            const auto x=state.nestedBanks->frame(extra);aligned.left+=x.left;aligned.right+=x.right;
         }
         l = float(aligned.left); r = float(aligned.right);
         lp1L_ += lpCoef_ * (l - lp1L_); lp2L_ += lpCoef_ * (lp1L_ - lp2L_);

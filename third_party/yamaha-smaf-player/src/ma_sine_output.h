@@ -136,4 +136,29 @@ public:
     // Remaining FIR/padding support only; the native FIFO is separate.
     int pendingFrames() const { return pending_; }
 };
+// Extra banks belong only to the adaptive experiment. Existing8/16 banks
+// retain their histories and summation order. Construction allocates; frame
+// and reset do not. Old banks drain with zeros after a voice migrates.
+struct NestedBankInput {
+    std::array<std::array<Stereo,128>,3> samples{};
+    std::array<bool,3> used{};
+    Stereo* use(int factor) {
+        const size_t index=factor==32?0:factor==64?1:2;
+        used[index]=true;return samples[index].data();
+    }
+};
+class NestedBanks {
+    std::array<Bus,3> buses_{Bus(32,true),Bus(64,true),Bus(128,true)};
+public:
+    Stereo frame(const NestedBankInput& input) {
+        Stereo sum{};
+        for(size_t i=0;i<buses_.size();++i)if(input.used[i]||buses_[i].pendingFrames()!=0) {
+            auto x=buses_[i].frame(std::span<const Stereo>(input.samples[i].data(),size_t(32<<i)),{});
+            sum.left+=x.left;sum.right+=x.right;
+        }
+        return sum;
+    }
+    bool pending() const {for(const auto& bus:buses_)if(bus.pendingFrames()!=0)return true;return false;}
+    void reset(){for(auto& bus:buses_)bus.reset();}
+};
 } // namespace fxchain::smaf::sine_output

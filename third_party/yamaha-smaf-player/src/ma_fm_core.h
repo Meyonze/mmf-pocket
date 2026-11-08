@@ -218,6 +218,9 @@ public:
     // Conservative8/16 density hint for supported PM graphs. Within a note it
     // can only rise; a new note resets it. Does not advance synthesis clocks.
     int sineDensityHint();
+    // Separate opt-in bounded VM35 nested class;0 retains the r91 policy.
+    // No vibrato;16/32/64/128 only rise within a note, reset at noteOn.
+    int nestedSineDensityHint();
     bool tickSineSubframes(float* output, int factor,
                           FmSubframeMath math = FmSubframeMath::Exact);
     bool  active() const { return active_; }
@@ -254,6 +257,8 @@ private:
     double vibratoScale_ = 1.0; // channel modulation affects pitch only, not AM
     double modDepth_ = 0.42; // selected once per note; compatibility default
     int densityFactor_ = 8;
+    int nestedDensityFactor_ = -1; // -1 unchecked,0 outside the opt-in class
+    double nestedDensityPhase_ = -1;
     double densityPhase_ = -1, densityVibrato_ = 0;
     // one modulator step: run op[i] with its own feedback + an external phase-mod
     // input (in cycles). returns its output. keeps the FM index musical.

@@ -62,7 +62,7 @@ static void writeHeader(std::ostream& f, uint32_t frames, uint32_t rate) {
 
 int main(int argc, char** argv) {
     if (argc < 3 || argc > 7) {
-        std::fprintf(stderr, "usage: smaf-render <tune.mmf> <out.wav> [seconds] [--experimental-sine-factor=1|2|4|8|16|32|64|128] [--experimental-sine-math=exact|hermite] [--experimental-nested-sine]\n");
+        std::fprintf(stderr, "usage: smaf-render <tune.mmf> <out.wav> [seconds] [--experimental-sine-factor=1|2|4|8|16|32|64|128] [--experimental-sine-math=exact|hermite] [--experimental-nested-sine] | --experimental-adaptive-nested\n");
         return 2;
     }
     double seconds = 30.0;
@@ -82,7 +82,7 @@ int main(int argc, char** argv) {
     bool factorSeen = false, mathSeen = false;
     for (; option < argc; ++option) {
         std::string_view arg(argv[option]);
-        if (arg.starts_with("--experimental-sine-factor=") && !factorSeen) {
+        if (arg.starts_with("--experimental-sine-factor=") && !factorSeen&&!sine.adaptiveNested) {
             auto value = arg.substr(std::string_view("--experimental-sine-factor=").size());
             const auto parsed = std::from_chars(value.data(), value.data() + value.size(), sine.factor);
             if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size() ||
@@ -90,17 +90,19 @@ int main(int argc, char** argv) {
                 std::fprintf(stderr, "experimental sine factor must be1/2/4/8/16/32/64/128\n"); return 2;
             }
             factorSeen = true;
-        } else if (arg.starts_with("--experimental-sine-math=") && !mathSeen) {
+        } else if (arg.starts_with("--experimental-sine-math=") && !mathSeen&&!sine.adaptiveNested) {
             auto value = arg.substr(std::string_view("--experimental-sine-math=").size());
             if (value == "exact") sine.math = FmSubframeMath::Exact;
             else if (value == "hermite") sine.math = FmSubframeMath::Hermite;
             else { std::fprintf(stderr, "experimental sine math must be exact/hermite\n"); return 2; }
             mathSeen = true;
-        } else if(arg=="--experimental-nested-sine"&&!sine.nestedSine) {
+        } else if(arg=="--experimental-adaptive-nested"&&!sine.adaptiveNested&&!factorSeen&&!mathSeen&&!sine.nestedSine) {
+            sine={8,FmSubframeMath::Hermite,true,false,true};
+        } else if(arg=="--experimental-nested-sine"&&!sine.nestedSine&&!sine.adaptiveNested) {
             sine.nestedSine=true;
         } else { std::fprintf(stderr, "unknown or duplicate renderer option\n"); return 2; }
     }
-    if (mathSeen && !factorSeen) {
+    if (mathSeen && !factorSeen&&!sine.adaptiveNested) {
         std::fprintf(stderr, "experimental sine math requires an explicit factor\n"); return 2;
     }
     if((sine.nestedSine&&(!factorSeen||sine.factor<16))||(!sine.nestedSine&&sine.factor>32)) {

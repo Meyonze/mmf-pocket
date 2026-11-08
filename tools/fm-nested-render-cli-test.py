@@ -51,4 +51,25 @@ with tempfile.TemporaryDirectory(prefix='nested-cli-') as directory:
     for flags in [['--app-quality','--experimental-nested-sine'],['--experimental-nested-sine','--app-quality'],['--experimental-sine-factor=64']]:
         assert subprocess.run([audit,str(source),*flags],capture_output=True).returncode!=0
     assert source.read_bytes()==data
-print('Nested MMF/WAV CLI PASS:4 factors, Exact/Hermite PCM16<=1, order, EOF, contribution counters and opt-in guards.')
+    for note,factor in [(60,16),(72,32),(84,64),(96,128)]:
+        adaptive_probe=m.Probe('adaptive-cli','Original bounded nested density study.',6,
+            tuple(m.Operator(multi=multi,tl=tl) for multi,tl in [(1,18),(7,12),(3,12),(5,0)]),note=note)
+        adaptive_data=m.encode(adaptive_probe);source.write_bytes(adaptive_data);selected=root/f'adaptive-{note}.wav';fixed=root/f'fixed-{note}.wav'
+        r=subprocess.run([binary,str(source),str(selected),'2','--experimental-adaptive-nested'],capture_output=True);assert r.returncode==0,r.stderr
+        r=subprocess.run([binary,str(source),str(fixed),'2','--experimental-nested-sine',f'--experimental-sine-factor={factor}','--experimental-sine-math=hermite'],capture_output=True);assert r.returncode==0,r.stderr
+        assert selected.read_bytes()==fixed.read_bytes(),('adaptive fixed-policy mismatch',note,factor)
+        r=subprocess.run([audit,str(source),'1','--experimental-adaptive-nested'],capture_output=True,text=True);assert r.returncode==0,r.stderr
+        report=json.loads(r.stdout);assert report['adaptive_nested'] and report['reference_pcm_exact'] and not report['cap_reached']
+        parts=[p for p in report['parts'] if p['sine_source_voice_frames']]
+        assert parts and all(p['sine_voice_frames_by_factor'][str(factor)]==p['sine_source_voice_frames'] for p in parts)
+        assert source.read_bytes()==adaptive_data
+    for flag in ['--experimental-sine-factor=16','--experimental-sine-math=exact','--experimental-nested-sine','--experimental-adaptive-nested']:
+        for flags in [['--experimental-adaptive-nested',flag],[flag,'--experimental-adaptive-nested']]:
+            target=root/'bad-adaptive.wav';r=subprocess.run([binary,str(source),str(target),*flags],capture_output=True)
+            assert r.returncode!=0 and not target.exists()
+            assert subprocess.run([audit,str(source),*flags],capture_output=True).returncode!=0
+    for flags in [['--app-quality','--experimental-adaptive-nested'],['--experimental-adaptive-nested','--app-quality']]:
+        assert subprocess.run([audit,str(source),*flags],capture_output=True).returncode!=0
+    source.write_bytes(data)
+    assert source.read_bytes()==data
+print('Nested MMF/WAV CLI PASS:adaptive4densities/fixed WAV exact + guards; 4 factors, Exact/Hermite PCM16<=1, order, EOF, contribution counters and opt-in guards.')

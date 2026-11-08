@@ -48,7 +48,7 @@ namespace fxchain::smaf {
 enum class FmSubframeMath { Exact, Hermite };
 struct SineRenderOptions {
     int factor=0; FmSubframeMath math=FmSubframeMath::Exact;
-    bool boostHighNotes=false; bool nestedSine=false;
+    bool boostHighNotes=false; bool nestedSine=false; bool adaptiveNested=false;
 };
 struct MaPlayer {
     uint8_t mode = 0;
@@ -59,7 +59,7 @@ struct MaPlayer {
     int render(float* out, int frames) {
         const float samples[] = {0.5f, -0.5f, 2.0f, -2.0f};
         for (int i = 0; i < frames * 2; ++i)
-            out[i] = sine.factor ? float(sine.factor)/(sine.nestedSine?256:64) * (sine.math==FmSubframeMath::Hermite?-1:1) :
+            out[i] = sine.factor ? float(sine.factor)/(sine.adaptiveNested?512:sine.nestedSine?256:64) * (sine.math==FmSubframeMath::Hermite?-1:1) :
                      mode == 0 ? 0.0f : mode == 5 ? 0.000001f : mode == 1 ? 0.0001f :
                      mode == 2 ? samples[i % 4] : mode == 3 ?
                      std::numeric_limits<float>::quiet_NaN() :
@@ -151,6 +151,11 @@ struct MaPlayer {
                     self.assertEqual(result.returncode, 0, result.stderr)
                     expected = round(factor / 64 * 32767) * (-1 if math == "hermite" else 1)
                     self.assertEqual(set(self.read_pcm()), {expected})
+
+    def test_adaptive_policy_reaches_engine(self):
+        result = self.run_cli(extra=("--experimental-adaptive-nested",))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(set(self.read_pcm()), {-512})
 
     def test_nested_policy_reaches_engine(self):
         for factor in (16, 32, 64, 128):

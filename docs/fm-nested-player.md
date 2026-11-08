@@ -60,6 +60,8 @@ C++では`SineRenderOptions{128, FmSubframeMath::Hermite, false, true}`に相当
 GCC Release、ASan/UBSan、NDK ClangのLinuxホスト向けFMA実行、Android全ABIの
 Lint/Debug/Releaseを確認しています。ホストJNI・音源検査はAndroid実機での実行ではありません。
 
+続く[選択的な高倍率処理の実験](fm-adaptive-nested.md)では、条件を絞ったVM35と複数倍率バスを接続しています。通常アプリの自動方針は維持しています。
+
 ## 次の適用前に残ること
 
 固定の実験経路なので、強い音色や音程に対して選んだ倍率で折り返しが残る場合があります。

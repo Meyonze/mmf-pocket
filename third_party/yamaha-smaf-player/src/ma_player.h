@@ -43,6 +43,7 @@ struct SineRenderOptions {
     FmSubframeMath math = FmSubframeMath::Exact;
     bool boostHighNotes = false; //8x baseline, selected voices use aligned16x
     bool nestedSine = false; // explicit fixed16/32/64/128 graph6 experiment
+    bool adaptiveNested = false; // opt-in extension of usual8/16 policy
 };
 
 class MaPlayer {
@@ -93,19 +94,22 @@ private:
         std::optional<sine_output::Bus> highBus;
         FmSubframeMath math;
         bool nestedSine;
+        std::optional<sine_output::NestedBanks> nestedBanks;
         uint64_t outputCursor = 0, nativeFlushUntil = 0;
         bool inputFinished = false;
         explicit SineRenderState(SineRenderOptions options) : bus(options.factor,options.nestedSine), math(options.math), nestedSine(options.nestedSine) {
             if (options.boostHighNotes) highBus.emplace(16);
+            if (options.adaptiveNested) nestedBanks.emplace();
         }
         void reset() {
             bus.reset(); if (highBus) highBus->reset();
+            if(nestedBanks)nestedBanks->reset();
             outputCursor = nativeFlushUntil = 0; inputFinished = false;
         }
     };
     std::optional<SineRenderState> sineRender_;
     int renderSine_(float* interleaved, int frames);
-    template<int Capacity,bool Nested> int renderSineImpl_(float* interleaved,int frames);
+    template<int Capacity,bool Nested,bool Adaptive=false> int renderSineImpl_(float* interleaved,int frames);
 
     // ── the decoded event stream ────────────────────────────────────────────
     struct Ev {

@@ -10,6 +10,7 @@
 #include "ma_fm_core.h"
 #include "ma_subframe_sine.h"
 #include "ma_sine_density.h"
+#include "ma_nested_density.h"
 #include "ma_sine_rotation.h"
 
 #include <cmath>
@@ -694,6 +695,7 @@ constexpr double kVm35ModDepth = 4.0;
 
 void FmVoice::noteOn(const FmVoicePatch& patch, double freqHz, float velocity) {
     densityFactor_ = 8; densityPhase_ = -1;
+    nestedDensityFactor_ = -1; nestedDensityPhase_ = -1;
     patch_ = patch;
     fourOp_ = patch.fourOp;
     algo_ = patch.algorithm & 7;
@@ -1090,6 +1092,30 @@ bool FmVoice::supportsNestedSubframes() const {
         ma7=ma7&&op.ma7Multipliers;
     }
     return vm35||ma7;
+}
+int FmVoice::nestedSineDensityHint() {
+    if(nestedDensityFactor_==-1) {
+        nestedDensityFactor_=0;
+        if(!supportsNestedSubframes()||supportsSineSubframes()||
+           patch_.ops[1].tl<12||patch_.ops[2].tl<12)return 0;
+        for(int j=0;j<4;++j) {
+            if(!patch_.ops[j].ma35Multipliers||patch_.ops[j].ma7Multipliers||
+               ops_[j].vibAmt_!=0||!std::isfinite(ops_[j].phaseInc_)||ops_[j].phaseInc_<0)return 0;
+            if(j>0&&ops_[j].env_.atkStep_==0)return 0;
+        }
+        nestedDensityFactor_=16;
+    }
+    if(!nestedDensityFactor_||nestedDensityPhase_==ops_[0].phaseInc_)return nestedDensityFactor_;
+    nestedDensityPhase_=ops_[0].phaseInc_;
+    double peak=0;
+    for(const auto& op:ops_) {
+        // Valid player pitches are finite/nonnegative. Invalid public-core
+        // pitches retain the largest experimental density, never a live mute.
+        if(!std::isfinite(op.phaseInc_)||op.phaseInc_<0){peak=.5;break;}
+        peak=std::max(peak,std::min(.5,op.phaseInc_));
+    }
+    nestedDensityFactor_=std::max(nestedDensityFactor_,nested_density::factor(peak));
+    return nestedDensityFactor_;
 }
 bool FmVoice::tickNestedSubframes(float* output,int factor,FmSubframeMath math) {
     if(!output||(factor!=16&&factor!=32&&factor!=64&&factor!=128)||!supportsNestedSubframes())return false;
