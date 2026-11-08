@@ -1114,7 +1114,7 @@ int FmVoice::nestedSineDensityHint() {
         if(!std::isfinite(op.phaseInc_)||op.phaseInc_<0){peak=.5;break;}
         peak=std::max(peak,std::min(.5,op.phaseInc_));
     }
-    nestedDensityFactor_=std::max(nestedDensityFactor_,nested_density::factor(peak));
+    nestedDensityFactor_=std::max(nestedDensityFactor_,nested_density::factor(peak,patch_.ops[1].tl,patch_.ops[2].tl));
     return nestedDensityFactor_;
 }
 bool FmVoice::tickNestedSubframes(float* output,int factor,FmSubframeMath math) {

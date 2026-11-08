@@ -10,11 +10,12 @@ using nested_player::require;
 constexpr SineRenderOptions options{8,FmSubframeMath::Hermite,true,false,true};
 void bounds(){
     int count=0;
-    for(auto [factor,q]:{std::pair{16,.05},std::pair{32,.1},std::pair{64,.2},std::pair{128,.5}}){
-        const double b=fm_nested_tail::independentBound(9,9,q,q,q,factor-.5);
-        require(b<1e-4,"nested stationary threshold certificate failed");
-        require(nested_density::factor(q)==factor,"nested exact threshold changed");
-        if(factor<128)require(nested_density::factor(std::nextafter(q,1.))==factor*2,"nested threshold excluded upper neighbor");++count;
+    for(int a=0;a<4;++a)for(int b=0;b<4;++b)for(int i=0;i<4;++i){
+        const int factor=16<<i;const double q=i==3?.5:nested_density::limits[a][b][i]/64.;
+        const double tail=fm_nested_tail::independentBound(nested_density::betaBounds[a],nested_density::betaBounds[b],q,q,q,factor-.5);
+        require(tail<1e-4,"nested stationary threshold certificate failed");
+        require(nested_density::factor(q,12+4*a,12+4*b)<=factor,"nested exact threshold excluded");
+        if(i<3&&q<.5)require(nested_density::factor(std::nextafter(q,1.),12+4*a,12+4*b)>factor,"nested upper threshold neighbor not promoted");++count;
     }
     for(int kind=0;kind<9;++kind){auto patch=nested::patch({96,7,3,5,12,12});
         if(kind==0)patch.ops[1].tl=11;if(kind==1)patch.ops[2].tl=11;

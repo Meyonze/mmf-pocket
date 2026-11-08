@@ -51,9 +51,10 @@ with tempfile.TemporaryDirectory(prefix='nested-cli-') as directory:
     for flags in [['--app-quality','--experimental-nested-sine'],['--experimental-nested-sine','--app-quality'],['--experimental-sine-factor=64']]:
         assert subprocess.run([audit,str(source),*flags],capture_output=True).returncode!=0
     assert source.read_bytes()==data
-    for note,factor in [(60,16),(72,32),(84,64),(96,128)]:
+    for note,inner,middle,factor in [(60,12,12,16),(72,12,12,32),(84,12,12,64),(96,12,12,128),
+                                      (91,12,24,64),(91,24,12,32),(94,20,20,32),(96,16,16,64)]:
         adaptive_probe=m.Probe('adaptive-cli','Original bounded nested density study.',6,
-            tuple(m.Operator(multi=multi,tl=tl) for multi,tl in [(1,18),(7,12),(3,12),(5,0)]),note=note)
+            tuple(m.Operator(multi=multi,tl=tl) for multi,tl in [(1,18),(7,inner),(3,middle),(5,0)]),note=note)
         adaptive_data=m.encode(adaptive_probe);source.write_bytes(adaptive_data);selected=root/f'adaptive-{note}.wav';fixed=root/f'fixed-{note}.wav'
         r=subprocess.run([binary,str(source),str(selected),'2','--experimental-adaptive-nested'],capture_output=True);assert r.returncode==0,r.stderr
         r=subprocess.run([binary,str(source),str(fixed),'2','--experimental-nested-sine',f'--experimental-sine-factor={factor}','--experimental-sine-math=hermite'],capture_output=True);assert r.returncode==0,r.stderr
@@ -72,4 +73,4 @@ with tempfile.TemporaryDirectory(prefix='nested-cli-') as directory:
         assert subprocess.run([audit,str(source),*flags],capture_output=True).returncode!=0
     source.write_bytes(data)
     assert source.read_bytes()==data
-print('Nested MMF/WAV CLI PASS:adaptive4densities/fixed WAV exact + guards; 4 factors, Exact/Hermite PCM16<=1, order, EOF, contribution counters and opt-in guards.')
+print('Nested MMF/WAV CLI PASS:adaptive8cases/4densities/fixed WAV exact + guards; 4 factors, Exact/Hermite PCM16<=1, order, EOF, contribution counters and opt-in guards.')
