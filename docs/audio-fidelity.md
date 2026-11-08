@@ -3359,3 +3359,28 @@ Normal adaptive playback remains native for this moving nested graph and is
 checked against a72-frame shifted reference. No app integration/cache change.
 Independent transient errors, stronger PM, player mixing/lifetime integration,
 density policy and device cost remain open. See [model and limits](fm-nested-sine-prototype.md).
+
+### r90 weak VM35 nested graph6 app source
+
+Enable moving sine/no-feedback graph6 only for VM35 multipliers with both
+modulator TL>=24 and active configured attacks for op1/op2/carrier3. Always16x
+under the app policy; do not reuse the single-pair density estimate. Existing
+reduced graph6 keeps its previous8/16 selection. Preserve native clocks/endpoints,
+mix0.5 and shared72-frame alignment.750 independent spectral policies across75
+fixtures match the finite FIR/LP model (maxRMS1.54e-8).36 independent hard-stop,
+RR15 release and two-semitone pitch cases match dense FIR reference (maxRMS
+5.74e-9,peak2.42e-8).82encoded app files change only75targets;7negative controls
+remain exact.2,262before/after source-state/counter comparisons pass,2capped;
+2,180prior PCM streams and2,121default WAVs remain exact.29bridge fixtures and
+56fixed+56adaptive contribution cases pass. Cache90; official1.6.6 unchanged.
+Native per-operator Nyquist muting is retained, not hardware fidelity. Stronger
+PM/other families and device measurements remain open. See [scope](fm-weak-nested-r90.md).
+
+R90 also replaces per-operator power-of-two division with an exact reciprocal
+while preserving inc*sub order. Graph6 Hermite evaluates independent samples
+per operator before its reader, retaining point arithmetic and using512bytes
+of stack scratch.1,440 normal and FMA-enabled frozen traces are byte-exact
+within each compiler mode;82app WAVs are exact before/after interchange.
+Pinned paired source-only CPU medians observe5–8% lower cost from reciprocal
+scaling and a further37% for graph6 interchange, with graph7 control ratio1.001.
+These are shared-host component measurements, not Android/app-wide claims.

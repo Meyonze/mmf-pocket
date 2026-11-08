@@ -43,21 +43,23 @@ Bytes fixture(int kind){
             // Original high-PM VM5 setup; the normal app initializer must
             // actually use its filtered route, not only pass bridge plumbing.
             const bool graph7=kind==4||kind==6;
-            const int reducedGraph=kind>=7?std::array<int,3>{3,4,6}[size_t((kind-7)%3)]:0;
+            const int reducedGraph=kind>=22?6:kind>=7?std::array<int,3>{3,4,6}[size_t((kind-7)%3)]:0;
             Bytes voice{0x43,0x79,7,0x7f,1,0,0,0,0,0,0,0x79,uint8_t(reducedGraph?reducedGraph:graph7?7:0)};
-            const std::vector<int> multiples=reducedGraph?(reducedGraph==3?std::vector<int>{7,1,1,5}:std::vector<int>{1,1,7,5})
+            const std::vector<int> multiples=kind>=22?std::vector<int>{1,7,3,5}:reducedGraph?(reducedGraph==3?std::vector<int>{7,1,1,5}:std::vector<int>{1,1,7,5})
                 :graph7?std::vector<int>{1,7,5,2}:std::vector<int>{7,5};
             for(size_t j=0;j<multiples.size();++j){int tl=graph7?(j==0?18:j==3?24:0):0;
                 if(reducedGraph==6&&j==0)tl=18;
-                const bool stopped=reducedGraph&&j==size_t(reducedGraph==3?2:1);
+                if(kind>=22&&(j==1||j==2))tl=(kind==24&&j==1)||(kind==25&&j==2)?23:24;
+                const bool stopped=kind<22&&reducedGraph&&j==size_t(reducedGraph==3?2:1);
                 int ar=stopped?(kind>=13&&kind<=15?1:0):15;
                 if(kind>=16&&kind<=18&&j==size_t(reducedGraph==3?0:2))ar=0;
-                if(kind>=19&&j==3)ar=0;
+                if(kind>=19&&kind<=21&&j==3)ar=0;
+                if((kind==26&&j==1)||(kind==27&&j==2)||(kind==28&&j==3))ar=0;
                 append(voice,{0,0xa0,uint8_t(ar<<4),uint8_t(tl<<2),0,uint8_t(multiples[j]<<4),0});}
             Bytes setup{0xf0,uint8_t(voice.size()+1)};append(setup,voice);setup.push_back(0xf7);
             append(score,chunk("Mtsu",setup));
         }
-        append(score,chunk("Mtsq",{0,0x90,uint8_t((kind==5||kind==6||kind>=10)?96:kind>=3?84:60),100,10,10,0xff,0x2f,0}));append(body,chunk("MTR0",score));
+        append(score,chunk("Mtsq",{0,0x90,uint8_t(kind==22?84:(kind==5||kind==6||kind>=10)?96:kind>=3?84:60),100,10,10,0xff,0x2f,0}));append(body,chunk("MTR0",score));
     }else{
         Bytes atr{0,0,uint8_t(kind==1?1:0x11),uint8_t(kind==1?0x10:0),0,0};
         append(atr,chunk("Atsq",{0,1,100}));Bytes pcm;
@@ -84,24 +86,25 @@ std::vector<int16_t> expected(const Bytes& bytes,bool phone){
     return out;
 }
 void appQuality(){
-    for(int kind=0;kind<22;++kind){
+    for(int kind=0;kind<29;++kind){
         const auto bytes=fixture(kind);fxchain::smaf::SmafFile file;
         require(file.parse(bytes.data(),bytes.size()),"quality fixture parses");
         fxchain::smaf::MaPlayer app,reference,native;
         require(initializePlayer(bytes.data(),bytes.size(),app).empty(),"app quality initializes");
-        const int density=kind==5||kind==6||(kind>=10&&kind<=12)?16:8;
+        const int density=kind==5||kind==6||(kind>=10&&kind<=12)||kind==22||kind==23?16:8;
         require(reference.init(file,44100,false,{density,fxchain::smaf::FmSubframeMath::Hermite}),"independent explicit policy initializes");
         require(native.init(file,44100),"native comparison initializes");
         require(app.renderLatencySamples()==72,"normal app enables aligned FM reconstruction");
         std::vector<float> a(4096*2),b(a.size()),original(a.size());
         require(app.render(a.data(),4096)==4096&&reference.render(b.data(),4096)==4096&&native.render(original.data(),4096)==4096,"quality comparison window renders");
         require(a==b,"app samples match independently selected8x/16x Hermite policy");
-        if(kind>=3&&kind<13){
+        const bool filtered=(kind>=3&&kind<13)||kind==22||kind==23||kind==26;
+        if(filtered){
             double delta=0;for(int i=72;i<4096;++i)delta+=std::abs(double(a[size_t(i)*2])-original[size_t(i-72)*2]);
             require(delta>1,"bound high-PM output changes beyond common latency");
             require(app.diagnostics().fmNotes==1&&app.diagnostics().fallbackNotes==0,"filtered fixture uses authored FM, not fallback");
         }
-        if(kind>=13)require(std::equal(original.begin(),original.end()-144,a.begin()+144),"excluded nested/direct graph changed from native delayed route");
+        if(kind>=13&&!filtered)require(std::equal(original.begin(),original.end()-144,a.begin()+144),"excluded nested/direct graph changed from native delayed route");
         app.seekToStart();std::vector<float> again(a.size());require(app.render(again.data(),4096)==4096&&again==a,"app seek resets quality history exactly");
     }
     std::cout<<"App quality PASS: selective8x/16x Hermite, independent explicit reference, high-PM change, FM/ATR routing and seek.\n";
@@ -109,7 +112,7 @@ void appQuality(){
 void paths(const std::filesystem::path& folder){
     JNINativeInterface_ table{};table.GetArrayLength=length;table.SetShortArrayRegion=setShorts;table.ExceptionCheck=exception;
     JNIEnv env{};env.functions=&table;
-    for(int kind=0;kind<22;++kind)for(bool phone:{false,true}){
+    for(int kind=0;kind<29;++kind)for(bool phone:{false,true}){
         auto bytes=fixture(kind);const auto oraclePcm=expected(bytes,phone);
         const auto path=folder/("synthetic-"+std::to_string(kind)+(phone?"-phone.wav":"-normal.wav"));
         if(kind==19||kind==20){

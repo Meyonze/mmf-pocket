@@ -901,6 +901,16 @@ float FmVoice::tick() {
     return result;
 }
 
+bool FmVoice::weakNestedSine_() const {
+    if (!fourOp_ || algo_ != 6 || !patch_.modernTimbre ||
+        patch_.ops[1].tl < 24 || patch_.ops[2].tl < 24 ||
+        ops_[1].env_.atkStep_ == 0.0 || ops_[2].env_.atkStep_ == 0.0 ||
+        ops_[3].env_.atkStep_ == 0.0) return false;
+    for (const auto& op : patch_.ops)
+        if (!op.ma35Multipliers || op.ma7Multipliers) return false;
+    return true;
+}
+
 bool FmVoice::supportsSineSubframes() const {
     const bool serial = !fourOp_ && algo_ == 0;
     const bool pairs = fourOp_ && algo_ == 5;
@@ -914,7 +924,7 @@ bool FmVoice::supportsSineSubframes() const {
     const bool reduced = fourOp_ && ops_[3].env_.atkStep_ != 0.0 &&
         ((algo_ == 3 && ops_[2].env_.atkStep_ == 0.0 && ops_[0].env_.atkStep_ != 0.0) ||
          ((algo_ == 4 || algo_ == 6) && ops_[1].env_.atkStep_ == 0.0 && ops_[2].env_.atkStep_ != 0.0));
-    if (!serial && !pairs && !mixed && !reduced) return false;
+    if (!serial && !pairs && !mixed && !reduced && !weakNestedSine_()) return false;
     for (int i = 0; i < (fourOp_ ? 4 : 2); ++i)
         if (patch_.ops[size_t(i)].wave != 0 || opFb_[i] != 0) return false;
     return true;
@@ -924,6 +934,9 @@ int FmVoice::sineDensityHint() {
     if (densityPhase_ == ops_[0].phaseInc_ && densityVibrato_ == vibratoScale_) return densityFactor_;
     densityPhase_ = ops_[0].phaseInc_; densityVibrato_ = vibratoScale_;
     if (!supportsSineSubframes()) { densityFactor_ = 0; return 0; }
+    // Do not apply the single-PM-pair tail estimate to a nested modulator.
+    // The initial supported VM35 range uses a fixed16x policy for the note.
+    if (weakNestedSine_()) { densityFactor_ = 16; return 16; }
     if (densityFactor_ == 16) return densityFactor_;
     auto peak = [&](int j) { const auto& op = ops_[j];
         return std::abs(op.phaseInc_) * (1 + std::abs(op.vibAmt_ * vibratoScale_)); };
@@ -979,12 +992,40 @@ template<bool Fast> bool FmVoice::tickSineSubframesImpl_(float* output, int fact
     // when EVB makes a stopped gate execute: its signed zero is then observed.
     if (algo_ == 3 && mute[2]) mute[1] = true;
     if (algo_ == 4 && mute[1]) mute[0] = true;
+    // Valid factors are powers of two, so this reciprocal is exact. Preserve
+    // inc*sub ordering and scale afterward, avoiding a division per operator.
+    const double inverseFactor = 1.0 / factor;
+    if constexpr (Fast) {
+        if (algo_ == 6) {
+            // Samples within one operator are independent. Finish a row before
+            // its reader to expose parallel work across the nested sine chain.
+            // Every consumed entry is written, including skipped rows' +0.
+            std::array<std::array<float, 32>, 4> values;
+            for (int j = 0; j < 4; ++j) {
+                if (mute[j]) { std::fill_n(values[j].begin(), factor - 1, 0.0f); continue; }
+                const auto& op = ops_[j];
+                for (int sub = 1; sub < factor; ++sub) {
+                    double phase = before[j] + (inc[j] * double(sub)) * inverseFactor;
+                    if (phase >= 1) phase -= std::floor(phase);
+                    if (j >= 2) phase += double(values[j - 1][sub - 1]) * modDepth_;
+                    const float sine = subframeMath::sample<true>(phase, false);
+                    values[j][sub - 1] = float(sine * op.tlGain_ * op.kslGain_ * level[j] * am[j]);
+                }
+            }
+            for (int sub = 1; sub < factor; ++sub) {
+                const double combined = (double(values[0][sub - 1]) + double(values[3][sub - 1])) * .5;
+                output[sub - 1] = float(combined * velocity_ * volume_ * .7);
+            }
+            output[factor - 1] = native;
+            return true;
+        }
+    }
     for (int sub = 1; sub < factor; ++sub) {
         float values[4]{};
         for (int j = 0; j < count; ++j) {
             if (mute[j]) continue;
             const auto& op = ops_[j];
-            double phase = before[j] + inc[j] * double(sub) / factor;
+            double phase = before[j] + (inc[j] * double(sub)) * inverseFactor;
             if (phase >= 1) phase -= std::floor(phase);
             if (algo_ == 3) {
                 if (j == 2) phase += double(values[1]) * modDepth_;

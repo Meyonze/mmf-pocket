@@ -49,6 +49,9 @@ player.init(file, 44100, false, {8, FmSubframeMath::Hermite, true});
 [集計方法と適用範囲](render-contributions.md)を参照してください。
 アプリの倍率設定画面は追加していません。
 
+r90ではこの方針に[弱いVM35接続6の固定16倍](fm-weak-nested-r90.md)も含めます。
+直列3演算器へ単一PM対の尾部推定は流用せず、この追加範囲は音程にかかわらず16倍です。
+
 ## 検証と改善例
 
 独立したBessel係数の絶対値和を112条件で尾部上限と照合しました。

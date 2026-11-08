@@ -201,7 +201,8 @@ public:
     void setVolume(float v) { volume_ = v; }   // channel volume 0..1
     float tick();                          // one mono sample, ~[-1,1]
     // Additive source API: sine graphs0/5/7 without feedback, plus graphs3/4/6
-    // reduced to one PM pair by an exactly stopped attack (see implementation).
+    // reduced to one PM pair by an exactly stopped attack, and weak VM35
+    // nested graph6 (both modulator TL>=24; automatic policy always16x).
     // Advances tick() ONCE and emits2/4/8/16/32 samples ending at that result.
     // EG/LFO/allocation timing stay native; intermediate gains are held per frame.
     // False leaves state/output untouched (bad shape/count/math/null output).
@@ -251,6 +252,7 @@ private:
     // input (in cycles). returns its output. keeps the FM index musical.
     float modOp_(int i, double extModCycles);
     template<bool Fast> bool tickSineSubframesImpl_(float* output, int factor);
+    bool weakNestedSine_() const;
 };
 
 } // namespace fxchain::smaf
