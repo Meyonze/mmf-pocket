@@ -3414,3 +3414,19 @@ A host stationary analytic-continuation tail bound is compared against32
 coefficient sums; it is not an app/EG density policy. Paired host cost measurements
 show substantial high-density overhead; production routing/cache91 remain
 unchanged. See [evidence, formula and limits](fm-strong-nested-prototype.md).
+
+
+### Recursive nested prototype and independent-frequency stationary planning
+
+Add a host-only graph6 recurrence for unmodulated operators0/1 and per-operator
+rows for the remaining Hermite source.2121535 phase points,210 native-state/
+endpoint/fallback cases,56 spectral policies and72 dense-FIR gate/pitch/release
+cases pass. The internal phase recurrence uses sin9/cos10 for |step|<=.2 and
+falls back outside its bounded range. Existing production routing/cache91 remain
+unchanged. A second stationary coefficient-tail bound uses Graf's identity and
+two weighted Cauchy-Schwarz bounds, without assuming a frequency lattice.
+20weighted Bessel identities,45L1 bounds and8non-lattice tail sums check its
+premises. A host planner selects16/32/64/128 within a caller tail budget/cap,
+or returns unproven; it is not an app/controller/EG policy. Shared-host paired
+measurements compare scalar and recursive prototypes, not production or Android
+performance. See [derivation, scope and measurements](fm-recursive-nested-prototype.md).

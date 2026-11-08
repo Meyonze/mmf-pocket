@@ -89,3 +89,10 @@ c++ -std=c++20 -O2 -Ithird_party/yamaha-smaf-player/src \
   tools/fm-high-density-cost.cpp build/native-render/libsmaf.a -o fm-high-density-cost
 ./fm-high-density-cost 64 8
 ```
+
+
+## 軽量化と倍率選択の続き
+
+[漸化式と演算器ごとの処理、格子に依存しない尾部上限](fm-recursive-nested-prototype.md)へ
+進めています。64/128倍の負荷を下げ、定常時に予算を満たす倍率を選ぶホスト試作です。
+通常再生へは、実プレイヤーの切り替え・曲末・混在負荷の検証後に適用します。

@@ -210,4 +210,6 @@ void transients() {
     std::cout<<count<<" strong dense-FIR short-gate/pitch/release cases PASS; max RMS "<<rms<<" peak "<<peak<<'\n';
 }
 }
+#ifndef FM_STRONG_NESTED_TEST_NO_MAIN
 int main(){try{strong_nested::besselReference();strong_nested::tailBounds();strong_nested::bus();strong_nested::clocks();strong_nested::spectra();strong_nested::transients();return 0;}catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}
+#endif

@@ -284,6 +284,8 @@ jobs:
           ./fm-nested-sine-test
           c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Ithird_party/yamaha-smaf-player/src tools/fm-strong-nested-test.cpp build/native-sanitizer/libsmaf.a -o fm-strong-nested-test
           ./fm-strong-nested-test
+          c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Ithird_party/yamaha-smaf-player/src tools/fm-recursive-nested-test.cpp build/native-sanitizer/libsmaf.a -o fm-recursive-nested-test
+          ./fm-recursive-nested-test
           c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Ithird_party/yamaha-smaf-player/src tools/fm-reduced-graphs-test.cpp build/native-sanitizer/libsmaf.a -o fm-reduced-graphs-test
           ./fm-reduced-graphs-test
           c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Ithird_party/yamaha-smaf-player/src tools/fm-adaptive-density-test.cpp build/native-sanitizer/libsmaf.a -o fm-adaptive-density-test

@@ -1,13 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
 // Host prototype source+mix+shared FIR cost. Not app/device performance.
 #include "fm-high-density-probe.h"
+#include "fm-recursive-nested-probe.h"
 #include <ctime>
 #include <cstdlib>
 #include <iomanip>
 #include <iostream>
 #include <memory>
+#include <string_view>
 int main(int argc,char** argv) {
-    if(argc!=3)return 2;
+    if(argc!=3&&argc!=4)return 2;
+    const bool recursive=argc==4;
+    if(recursive&&std::string_view(argv[3])!="--recursive")return 2;
     const int factor=std::atoi(argv[1]),count=std::atoi(argv[2]);
     if((factor!=16&&factor!=32&&factor!=64&&factor!=128)||count<1||count>32)return 2;
     using namespace fxchain::smaf;
@@ -27,7 +31,8 @@ int main(int argc,char** argv) {
     for(int n=0;n<frames;++n) {
         std::fill_n(mix.begin(),factor,sine_output::Stereo{});
         for(auto& v:voices) {
-            fm_nested::frame<true,128>(v,std::span<float>(source.data(),size_t(factor)));
+            if(recursive)fm_recursive::frame(v,std::span<float>(source.data(),size_t(factor)));
+            else fm_nested::frame<true,128>(v,std::span<float>(source.data(),size_t(factor)));
             for(int k=0;k<factor;++k){mix[size_t(k)].left+=source[size_t(k)]*.32;mix[size_t(k)].right+=source[size_t(k)]*.16;}
         }
         const std::span<const sine_output::Stereo> input(mix.data(),size_t(factor));
@@ -36,5 +41,5 @@ int main(int argc,char** argv) {
     }
     const double milliseconds=1000.*(std::clock()-start)/CLOCKS_PER_SEC;
     if(!std::isfinite(checksum))return 1;
-    std::cout<<std::setprecision(12)<<"{\"scope\":\"Host scalar prototype source+mix+shared stereo FIR; excludes LP/limiter/JNI/I/O; not production row-source or Android performance\",\"factor\":"<<factor<<",\"voices\":"<<count<<",\"frames\":"<<frames<<",\"audio_ms\":"<<1000.*frames/44100<<",\"cpu_ms\":"<<milliseconds<<",\"checksum\":"<<checksum<<"}\n";
+    std::cout<<std::setprecision(12)<<"{\"scope\":\"Host prototype source+mix+shared stereo FIR; excludes LP/limiter/JNI/I/O; not production or Android performance\",\"recursive\":"<<(recursive?"true":"false")<<",\"factor\":"<<factor<<",\"voices\":"<<count<<",\"frames\":"<<frames<<",\"audio_ms\":"<<1000.*frames/44100<<",\"cpu_ms\":"<<milliseconds<<",\"checksum\":"<<checksum<<"}\n";
 }
