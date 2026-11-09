@@ -25,8 +25,9 @@ VARIANTS = {'reference': {}, 'tl28': {19: 28 << 2}, 'attack0': {18: 0},
 
 
 def encode(fmt, source, changes):
-    rom = source == 'rom-strings'
-    voice = bytearray(PROBES.wt_voice(26 if rom else 1, rom=rom))
+    rom = source.startswith('rom-')
+    wave = 26 if source == 'rom-strings' else int(source[9:]) if source.startswith('rom-wave-') else 1
+    voice = bytearray(PROBES.wt_voice(wave, rom=rom))
     voice[19] = 0  # reference TL=0; all other parameters shared
     for index, value in changes.items():
         voice[index] = value
@@ -42,7 +43,7 @@ def encode(fmt, source, changes):
     return data + struct.pack('>H', binascii.crc_hqx(data, 0xffff) ^ 0xffff)
 
 
-def run(renderer, audit, directory):
+def run(renderer, audit, directory, rom_waves=None):
     renderer, audit = renderer.resolve(strict=True), audit.resolve(strict=True)
     directory.mkdir(parents=True, exist_ok=False)
     manifest = {'status': 'generated', 'scope': 'Original probe; no handset or song match.',
@@ -50,8 +51,9 @@ def run(renderer, audit, directory):
                 'cases': []}
     report = directory / 'manifest.json'
     report.write_text(json.dumps(manifest, indent=2) + '\n')
+    rom_sources = [f'rom-wave-{wave}' for wave in dict.fromkeys(rom_waves)] if rom_waves else ['rom-strings']
     for fmt in (2, 3):
-        for source in ('rom-strings', 'missing-ram', 'bound-ram'):
+        for source in (*rom_sources, 'missing-ram', 'bound-ram'):
             reference = None
             for variant, changes in VARIANTS.items():
                 name = f'f{fmt}-{source}-{variant}'
@@ -76,12 +78,14 @@ def run(renderer, audit, directory):
         rows = {r['file']: r for r in csv.DictReader(stream, delimiter='\t') if r['kind'] == 'route'}
     for case in manifest['cases']:
         row = rows[case['file']]
-        expected = {'bound-ram': 'bound_ram', 'missing-ram': 'missing_ram_wave',
-                    'rom-strings': 'explicit_rom_wave'}[case['source']]
+        expected = ('explicit_rom_wave' if case['source'].startswith('rom-') else
+                    {'bound-ram': 'bound_ram', 'missing-ram': 'missing_ram_wave'}[case['source']])
         if row['reason'] != expected or row['count'] != '1' or row['complete'] != '1':
             raise ValueError('probe did not follow its declared source route')
         case['reason'] = row['reason']
         case['pcm_envelope_applied'] = int(row['pcm_envelope_applied'])
+        case['requested_pcm'] = {key: int(row['requested_pcm_' + key])
+                                 for key in ('tl', 'ar', 'dr', 'sl', 'sr', 'rr')}
     manifest['status'] = 'complete'
     report.write_text(json.dumps(manifest, indent=2) + '\n')
     print(f'Completed {len(manifest["cases"])} original envelope probes: {report}')
@@ -91,6 +95,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--renderer', required=True, type=Path)
     parser.add_argument('--audit', required=True, type=Path)
+    parser.add_argument('--rom-wave', type=int, choices=range(29), action='append',
+                        help='ROM wave address to probe; repeatable, default26 (strings)')
     parser.add_argument('directory', type=Path, help='new output directory')
     args = parser.parse_args()
-    run(args.renderer, args.audit, args.directory)
+    run(args.renderer, args.audit, args.directory, args.rom_wave)

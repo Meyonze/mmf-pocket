@@ -45,6 +45,21 @@ python3 tools/probe-fallback-envelope.py --renderer build/native-render/smaf-ren
 WAVのハッシュ、持続部・余韻の測定値、経路と完了状態を記録します。
 `routes.tsv`にも各素材で実際に選択された経路を残します。
 
+`--rom-wave`で波形番号を指定すると、同じ検査を任意のROM代替音色にも適用できます。
+指定は繰り返せます。省略時の30素材に加え、打楽器1/2/4/5/6を指定した70素材でも、
+元のPCM設定を変えても代替側のWAVは変わらず、実在RAMの対照だけが変わることを確認しました。
+診断部分はASan/UBSan付きでも検査しました。波形番号はアドレスで、ROM本体は含みません。
+
+```sh
+python3 tools/probe-fallback-envelope.py --renderer build/native-render/smaf-render --audit build/tone-usage-audit --rom-wave 1 --rom-wave 2 --rom-wave 4 --rom-wave 5 --rom-wave 6 build/fallback-percussion-probes
+```
+
+打楽器の代替レシピは独自の立ち上がり・減衰を持ち、元のPCMのAR/SRなどを選び直しても
+そのままです。したがって、音量だけでなく打撃の鋭さ・残り方もバランスの調査対象です。
+TL12・14には本来9・10.5dBの減衰指定がありますが、これが落ちているという事実と、
+代替音色が実機より何dB大きいかは別です。ROM波形自体の音量が未校正のため、
+単純にその数値だけ下げれば実機と一致するという結論にはしません。
+
 ## 実ファイルで切り分ける情報
 
 `tone-usage-audit --details`に次の列を追加しました。既存の集計形式は変えていません。
