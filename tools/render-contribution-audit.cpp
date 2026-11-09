@@ -42,7 +42,14 @@ struct Report {
  renderPressure::Counters totals{};
  std::map<Key,Part> parts;
 };
-Report analyzePlayers(MaPlayer& player,MaPlayer& reference,uint64_t cap,int block=512){
+// Optional host-only preview sink; observes values without changing playback.
+struct Observer {
+ virtual ~Observer()=default;
+ virtual void note(const Key&,const ParsedVoice*) {}
+ virtual void part(const Key&,double,double) {}
+ virtual void frame(float,float,float) {}
+};
+Report analyzePlayers(MaPlayer& player,MaPlayer& reference,uint64_t cap,int block=512,Observer* observer=nullptr){
  const bool boost=player.sineRender_&&player.sineRender_->highBus.has_value();
  const bool nested=player.sineRender_&&player.sineRender_->nestedSine;
  const bool adaptive=player.sineRender_&&player.sineRender_->nestedBanks.has_value();
@@ -78,6 +85,8 @@ Report analyzePlayers(MaPlayer& player,MaPlayer& reference,uint64_t cap,int bloc
    if(e.type==MaPlayer::Ev::WaveOn&&e.ch<128){trigger=&part({1,e.b,int(e.ch)});++trigger->triggers;}
    const auto before=renderPressure::counters(player.diagnostics());
    player.fireEvent_(e);++player.nextEvent_;
+   if(observer&&(e.type==MaPlayer::Ev::NoteOn||e.type==MaPlayer::Ev::Ma7NoteOn))
+    observer->note({0,-1,int(e.ch)},player.resolveVoice_(e.ch,e.a));
    if(trigger){const auto after=renderPressure::counters(player.diagnostics());for(size_t k=0;k<triggerIndices.size();++k)trigger->triggerCounts[k]+=after[triggerIndices[k]]-before[triggerIndices[k]];}
   }
   sine_output::NestedBankInput extra;
@@ -142,6 +151,7 @@ Report analyzePlayers(MaPlayer& player,MaPlayer& reference,uint64_t cap,int bloc
    p.lp1L+=player.lpCoef_*(l-p.lp1L);p.lp2L+=player.lpCoef_*(p.lp1L-p.lp2L);
    p.lp1R+=player.lpCoef_*(r-p.lp1R);p.lp2R+=player.lpCoef_*(p.lp1R-p.lp2R);
    p.filtered.add(p.lp2L,p.lp2R);
+   if(observer)observer->part(key,p.lp2L,p.lp2R);
    l=p.lp2L*limiter;r=p.lp2R*limiter;l*=fade;r*=fade;p.output.add(l,r);sumL+=l;sumR+=r;
    for(size_t k=0;k<4;++k)p.voiceFrames[k]+=p.pendingFrames[k];p.pendingFrames.fill(0);p.sineFrames+=p.pendingSineFrames;p.pendingSineFrames=0;if(factor)p.high.fill({});
    p.boostedFrames+=p.pendingBoostedFrames;p.pendingBoostedFrames=0;
@@ -153,6 +163,7 @@ Report analyzePlayers(MaPlayer& player,MaPlayer& reference,uint64_t cap,int bloc
   result.sumErrorPeak=std::max({result.sumErrorPeak,std::abs(errorL),std::abs(errorR)});
   result.sumErrorSquares+=errorL*errorL+errorR*errorR;
   result.mix.add(actual[0],actual[1]);++result.frames;
+  if(observer)observer->frame(actual[0],actual[1],fade);
  }
  require(refAt==refCount,"uninstrumented renderer has extra buffered output");
  result.finished=player.finished();result.tailLimit=player.diagnostics().tailLimitReached;
