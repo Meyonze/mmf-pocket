@@ -38,6 +38,9 @@ struct Route {
     int waveSource=-1,legacyMwaTracks=0;
     std::string waveBinding="-";
     std::string reason,substitute="-";
+    // Requested PCM metadata is not necessarily used by an FM substitute.
+    int pcmTl=-1,pcmAr=-1,pcmDr=-1,pcmSl=-1,pcmSr=-1,pcmRr=-1;
+    int pcmEnvelopeApplied=-1;
     uint64_t al=0,fixed=0,dt=0,sram=0;
     auto operator<=>(const Route&) const = default;
 };
@@ -102,7 +105,13 @@ Usage measure(MaPlayer& p,bool initialized,Details* details=nullptr) {
             r.program=c.program;r.note=e.a;r.modern=modern;
             if(selected) {
                 r.definition=int(selected-p.voiceTable_.data());
-                if(selected->isPcm)r.wave=selected->pcm.waveId;
+                if(selected->isPcm) {
+                    r.wave=selected->pcm.waveId;
+                    const auto& env=selected->pcm.env;
+                    r.pcmTl=env.tl;r.pcmAr=env.ar;r.pcmDr=env.dr;
+                    r.pcmSl=env.sl;r.pcmSr=env.sr;r.pcmRr=env.rr;
+                    r.pcmEnvelopeApplied=pcm>audio?1:0;
+                }
                 Gaps g;gap(*selected,g);r.al=g.al;r.fixed=g.fixed;r.dt=g.dt;r.sram=g.sram;
             }
             if(e.type==MaPlayer::Ev::WaveOn) {
@@ -199,9 +208,15 @@ void selfTest() {
         MaPlayer pcm;require(pcm.init(f,44100),"PCM classification initializes");
         auto& patch=pcm.voiceTable_[0];patch.isPcm=true;patch.pcm.rom=rom;patch.pcm.voiceWaveOnly=true;
         patch.pcm.waveId=1;patch.pcm.endPt=ep;patch.pcm.env.ar=15;patch.al.present=true;
+        patch.pcm.env.tl=28;patch.pcm.env.dr=4;patch.pcm.env.sl=7;
+        patch.pcm.env.sr=2;patch.pcm.env.rr=9;
         if(present)pcm.voiceWaveBank_[1].pcm.assign(80,4000);
         Details detail;u=measure(pcm,true,&detail);
         const auto& r=detail.groups.begin()->first;
+        require(r.pcmTl==28&&r.pcmAr==15&&r.pcmDr==4&&r.pcmSl==7&&r.pcmSr==2&&r.pcmRr==9,
+                "balance detail retains all requested PCM level/envelope fields");
+        require(r.pcmEnvelopeApplied==(!rom&&present&&ep>0?1:0),
+                "only an instantiated WT voice applies its PCM envelope, not FM fallback or EP0");
         if(rom||!present) {
             require(u.fm==1&&u.fallback==1&&u.bound.al==0&&u.requested.al==1&&u.romSource==rom&&u.ramSource==!rom,"requested PCM metadata differs from fallback synthesis");
             require(r.reason==(rom?"explicit_rom_wave":"missing_ram_wave")&&r.wave==1&&r.definition==0,
@@ -350,7 +365,7 @@ int audit(const fs::path& root,const fs::path& report,bool details) {
         std::cerr<<"Report path identifies an input file; refusing overwrite\n";return 2;
     }
     std::ofstream out(report,std::ios::binary|std::ios::trunc);if(!out)return 2;
-    if(details)out<<"file\tkind\tinitialized\tcomplete\tafter_bound\tdetail_overflow\tchannel\tsource_track\tbank_msb\tbank_lsb\tprogram\tnote\tdefinition\twave_id\tmodern\treason\tsubstitute\tcount\tfirst_seconds\tlast_seconds\trequested_al\trequested_fixed\trequested_dt\trequested_sram\twave_binding\twave_source_track\tlegacy_mwa_tracks\n";
+    if(details)out<<"file\tkind\tinitialized\tcomplete\tafter_bound\tdetail_overflow\tchannel\tsource_track\tbank_msb\tbank_lsb\tprogram\tnote\tdefinition\twave_id\tmodern\treason\tsubstitute\tcount\tfirst_seconds\tlast_seconds\trequested_al\trequested_fixed\trequested_dt\trequested_sram\twave_binding\twave_source_track\tlegacy_mwa_tracks\trequested_pcm_tl\trequested_pcm_ar\trequested_pcm_dr\trequested_pcm_sl\trequested_pcm_sr\trequested_pcm_rr\tpcm_envelope_applied\n";
     else out<<"file\tinitialized\tcomplete\tdefinitions\trequested_defs\tbound_defs\tnotes\tafter_bound\tzero_velocity\timmutable_silent\tfm\twt\trecorded\tatr\tno_instance\tfallback\trom_source_fallback\tram_source_fallback\tmissing_recorded\tep_zero\trequested_al\tbound_al\trequested_fixed\tbound_fixed\trequested_dt\tbound_dt\trequested_sram\tbound_sram\n";
     bool overflow=false;
     for(const auto& path:paths) {
@@ -365,13 +380,15 @@ int audit(const fs::path& root,const fs::path& report,bool details) {
                 <<u.complete<<'\t'<<u.afterBound<<'\t'<<d.overflow;};
             // Always emit a summary, including valid files with no note routes.
             prefix("summary");out<<"\t-1\t-1\t-1\t-1\t-1\t-1\t-1\t-1\t-1\tsummary\t-\t"
-                <<u.notes<<"\t0\t0\t0\t0\t0\t0\t-\t-1\t0\n";
+                <<u.notes<<"\t0\t0\t0\t0\t0\t0\t-\t-1\t0\t-1\t-1\t-1\t-1\t-1\t-1\t-1\n";
             for(const auto& [r,n]:d.groups) {
                 prefix("route");out<<'\t'<<r.channel<<'\t'<<r.source<<'\t'<<r.bankMsb<<'\t'<<r.bankLsb
                     <<'\t'<<r.program<<'\t'<<r.note<<'\t'<<r.definition<<'\t'<<r.wave<<'\t'<<r.modern
                     <<'\t'<<r.reason<<'\t'<<r.substitute<<'\t'<<n.count<<'\t'<<double(n.first)/44100
                     <<'\t'<<double(n.last)/44100<<'\t'<<r.al<<'\t'<<r.fixed<<'\t'<<r.dt<<'\t'<<r.sram
-                    <<'\t'<<r.waveBinding<<'\t'<<r.waveSource<<'\t'<<r.legacyMwaTracks<<'\n';
+                    <<'\t'<<r.waveBinding<<'\t'<<r.waveSource<<'\t'<<r.legacyMwaTracks
+                    <<'\t'<<r.pcmTl<<'\t'<<r.pcmAr<<'\t'<<r.pcmDr<<'\t'<<r.pcmSl
+                    <<'\t'<<r.pcmSr<<'\t'<<r.pcmRr<<'\t'<<r.pcmEnvelopeApplied<<'\n';
             }
             overflow|=d.overflow!=0;
         } else {
