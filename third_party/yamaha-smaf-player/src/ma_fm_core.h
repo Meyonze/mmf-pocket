@@ -97,6 +97,9 @@ struct FmVoicePatch {
     static const FmVoicePatch& gmModernApprox(int program);
     bool modernTimbre = false; // related-chip feedback/tremolo; legacy defaults unchanged
     bool panEnabled = false; // Channel Pan Off: authored pan overrides even at centre
+    // Authored sample amplitude controls, separate from synthetic excitation.
+    bool outputEnvelopeEnabled = false;
+    FmOpPatch outputEnvelope{};
 };
 
 // ── envelope generator (adsr, exponential, chip-style discrete rates) ───────
@@ -227,6 +230,7 @@ public:
     bool tickSineSubframes(float* output, int factor,
                           FmSubframeMath math = FmSubframeMath::Exact);
     bool  active() const { return active_; }
+    bool usesOutputEnvelope() const { return patch_.outputEnvelopeEnabled; }
     // Exact zero gain or provably silent carriers, never a level threshold.
     // Used only at score EOF, after future controllers/notes are exhausted;
     // this query does not retire slots or change voice-allocation policy.
@@ -241,6 +245,8 @@ public:
     int   note_   = -1;
 private:
     FmVoicePatch patch_{};
+    FmEnvelope outputEnvelope_;
+    float outputLevel_ = 1.0f, outputFrameGain_ = 1.0f;
     std::array<FmOperator, 4> ops_{};
     double sampleRate_ = 48000.0;
     float  velocity_ = 1.0f;

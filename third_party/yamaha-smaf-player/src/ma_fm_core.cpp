@@ -701,6 +701,12 @@ void FmVoice::noteOn(const FmVoicePatch& patch, double freqHz, float velocity) {
     densityFactor_ = 8; densityPhase_ = -1;
     nestedDensityFactor_ = -1; nestedDensityPhase_ = nestedDensityVibrato_ = -1;
     patch_ = patch;
+    outputFrameGain_ = outputLevel_ = 1.0f;
+    if (patch.outputEnvelopeEnabled) {
+        outputEnvelope_.configure(patch.outputEnvelope, sampleRate_);
+        outputEnvelope_.keyOn();
+        outputLevel_ = float(tlToGain(patch.outputEnvelope.tl));
+    }
     fourOp_ = patch.fourOp;
     algo_ = patch.algorithm & 7;
     feedback_ = patch.feedback;
@@ -760,6 +766,7 @@ void FmVoice::noteOn(const FmVoicePatch& patch, double freqHz, float velocity) {
 
 void FmVoice::noteOff(bool holdOn) {
     keyOffRequested_ = true;
+    if (patch_.outputEnvelopeEnabled) outputEnvelope_.keyOff(holdOn);
     int nops = fourOp_ ? 4 : 2;
     for (int i = 0; i < nops; ++i) ops_[i].noteOff(holdOn);
     updateReleaseState_();
@@ -767,12 +774,14 @@ void FmVoice::noteOff(bool holdOn) {
 
 void FmVoice::updateReleaseState_() {
     released_ = keyOffRequested_;
+    if (patch_.outputEnvelopeEnabled && outputEnvelope_.keyOffDeferred()) released_ = false;
     const int nops = fourOp_ ? 4 : 2;
     for (int i = 0; i < nops; ++i)
         if ((kCarrierMasks[algo_] & (1u << i)) && ops_[i].keyOffDeferred()) released_ = false;
 }
 
 bool FmVoice::silentForCurrentNote() const {
+    if (patch_.outputEnvelopeEnabled && outputEnvelope_.silentForCurrentNote()) return true;
     const int nops = fourOp_ ? 4 : 2;
     // Public synthetic patches may retain operators outside their setup count.
     // Never certify such an incomplete graph as permanently silent.
@@ -786,6 +795,7 @@ bool FmVoice::silentForCurrentNote() const {
 }
 
 bool FmVoice::muted() const {
+    if (patch_.outputEnvelopeEnabled && outputEnvelope_.silentForCurrentNote()) return true;
     if (velocity_ == 0.0f || volume_ == 0.0f) return true;
     const int nops = fourOp_ ? 4 : 2;
     for (int i = 0; i < nops; ++i)
@@ -797,6 +807,7 @@ bool FmVoice::muted() const {
 }
 
 void FmVoice::setHold(bool on) {
+    if (patch_.outputEnvelopeEnabled) outputEnvelope_.setHold(on);
     const int nops = fourOp_ ? 4 : 2;
     for (int i = 0; i < nops; ++i) ops_[i].setHold(on);
     updateReleaseState_();
@@ -830,6 +841,8 @@ float FmVoice::modOp_(int i, double extModCycles) {
 
 float FmVoice::tick() {
     if (!active_) return 0.0f;
+    if (patch_.outputEnvelopeEnabled)
+        outputFrameGain_ = outputEnvelope_.advance() * outputLevel_;
     // advance the voice LFO once; every VIB/AM-enabled operator reads it.
     lfoPhase_ += lfoInc_;
     if (lfoPhase_ >= 1.0) lfoPhase_ -= 1.0;
@@ -898,12 +911,14 @@ float FmVoice::tick() {
     for (int i = 0; i < nops; ++i)
         if ((kCarrierMasks[algo_] & (1u << i)) && !ops_[i].finished()) { anyLive = true; break; }
     if (!anyLive) active_ = false;
+    if (patch_.outputEnvelopeEnabled && outputEnvelope_.isFinished()) active_ = false;
     // A Hold-deferred carrier can finish naturally while another carrier
     // continues its release. Refresh only voices whose key-off is still held,
     // so the remaining tail becomes eligible for release-first allocation.
     if (keyOffRequested_ && !released_) updateReleaseState_();
 
     float result = float(out * velocity_ * volume_ * 0.7);
+    if (patch_.outputEnvelopeEnabled) result *= outputFrameGain_;
     recentLevel_ += (std::fabs(result) - recentLevel_) * 0.01f;
     return result;
 }
@@ -1044,6 +1059,7 @@ template<bool Fast> bool FmVoice::tickSineSubframesImpl_(float* output, int fact
                 else if constexpr (Algorithm == 6) combined = (double(values[0][sub - 1]) + double(values[3][sub - 1])) * .5;
                 else combined = (double(values[0][sub - 1]) + double(values[2][sub - 1]) + double(values[3][sub - 1])) * .4;
                 output[sub - 1] = float(combined * velocity_ * volume_ * .7);
+                if (patch_.outputEnvelopeEnabled) output[sub - 1] *= outputFrameGain_;
             }
         };
         // supportsSineSubframes() admits exactly these topologies.
@@ -1081,6 +1097,7 @@ template<bool Fast> bool FmVoice::tickSineSubframesImpl_(float* output, int fact
             : mixed ? (double(values[0]) + double(values[2]) + double(values[3])) * .4
             : pairs ? (double(values[1]) + double(values[3])) * .5 : double(values[1]);
         output[sub - 1] = float(combined * velocity_ * volume_ * .7);
+        if (patch_.outputEnvelopeEnabled) output[sub - 1] *= outputFrameGain_;
     }
     output[factor - 1] = native;
     return true;
@@ -1210,8 +1227,10 @@ template<bool Fast> bool FmVoice::tickNestedSubframesImpl_(float* target,int fac
         }
 #endif
     }
-    for(size_t sub=1;sub<factor;++sub)
+    for(size_t sub=1;sub<factor;++sub) {
         output[sub-1]=float((double(rows[0][sub-1])+double(rows[3][sub-1]))*.5*velocity_*volume_*.7);
+        if (patch_.outputEnvelopeEnabled) output[sub-1] *= outputFrameGain_;
+    }
     output.back()=native;return true;
 }
 

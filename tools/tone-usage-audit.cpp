@@ -111,6 +111,8 @@ Usage measure(MaPlayer& p,bool initialized,Details* details=nullptr) {
                     r.pcmTl=env.tl;r.pcmAr=env.ar;r.pcmDr=env.dr;
                     r.pcmSl=env.sl;r.pcmSr=env.sr;r.pcmRr=env.rr;
                     r.pcmEnvelopeApplied=pcm>audio?1:0;
+                    if(fm)for(size_t i=0;i<p.pool_.size();++i)
+                        if(p.poolNoteId_[i]==e.noteId&&p.pool_[i].usesOutputEnvelope())r.pcmEnvelopeApplied=1;
                 }
                 Gaps g;gap(*selected,g);r.al=g.al;r.fixed=g.fixed;r.dt=g.dt;r.sram=g.sram;
             }
@@ -215,8 +217,8 @@ void selfTest() {
         const auto& r=detail.groups.begin()->first;
         require(r.pcmTl==28&&r.pcmAr==15&&r.pcmDr==4&&r.pcmSl==7&&r.pcmSr==2&&r.pcmRr==9,
                 "balance detail retains all requested PCM level/envelope fields");
-        require(r.pcmEnvelopeApplied==(!rom&&present&&ep>0?1:0),
-                "only an instantiated WT voice applies its PCM envelope, not FM fallback or EP0");
+        require(r.pcmEnvelopeApplied==(rom||(present&&ep>0)?1:0),
+                "WT and known-ROM percussion retain PCM envelopes; missing RAM and EP0 do not");
         if(rom||!present) {
             require(u.fm==1&&u.fallback==1&&u.bound.al==0&&u.requested.al==1&&u.romSource==rom&&u.ramSource==!rom,"requested PCM metadata differs from fallback synthesis");
             require(r.reason==(rom?"explicit_rom_wave":"missing_ram_wave")&&r.wave==1&&r.definition==0,
