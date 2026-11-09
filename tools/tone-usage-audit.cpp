@@ -217,8 +217,8 @@ void selfTest() {
         const auto& r=detail.groups.begin()->first;
         require(r.pcmTl==28&&r.pcmAr==15&&r.pcmDr==4&&r.pcmSl==7&&r.pcmSr==2&&r.pcmRr==9,
                 "balance detail retains all requested PCM level/envelope fields");
-        require(r.pcmEnvelopeApplied==(rom||(present&&ep>0)?1:0),
-                "WT and known-ROM percussion retain PCM envelopes; missing RAM and EP0 do not");
+        require(r.pcmEnvelopeApplied==(!rom&&present&&ep>0?1:0),
+                "only the actual WT source uses its authored PCM envelope by default");
         if(rom||!present) {
             require(u.fm==1&&u.fallback==1&&u.bound.al==0&&u.requested.al==1&&u.romSource==rom&&u.ramSource==!rom,"requested PCM metadata differs from fallback synthesis");
             require(r.reason==(rom?"explicit_rom_wave":"missing_ram_wave")&&r.wave==1&&r.definition==0,

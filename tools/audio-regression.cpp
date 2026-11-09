@@ -320,8 +320,8 @@ void checkNoCareDrumFallback() {
         0x32,0xc8,0,0,8,0xf3,0xb1,16,0,0,0,13,249,21,219,0x86});
     check(renderAll(rom)!=percussion,"known ROM crash uses waveform identity, not the mapped high-key hat");
     auto quietRom=rom; quietRom.tracks[0].setupData[19]=uint8_t(40<<2);
-    check(std::fabs(firstBlockPeak(quietRom)/firstBlockPeak(rom)-std::pow(10.,-27./20))<1e-5,
-          "known ROM percussion retains the authored27dB relative level difference");
+    check(renderAll(rom)==renderAll(quietRom),
+          "uncalibrated PCM attenuation is not layered onto the independently voiced fallback");
 }
 
 void checkModernTimbres() {

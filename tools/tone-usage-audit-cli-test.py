@@ -69,8 +69,7 @@ class ToneUsageCliTest(unittest.TestCase):
                 for column, value in zip(('tl', 'ar', 'dr', 'sl', 'sr', 'rr'), expected_envelope):
                     self.assertEqual(int(route['requested_pcm_' + column]), value)
                 self.assertEqual(int(route['pcm_envelope_applied']),
-                                 int(case['kind'] == 'ram' or (case['kind'] == 'rom'
-                                     and 0 <= case.get('wave_id', -1) < 22)) if pcm else -1)
+                                 int(case['kind'] == 'ram') if pcm else -1)
                 for column, value in (('channel', 0), ('source_track', 0), ('bank_msb', case['bank']),
                                       ('bank_lsb', 0), ('program', case['program']), ('note', case['note']),
                                       ('wave_id', case.get('wave_id', -1)), ('count', 1), ('modern', 1)):

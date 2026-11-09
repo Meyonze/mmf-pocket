@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 namespace romPercussionEnvelope {
+// The envelope component remains explicitly opt-in. Normal score playback
+// preserves pre-r92 substitute balance; genuine PCM source validation is pending.
 void test() {
     // The unwrapped recipe is an independent excitation oracle. The authored
     // envelope must attenuate its final output, never its FM modulation inputs.
@@ -66,15 +68,15 @@ void test() {
                 0x1f,0x40,0,0,0x08,0x90,uint8_t(ar<<4),uint8_t(tl<<2),0,0,0,0,0,0,80,uint8_t((rom?128:0)|wave)};
             setVoice(f,voice);return f;};
         const auto loud=withLevel(0,15),quiet=withLevel(12,15),stopped=withLevel(0,0);
+        check(renderAll(loud)==renderAll(quiet)&&renderAll(loud)==renderAll(stopped),
+              "default substitutes retain the pre-r92 balance until genuine PCM sources are available");
         if(rom&&wave<22){
-            check(std::fabs(firstBlockPeak(quiet)/firstBlockPeak(loud)-std::pow(10.,-9./20))<1e-5,"actual ROM drum path retains authored9dB attenuation");
-            check(firstBlockPeak(stopped)==0,"authored AR0 silences ROM drum substitute");
             const auto expected=renderAll(quiet);
             for(int block:{1,1024})check(renderAll(quiet,block)==expected,"ROM envelope independent of output block size");
             MaPlayer player;check(player.init(quiet,8000),"wrapped seek initializes");
             check(silentAttackRegression::drain(player,257)==expected,"initial wrapped stream matches");
             player.seekToStart();check(silentAttackRegression::drain(player,257)==expected,"wrapped seek restarts authored envelope");
-        }else check(renderAll(loud)==renderAll(quiet)&&renderAll(loud)==renderAll(stopped),"melodic/unknown ROM and missing RAM retain existing behavior");
+        }
         ++cases;
     }
     std::cout<<"ROM percussion authored envelope checks: "<<cases<<" PASS\n";

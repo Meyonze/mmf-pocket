@@ -2011,9 +2011,10 @@ void MaPlayer::fireEvent_(const Ev& e) {
                 // Some files select a handset-ROM PCM voice but do not carry
                 // the referenced waveform. The proprietary ROM is deliberately
                 // not bundled, so use the built-in FM approximation instead of
-                // turning every note into silence. Known ROM percussion keeps
-                // authored amplitude controls in a separate output envelope
-                // below; other substitutes retain their compatibility policy.
+                // turning every note into silence. The synthetic excitation
+                // already has its own level/envelope. Do not layer the missing
+                // sample's amplitude controls onto it without a calibrated
+                // source: this changed balance in the r92 listening trial.
                 if(rv->valid && rv->pcm.rom && c.modernTimbre) missingRom=rv;
                 // Preserve the same custom-drum classification used by
                 // resolveVoice_/startPcm_ when a selected PCM wave is absent.
@@ -2035,13 +2036,6 @@ void MaPlayer::fireEvent_(const Ev& e) {
                 : c.modernTimbre ? FmVoicePatch::gmModernApprox(c.program)
                                 : FmVoicePatch::gmApprox(c.program);
             patch.modernTimbre=c.modernTimbre;
-            // Known ROM percussion keeps its authored sample amplitude
-            // controls. Do not alter FM modulator TL or replace the synthetic
-            // excitation's own decay: apply a separate output envelope.
-            if (romPatch && missingRom->pcm.waveId < 22) {
-                patch.outputEnvelopeEnabled = true;
-                patch.outputEnvelope = missingRom->pcm.env;
-            }
             int slot = -1;
             // HandyPhone score parts are fixed monophonic hardware parts. A
             // new note retriggers that part's slot; keeping its released voice
