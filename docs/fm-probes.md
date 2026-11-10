@@ -124,7 +124,7 @@ in this project. The parser does not report EOS as an event, so EOS timing is
 checked by the separate byte decoder and the project's score endpoint. That old
 parser is not a complete format conformance validator.
 
-Handset and Galamelo acceptance, FM envelope/rate accuracy, and reference audio
+Handset and other player acceptance, FM envelope/rate accuracy, and reference audio
 remain unverified. The generated MMFs contain no reference WAVs: a local render
 is a candidate recording, not a synthesis oracle. Code names such as `sine` and
 `vibrato-fast` describe the authored parameters; physical oscillator and LFO

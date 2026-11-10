@@ -58,7 +58,7 @@ their exact bytes; do not replace their captured recordings.
 All26 pass eight generator checks with both the native parser/render checker
 and pinned independent go-smaf parser enabled. Validation covers fields,
 events, timing, complete container lengths/CRC and native audible binding.
-It does not validate hardware waveform accuracy or acceptance by Galamelo.
+It does not validate hardware waveform accuracy or acceptance by other players.
 
 The investigation package includes a self-authored PNG/SVG curve comparison,
 CSV values and its plotting script. They show continuous analytic models, not
