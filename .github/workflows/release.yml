@@ -111,10 +111,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "signed-files-${GITHUB_RUN_ID}" --repo "$GITHUB_REPOSITORY" \
-            --draft --target "$RELEASE_COMMIT" --title "Verified signed files ${GITHUB_RUN_ID}" \
-            --notes "Signed replacement files; not a public release." \
-            "$RUNNER_TEMP/mmf-public-release/"*
+          gh release upload "signed-files-${RELEASE_TAG}-${RELEASE_COMMIT}" \
+            --repo "$GITHUB_REPOSITORY" --clobber "$RUNNER_TEMP/mmf-public-release/"*
 
       - name: Publish verified APK and checksum
         if: ${{ !inputs.artifact_only }}
