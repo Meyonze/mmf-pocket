@@ -3,6 +3,7 @@ package app.mmfpocket.player;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.ComponentName;
+import android.content.ActivityNotFoundException;
 import android.content.Intent;
 import android.content.res.ColorStateList;
 import android.database.Cursor;
@@ -14,7 +15,10 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.provider.DocumentsContract;
+import android.text.SpannableString;
+import android.text.Spanned;
 import android.text.TextUtils;
+import android.text.style.StyleSpan;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
@@ -187,9 +191,12 @@ public final class MainActivity extends Activity {
         titleRow.setGravity(Gravity.CENTER_VERTICAL);
 
         TextView title = new TextView(this);
-        title.setText(getString(R.string.app_name));
+        SpannableString wordmark = new SpannableString(getString(R.string.app_name));
+        wordmark.setSpan(new StyleSpan(Typeface.BOLD), 0, 3,
+                Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        title.setText(wordmark);
         title.setTextSize(22);
-        title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        title.setTypeface(Typeface.DEFAULT, Typeface.NORMAL);
         titleRow.addView(title, new LinearLayout.LayoutParams(
                 0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
 
@@ -220,6 +227,23 @@ public final class MainActivity extends Activity {
         versionLabel.setTextColor(0xFF757575);
         versionLabel.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
         versionLabel.setPadding(dp(8), 0, 0, 0);
+        versionLabel.setPaintFlags(versionLabel.getPaintFlags()
+                | android.graphics.Paint.UNDERLINE_TEXT_FLAG);
+        versionLabel.setContentDescription(getString(R.string.check_updates_description,
+                BuildConfig.VERSION_NAME)
+                + (BuildConfig.DEBUG ? "（長押し：再生WAVを保存）" : ""));
+        versionLabel.setFocusable(true);
+        versionLabel.setOnClickListener(view -> {
+            Intent intent = new Intent(Intent.ACTION_VIEW,
+                    Uri.parse("https://github.com/Meyonze/mmf-pocket/releases/latest"));
+            intent.addCategory(Intent.CATEGORY_BROWSABLE);
+            try {
+                startActivity(intent);
+            } catch (ActivityNotFoundException exception) {
+                Toast.makeText(this, R.string.update_browser_unavailable,
+                        Toast.LENGTH_LONG).show();
+            }
+        });
         titleRow.addView(versionLabel, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.MATCH_PARENT));
