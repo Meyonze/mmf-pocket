@@ -14,6 +14,10 @@ on:
         description: Publish after verification (off keeps a signed draft)
         type: boolean
         default: true
+      artifact_only:
+        description: Sign and verify only; upload artifacts without changing releases or tags
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -93,7 +97,17 @@ jobs:
           --state "$RUNNER_TEMP/mmf-release-state.json"
           --output "$RUNNER_TEMP/mmf-public-release"
 
+      - name: Upload verified signed files without publishing
+        if: ${{ inputs.artifact_only }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: signed-release
+          path: ${{ runner.temp }}/mmf-public-release/
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Publish verified APK and checksum
+        if: ${{ !inputs.artifact_only }}
         env:
           GH_TOKEN: ${{ github.token }}
           PUBLISH_RELEASE: ${{ inputs.publish }}

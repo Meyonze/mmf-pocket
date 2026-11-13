@@ -49,4 +49,6 @@
     <string name="selected_folder">フォルダ: %1$s</string>
     <string name="internal_storage">内部ストレージ</string>
     <string name="selected_folder_fallback">選択済み</string>
+    <string name="check_updates_description">バージョン %1$s。更新を確認（ブラウザでGitHubの最新版ページを開きます）</string>
+    <string name="update_browser_unavailable">ブラウザを開けませんでした。ブラウザをインストールしてからお試しください。</string>
 </resources>
