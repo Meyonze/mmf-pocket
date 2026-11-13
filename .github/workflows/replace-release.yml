@@ -1,0 +1,43 @@
+name: Replace verified 1.6.8 APK
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+  actions: read
+concurrency:
+  group: signed-release-v1.6.8
+  cancel-in-progress: false
+jobs:
+  replace:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: Meyonze/mmf-pocket
+    steps:
+      - name: Download and validate signed staging files
+        run: |
+          mkdir signed
+          gh release download signed-files-v1.6.8-c7bf319d01691080e4150cecedde680906fa2b65 --dir signed
+          cd signed
+          sha256sum -c SHA256SUMS.txt
+          python3 - <<'PY'
+          import json, hashlib, subprocess
+          p = json.load(open('release-proof.json'))
+          assert p['commit'] == 'c7bf319d01691080e4150cecedde680906fa2b65'
+          assert p['version'] == '1.6.8'
+          assert p['certificate_sha256'] == '1C79EF3491BD915618F989E053C29648AF1AF0910D9E7150919D0D64D896C59E'
+          assert p['apk_sha256'] == '97d2b500757526c1ae4a22650333191585d9fd57d51c58f7db2d91058b2b22de'
+          assert hashlib.sha256(open('MMF-Pocket-1.6.8.apk', 'rb').read()).hexdigest() == p['apk_sha256']
+          ci = json.loads(subprocess.check_output(['gh', 'api', 'repos/Meyonze/mmf-pocket/actions/runs/' + str(p['ci_run_id'])]))
+          assert ci['conclusion'] == 'success' and ci['head_sha'] == p['commit']
+          PY
+      - name: Replace APK and checksum and verify downloads
+        run: |
+          gh release upload v1.6.8 signed/MMF-Pocket-1.6.8.apk signed/SHA256SUMS.txt --clobber
+          mkdir verified
+          gh release download v1.6.8 --dir verified
+          cmp signed/MMF-Pocket-1.6.8.apk verified/MMF-Pocket-1.6.8.apk
+          cmp signed/SHA256SUMS.txt verified/SHA256SUMS.txt
+          cd verified
+          sha256sum -c SHA256SUMS.txt
