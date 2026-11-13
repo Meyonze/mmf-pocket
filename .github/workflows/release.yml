@@ -106,6 +106,16 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+      - name: Stage verified signed files in a draft release
+        if: ${{ inputs.artifact_only }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "signed-files-${GITHUB_RUN_ID}" --repo "$GITHUB_REPOSITORY" \
+            --draft --target "$RELEASE_COMMIT" --title "Verified signed files ${GITHUB_RUN_ID}" \
+            --notes "Signed replacement files; not a public release." \
+            "$RUNNER_TEMP/mmf-public-release/"*
+
       - name: Publish verified APK and checksum
         if: ${{ !inputs.artifact_only }}
         env:
