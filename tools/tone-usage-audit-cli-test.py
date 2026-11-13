@@ -69,12 +69,55 @@ class ToneUsageCliTest(unittest.TestCase):
                                       ('wave_id', case.get('wave_id', -1)), ('count', 1), ('modern', 1)):
                     self.assertEqual(int(route[column]), value)
                 self.assertEqual(route['definition'], '-1' if case['kind'] == 'none' else '0')
+                self.assertEqual(route['requested_al_registers'], '-')
                 self.assertEqual(float(route['first_seconds']), 0.25)
                 self.assertEqual(float(route['last_seconds']), 0.25)
                 for column in ('requested_al', 'requested_fixed', 'requested_dt', 'requested_sram'):
                     self.assertEqual(route[column], '0')
                 self.assertEqual(hashlib.sha256((self.inputs / case['file']).read_bytes()).hexdigest(),
                                  case['sha256'])
+
+    def test_al_registers_from_original_wire_image(self):
+        # Original expanded MA7 2-op + AL image, no vendor tone or melody.
+        operator = bytes((0, 0x90, 0xf0, 0x20, 0, 0, 0, 0, 0, 0x10))
+        tail = bytes((31, 0xbd, 0, 1, 1, 2, 2, 3, 3, 4, 31, 255,
+                      0x81, 2, 0x83, 4))
+        image = bytes((2, 0, 0x79, 0)) + operator * 2 + tail
+        setup = PROBES.exclusive(bytes.fromhex('43 79 08 7f 21 00 00 00 00 00') + image)
+        track = bytes((3, 0, 0x10, 0x10)) + bytes(32)
+        track += PROBES.chunk(b'Mtsu', setup)
+        track += PROBES.chunk(b'Mtsq', bytes((0, 0x10, 60, 100, 20, 30, 0xff, 0x2f, 0)))
+        payload = PROBES.chunk(b'MTR\0', track)
+        data = b'MMMD' + struct.pack('>I', len(payload) + 2) + payload
+        source = self.root / 'al.mmf'
+        source.write_bytes(data + struct.pack('>H', binascii.crc_hqx(data, 0xffff) ^ 0xffff))
+        result = self.run_cli(source=source)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        rows = self.read_report()
+        self.assertEqual(rows[0]['requested_al_registers'], '-')
+        routes = [r for r in rows if r['kind'] == 'route']
+        self.assertEqual(len(routes), 1)
+        self.assertEqual(routes[0]['requested_al'], '1')
+        self.assertEqual(routes[0]['requested_al_registers'],
+                         'resonance=31;depth=5;mode=1;frequency=5;reset=1;'
+                         'xof=1;sus=0;key_follow=1;vsl=0;'
+                         'cutoff=1,258,515,772,8191;rates=1,2,3,4')
+        # Presence must not be inferred from nonzero values (nor reset).
+        zero_setup = PROBES.exclusive(bytes.fromhex('43 79 08 7f 21 00 00 00 00 00')
+                                     + image[:-16] + bytes(16))
+        zero_track = track.replace(setup, zero_setup)
+        payload = PROBES.chunk(b'MTR\0', zero_track)
+        data = b'MMMD' + struct.pack('>I', len(payload) + 2) + payload
+        source.write_bytes(data + struct.pack('>H', binascii.crc_hqx(data, 0xffff) ^ 0xffff))
+        result = self.run_cli(source=source)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        route = next(r for r in self.read_report() if r['kind'] == 'route')
+        self.assertEqual(route['requested_al'], '1')
+        self.assertEqual(route['requested_al_registers'],
+                         'resonance=0;depth=0;mode=0;frequency=0;reset=0;'
+                         'xof=0;sus=0;key_follow=0;vsl=0;'
+                         'cutoff=0,0,0,0,0;rates=0,0,0,0')
+
 
     def test_default_aggregate_contract_is_preserved(self):
         result = self.run_cli(details=False)

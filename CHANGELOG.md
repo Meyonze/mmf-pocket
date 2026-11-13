@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.6.8 - 2026-11-13
+
+- Refine the extreme-rate PCM cutoff grid to reduce reconstruction error against
+  the existing filter model. Refresh converted-audio caches.
+- Expose requested AL register values in host diagnostics without applying AL DSP.
+
 ## 1.6.5 - 2026-10-31
 
 - Show embedded MMF song titles and available artist/composer/lyricist/arranger

@@ -20,6 +20,7 @@
 #include <iostream>
 #include <iterator>
 #include <set>
+#include <sstream>
 #include <string>
 using namespace fxchain::smaf;
 namespace fs=std::filesystem;
@@ -56,6 +57,19 @@ struct Details {
         ++found->second.count;found->second.last=sample;
     }
 };
+// Register units only: these are not calibrated Hz, dB or envelope times.
+std::string alRegisters(const AnalogLiteParams& a) {
+    if(!a.present)return "-";
+    std::ostringstream out;
+    out<<"resonance="<<int(a.resonance)<<";depth="<<int(a.depth)
+       <<";mode="<<int(a.mode)<<";frequency="<<int(a.frequency)
+       <<";reset="<<a.reset<<";xof="<<a.xof<<";sus="<<a.sus
+       <<";key_follow="<<a.keyFollow<<";vsl="<<a.vsl<<";cutoff=";
+    for(size_t i=0;i<a.cutoff.size();++i){if(i)out<<',';out<<a.cutoff[i];}
+    out<<";rates=";
+    for(size_t i=0;i<a.rates.size();++i){if(i)out<<',';out<<int(a.rates[i]);}
+    return out.str();
+}
 void gap(const ParsedVoice& v,Gaps& g) {
     g.al+=v.al.present;
     bool fixed=false,dt=false,sram=false;
@@ -350,7 +364,7 @@ int audit(const fs::path& root,const fs::path& report,bool details) {
         std::cerr<<"Report path identifies an input file; refusing overwrite\n";return 2;
     }
     std::ofstream out(report,std::ios::binary|std::ios::trunc);if(!out)return 2;
-    if(details)out<<"file\tkind\tinitialized\tcomplete\tafter_bound\tdetail_overflow\tchannel\tsource_track\tbank_msb\tbank_lsb\tprogram\tnote\tdefinition\twave_id\tmodern\treason\tsubstitute\tcount\tfirst_seconds\tlast_seconds\trequested_al\trequested_fixed\trequested_dt\trequested_sram\twave_binding\twave_source_track\tlegacy_mwa_tracks\n";
+    if(details)out<<"file\tkind\tinitialized\tcomplete\tafter_bound\tdetail_overflow\tchannel\tsource_track\tbank_msb\tbank_lsb\tprogram\tnote\tdefinition\twave_id\tmodern\treason\tsubstitute\tcount\tfirst_seconds\tlast_seconds\trequested_al\trequested_fixed\trequested_dt\trequested_sram\twave_binding\twave_source_track\tlegacy_mwa_tracks\trequested_al_registers\n";
     else out<<"file\tinitialized\tcomplete\tdefinitions\trequested_defs\tbound_defs\tnotes\tafter_bound\tzero_velocity\timmutable_silent\tfm\twt\trecorded\tatr\tno_instance\tfallback\trom_source_fallback\tram_source_fallback\tmissing_recorded\tep_zero\trequested_al\tbound_al\trequested_fixed\tbound_fixed\trequested_dt\tbound_dt\trequested_sram\tbound_sram\n";
     bool overflow=false;
     for(const auto& path:paths) {
@@ -365,13 +379,14 @@ int audit(const fs::path& root,const fs::path& report,bool details) {
                 <<u.complete<<'\t'<<u.afterBound<<'\t'<<d.overflow;};
             // Always emit a summary, including valid files with no note routes.
             prefix("summary");out<<"\t-1\t-1\t-1\t-1\t-1\t-1\t-1\t-1\t-1\tsummary\t-\t"
-                <<u.notes<<"\t0\t0\t0\t0\t0\t0\t-\t-1\t0\n";
+                <<u.notes<<"\t0\t0\t0\t0\t0\t0\t-\t-1\t0\t-\n";
             for(const auto& [r,n]:d.groups) {
                 prefix("route");out<<'\t'<<r.channel<<'\t'<<r.source<<'\t'<<r.bankMsb<<'\t'<<r.bankLsb
                     <<'\t'<<r.program<<'\t'<<r.note<<'\t'<<r.definition<<'\t'<<r.wave<<'\t'<<r.modern
                     <<'\t'<<r.reason<<'\t'<<r.substitute<<'\t'<<n.count<<'\t'<<double(n.first)/44100
                     <<'\t'<<double(n.last)/44100<<'\t'<<r.al<<'\t'<<r.fixed<<'\t'<<r.dt<<'\t'<<r.sram
-                    <<'\t'<<r.waveBinding<<'\t'<<r.waveSource<<'\t'<<r.legacyMwaTracks<<'\n';
+                    <<'\t'<<r.waveBinding<<'\t'<<r.waveSource<<'\t'<<r.legacyMwaTracks<<'\t'
+                    <<(r.definition>=0?alRegisters(p.voiceTable_.at(size_t(r.definition)).al):"-")<<'\n';
             }
             overflow|=d.overflow!=0;
         } else {

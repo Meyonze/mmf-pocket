@@ -135,3 +135,26 @@ not establish which source a handset should use or an audible balance error.
 Unallocated silent/zero-velocity notes and failed recorded/ATR allocations do
 not claim a successful stream binding. Candidate counts are cached per report;
 reporting does not scan all MTRs again for every note.
+
+## Requested AL register diagnostics
+
+`tone-usage-audit --details <MMF-or-folder> <local-report.tsv>` appends
+`requested_al_registers` to the detailed TSV. It describes the selected
+instrument definition, including a PCM definition that falls back to FM.
+It does not describe an applied filter: the renderer still has no calibrated
+AL DSP. The default aggregate report is unchanged.
+
+The field contains semicolon-separated `resonance`, `depth`, `mode`,
+`frequency`, `reset`, `xof`, `sus`, `key_follow`, `vsl`, `cutoff` (five
+comma-separated values) and `rates` (four values). All values are decoded
+register units, not Hz, dB or milliseconds. `reset` is not a filter-enable bit.
+Summary rows and routes without selected AL metadata contain `-`. A zero-filled
+AL image remains distinguishable from an absent image. Silent requested routes
+may have metadata; use `reason` and the aggregate counters to distinguish them
+from instantiated voices. Unused definitions are not reported as note routes.
+
+An original expanded MA7 wire fixture checks these values through the CLI,
+including high cutoff bits and independent flag/rate bits. No handset ROM,
+commercial song, per-song gain correction or guessed filter coefficients are
+included. These diagnostics help identify what to compare once a suitable
+reference recording is available; they do not establish an audible improvement.

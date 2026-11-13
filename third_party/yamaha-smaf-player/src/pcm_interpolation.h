@@ -54,11 +54,13 @@ using DownsampleBank = DownsampleKernelBank<kDownsampleTaps, kCutoffSteps>;
 // Above 4:1 cutoff can round to 16 in float. Keep row 17 as the zero-blend
 // guard so endpoint interpolation preserves its original arithmetic exactly.
 using HighRateBank = DownsampleKernelBank<64, 64, 17>;
-// Above 8:1, bandwidth is at most 1/8. A narrower cutoff grid and eight
-// fractional phases provide the longer kernel without a large shared table.
+// Above 8:1, bandwidth is at most 1/8. A 1/512 cutoff grid reduces
+// interpolation error between cutoff rows; retain eight fractional phases.
+// Shared storage grows by 147456 bytes; the per-sample tap count is unchanged.
 constexpr int kExtremeRateTaps = 128;
 constexpr int kMaxPastSamples = kExtremeRateTaps / 2 - 1;
-using ExtremeRateBank = DownsampleKernelBank<kExtremeRateTaps, 32, 32, 8, 8>;
+using ExtremeRateBank = DownsampleKernelBank<kExtremeRateTaps, 64, 64, 8, 8>;
+static_assert(sizeof(ExtremeRateBank) == 299520, "Keep extreme-rate storage bounded");
 // Only1..1.1 source advances use this bank. Keep cutoff rows58..64 instead
 // of all cutoff rows; row58 brackets64/1.1 and row64 guards the upper end.
 using NearUnityBank = DownsampleKernelBank<64, 64, 64, kDownsamplePhases, 1, 58>;
@@ -71,7 +73,7 @@ inline const DownsampleBank& downsamplingKernels() {
 
 // Higher reduction ratios need a longer source-domain filter. Keep the
 // established 32-tap path exact through 4:1. Reachable rows plus guard occupy 594,432 B;
-// the 128-tap bank below adds 152,064 B, less than the old full 64-tap bank.
+// the 128-tap bank below adds 299,520 B, less than the old full 64-tap bank.
 inline const HighRateBank& highRateKernels() {
     static const HighRateBank bank;
     return bank;

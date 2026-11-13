@@ -199,8 +199,8 @@ void extremeTableAccuracy() {
                     const double error = std::fabs(sample(pcm, position, rate)
                         - reference(pcm, position, rate, 128));
                     maximumError = std::max(maximumError, error);
-                    require(error < 0.003,
-                            "coarse phase/fine cutoff table stays close to independent continuous FIR");
+                    require(error < 0.0005,
+                            "off-grid reconstruction stays within 0.0005 of independent continuous FIR");
                 }
             }
         }
