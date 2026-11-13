@@ -1,0 +1,55 @@
+name: Publish approved update-check APK
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+  actions: read
+concurrency:
+  group: signed-release-v1.6.8
+  cancel-in-progress: false
+jobs:
+  replace:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: Meyonze/mmf-pocket
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify source and unchanged native engine
+        run: |
+          test "$(git rev-parse HEAD:app)" = "$(git rev-parse bc89609fa3c8de21b32c15b37bacb80fea11ab3c:app)"
+          git diff --exit-code c7bf319d01691080e4150cecedde680906fa2b65 bc89609fa3c8de21b32c15b37bacb80fea11ab3c -- third_party app/src/main/cpp app/build.gradle
+      - name: Download and verify approved signed APK
+        run: |
+          mkdir signed
+          gh release download signed-preview-bc89609fa3c8de21b32c15b37bacb80fea11ab3c --dir signed
+          cd signed
+          sha256sum -c SHA256SUMS.txt
+          python3 - <<'PY'
+          import json, hashlib, subprocess
+          from pathlib import Path
+          p = json.load(open('release-proof.json'))
+          assert p['commit'] == 'bc89609fa3c8de21b32c15b37bacb80fea11ab3c' and p['version'] == '1.6.8'
+          assert p['certificate_sha256'] == '1C79EF3491BD915618F989E053C29648AF1AF0910D9E7150919D0D64D896C59E'
+          assert p['apk_sha256'] == 'd42f5733758902e8b5d56362d6cf13625897247e0ad09bdaea355951523d7df4'
+          apk = Path('MMF-Pocket-1.6.8-update-check.apk')
+          assert hashlib.sha256(apk.read_bytes()).hexdigest() == p['apk_sha256']
+          for run, commit in [(43429376409, p['commit']), (43422186649, 'c7bf319d01691080e4150cecedde680906fa2b65')]:
+              ci = json.loads(subprocess.check_output(['gh', 'api', 'repos/Meyonze/mmf-pocket/actions/runs/' + str(run)]))
+              assert ci['conclusion'] == 'success' and ci['head_sha'] == commit
+          apk.rename('MMF-Pocket-1.6.8.apk')
+          Path('SHA256SUMS.txt').write_text(p['apk_sha256'] + '  MMF-Pocket-1.6.8.apk\n')
+          PY
+      - name: Replace APK and checksum and verify published files
+        run: |
+          gh release upload v1.6.8 signed/MMF-Pocket-1.6.8.apk signed/SHA256SUMS.txt --clobber
+          mkdir verified
+          gh release download v1.6.8 --dir verified
+          cmp signed/MMF-Pocket-1.6.8.apk verified/MMF-Pocket-1.6.8.apk
+          cmp signed/SHA256SUMS.txt verified/SHA256SUMS.txt
+          cd verified
+          sha256sum -c SHA256SUMS.txt
