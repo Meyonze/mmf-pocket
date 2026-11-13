@@ -1,130 +1,73 @@
-name: Signed release
-
+name: Signed preview APK
 on:
   workflow_dispatch:
-    inputs:
-      commit:
-        description: Full commit SHA with successful Android CI
-        required: true
-      tag:
-        description: Stable release tag matching versionName
-        required: true
-        default: 'v1.6.7'
-      publish:
-        description: Publish after verification (off keeps a signed draft)
-        type: boolean
-        default: true
-      artifact_only:
-        description: Sign and verify only; upload artifacts without changing releases or tags
-        type: boolean
-        default: false
-
 permissions:
   contents: write
-  actions: read
-
 concurrency:
-  group: signed-release-${{ inputs.tag }}
+  group: signed-preview-${{ github.ref }}
   cancel-in-progress: false
-
 jobs:
-  release:
+  preview:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-    env:
-      RELEASE_COMMIT: ${{ inputs.commit }}
-      RELEASE_TAG: ${{ inputs.tag }}
+    timeout-minutes: 20
     steps:
-      - name: Check out trusted release tooling
+      - name: Check out preview source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.workflow_sha }}
-          path: automation
           persist-credentials: false
-
-      - name: Validate release request
-        run: python3 automation/tools/ci-release.py validate-ref --commit "$RELEASE_COMMIT" --tag "$RELEASE_TAG"
-
-      - name: Check out release source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ inputs.commit }}
-          path: source
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Verify main ancestry, version and exact-commit CI
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: >-
-          python3 automation/tools/ci-release.py prepare --source source
-          --commit "$RELEASE_COMMIT" --tag "$RELEASE_TAG"
-          --state "$RUNNER_TEMP/mmf-release-state.json"
-
-      - name: Check required signing secrets
-        env:
-          MMF_RELEASE_KEYSTORE_BASE64: ${{ secrets.MMF_RELEASE_KEYSTORE_BASE64 }}
-          MMF_RELEASE_STORE_PASSWORD: ${{ secrets.MMF_RELEASE_STORE_PASSWORD }}
-        run: python3 automation/tools/ci-release.py check-secrets
-
       - name: Set up JDK 17
         uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
         with:
           distribution: temurin
           java-version: '17'
-
       - name: Set up Android SDK
         uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
-
       - name: Install Android SDK components
         run: sdkmanager "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018" "cmake;3.22.1"
-
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
-
-      - name: Lint and build unsigned release
-        working-directory: source
+      - name: Check update parsing and version ordering
+        run: |
+          curl -fsSL https://repo.maven.apache.org/maven2/org/json/json/20240303/json-20240303.jar -o "$RUNNER_TEMP/json.jar"
+          echo "3cf6cd6892e32e2b4c1c39e0f52f5248a2f5b37646fdfbb79a66b46b618414ed  $RUNNER_TEMP/json.jar" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/update-tests"
+          javac --release 17 -Xlint:all -encoding UTF-8 -cp "$RUNNER_TEMP/json.jar" -d "$RUNNER_TEMP/update-tests" app/src/main/java/app/mmfpocket/player/UpdateChecker.java tools/UpdateCheckerTest.java
+          java -cp "$RUNNER_TEMP/json.jar:$RUNNER_TEMP/update-tests" app.mmfpocket.player.UpdateCheckerTest
+      - name: Lint and build preview APK
         run: bash gradlew --no-daemon --max-workers=4 lint assembleRelease --stacktrace
-
-      - name: Sign and verify existing public certificate
+      - name: Sign and verify preview with existing public certificate
         env:
           MMF_RELEASE_KEYSTORE_BASE64: ${{ secrets.MMF_RELEASE_KEYSTORE_BASE64 }}
           MMF_RELEASE_STORE_PASSWORD: ${{ secrets.MMF_RELEASE_STORE_PASSWORD }}
           MMF_RELEASE_KEY_PASSWORD: ${{ secrets.MMF_RELEASE_KEY_PASSWORD }}
           MMF_RELEASE_KEY_ALIAS: ${{ vars.MMF_RELEASE_KEY_ALIAS || 'mmf-pocket' }}
-        run: >-
-          python3 automation/tools/ci-release.py sign
-          --state "$RUNNER_TEMP/mmf-release-state.json"
-          --output "$RUNNER_TEMP/mmf-public-release"
-
-      - name: Upload verified signed files without publishing
-        if: ${{ inputs.artifact_only }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: signed-release
-          path: ${{ runner.temp }}/mmf-public-release/
-          if-no-files-found: error
-          retention-days: 7
-
-      - name: Stage verified signed files in a draft release
-        if: ${{ inputs.artifact_only }}
+        run: |
+          python3 - <<'PY'
+          import importlib.util, json, os
+          from pathlib import Path
+          spec = importlib.util.spec_from_file_location('release', 'tools/ci-release.py')
+          release = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(release)
+          name, code = release.version(Path('.'))
+          state = {'commit': os.environ['GITHUB_SHA'], 'tag': 'v' + name, 'version': name,
+                   'version_code': code, 'source': str(Path('.').resolve()),
+                   'ci_run_id': int(os.environ['GITHUB_RUN_ID'])}
+          release.validate_ref(state['commit'], state['tag'])
+          output = Path(os.environ['RUNNER_TEMP']) / 'signed-preview'
+          apk = release.sign(state, output)
+          preview = output / f'MMF-Pocket-{name}-update-check.apk'
+          apk.rename(preview)
+          (output / 'SHA256SUMS.txt').write_text(f'{release.digest(preview)}  {preview.name}\n')
+          proof_path = output / 'release-proof.json'
+          proof = json.loads(proof_path.read_text())
+          proof.update(preview=True, validation='UpdateChecker host tests, Android lint and assembleRelease; full release CI not run')
+          proof_path.write_text(json.dumps(proof, indent=2) + '\n')
+          PY
+      - name: Upload signed preview to prepared draft
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release upload "signed-files-${RELEASE_TAG}-${RELEASE_COMMIT}" \
-            --repo "$GITHUB_REPOSITORY" --clobber "$RUNNER_TEMP/mmf-public-release/"*
-
-      - name: Publish verified APK and checksum
-        if: ${{ !inputs.artifact_only }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PUBLISH_RELEASE: ${{ inputs.publish }}
-        run: |
-          args=(publish --state "$RUNNER_TEMP/mmf-release-state.json" --output "$RUNNER_TEMP/mmf-public-release")
-          if [[ "$PUBLISH_RELEASE" == 'true' ]]; then args+=(--public); fi
-          url=$(python3 automation/tools/ci-release.py "${args[@]}")
-          printf '### Signed release\n\n%s\n\nCommit: `%s`\n' "$url" "$RELEASE_COMMIT" >> "$GITHUB_STEP_SUMMARY"
-
+          gh release upload "signed-preview-${GITHUB_SHA}" --repo "$GITHUB_REPOSITORY" --clobber "$RUNNER_TEMP/signed-preview/"*
       - name: Remove temporary signing material
         if: always()
         run: rm -rf -- "$RUNNER_TEMP"/mmf-sign-*

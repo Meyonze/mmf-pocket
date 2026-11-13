@@ -69,6 +69,8 @@ public final class MainActivity extends Activity {
     private static final String PREF_CONTINUOUS_PLAYBACK = "continuous_playback";
     private static final String PREF_RANDOM_PLAYBACK = "random_playback";
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
+    private final ExecutorService updateWorker = Executors.newSingleThreadExecutor();
+    private boolean checkingForUpdates;
     private final ExecutorService batchWorker = Executors.newSingleThreadExecutor();
     private final Object batchPauseLock = new Object();
     private final AtomicInteger scanGeneration = new AtomicInteger();
@@ -233,17 +235,7 @@ public final class MainActivity extends Activity {
                 BuildConfig.VERSION_NAME)
                 + (BuildConfig.DEBUG ? "（長押し：再生WAVを保存）" : ""));
         versionLabel.setFocusable(true);
-        versionLabel.setOnClickListener(view -> {
-            Intent intent = new Intent(Intent.ACTION_VIEW,
-                    Uri.parse("https://github.com/Meyonze/mmf-pocket/releases/latest"));
-            intent.addCategory(Intent.CATEGORY_BROWSABLE);
-            try {
-                startActivity(intent);
-            } catch (ActivityNotFoundException exception) {
-                Toast.makeText(this, R.string.update_browser_unavailable,
-                        Toast.LENGTH_LONG).show();
-            }
-        });
+        versionLabel.setOnClickListener(view -> checkForUpdates());
         titleRow.addView(versionLabel, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.MATCH_PARENT));
@@ -1457,7 +1449,59 @@ public final class MainActivity extends Activity {
         progressHandler.removeCallbacks(progressUpdater);
         worker.shutdownNow();
         batchWorker.shutdownNow();
+        updateWorker.shutdownNow();
         super.onDestroy();
+    }
+
+    private void checkForUpdates() {
+        if (checkingForUpdates) return;
+        checkingForUpdates = true;
+        Toast.makeText(this, R.string.update_checking, Toast.LENGTH_SHORT).show();
+        updateWorker.execute(() -> {
+            try {
+                UpdateChecker.Release release = UpdateChecker.checkLatest();
+                boolean newer = UpdateChecker.isNewer(release.version, BuildConfig.VERSION_NAME);
+                runOnUiThread(() -> {
+                    checkingForUpdates = false;
+                    if (isFinishing() || isDestroyed()) return;
+                    AlertDialog.Builder dialog = new AlertDialog.Builder(this)
+                            .setTitle(R.string.update_check_title);
+                    if (newer) {
+                        dialog.setMessage(getString(R.string.update_available, release.version))
+                                .setPositiveButton(R.string.update_open_page,
+                                        (ignored, which) -> openReleasePage(release.pageUrl))
+                                .setNegativeButton(R.string.update_not_now, null);
+                    } else {
+                        dialog.setMessage(getString(R.string.update_already_latest,
+                                        BuildConfig.VERSION_NAME))
+                                .setPositiveButton(android.R.string.ok, null);
+                    }
+                    dialog.show();
+                });
+            } catch (IOException | RuntimeException exception) {
+                runOnUiThread(() -> {
+                    checkingForUpdates = false;
+                    if (isFinishing() || isDestroyed()) return;
+                    new AlertDialog.Builder(this)
+                            .setTitle(R.string.update_check_title)
+                            .setMessage(R.string.update_check_failed)
+                            .setPositiveButton(R.string.update_retry,
+                                    (ignored, which) -> checkForUpdates())
+                            .setNegativeButton(android.R.string.cancel, null)
+                            .show();
+                });
+            }
+        });
+    }
+
+    private void openReleasePage(String pageUrl) {
+        Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(pageUrl));
+        intent.addCategory(Intent.CATEGORY_BROWSABLE);
+        try {
+            startActivity(intent);
+        } catch (ActivityNotFoundException exception) {
+            Toast.makeText(this, R.string.update_browser_unavailable, Toast.LENGTH_LONG).show();
+        }
     }
 
     private int dp(int value) {

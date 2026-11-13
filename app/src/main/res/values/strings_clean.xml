@@ -49,6 +49,14 @@
     <string name="selected_folder">フォルダ: %1$s</string>
     <string name="internal_storage">内部ストレージ</string>
     <string name="selected_folder_fallback">選択済み</string>
-    <string name="check_updates_description">バージョン %1$s。更新を確認（ブラウザでGitHubの最新版ページを開きます）</string>
+    <string name="check_updates_description">バージョン %1$s。更新を確認（GitHubに接続します）</string>
     <string name="update_browser_unavailable">ブラウザを開けませんでした。ブラウザをインストールしてからお試しください。</string>
+    <string name="update_check_title">更新の確認</string>
+    <string name="update_checking">GitHubで更新を確認しています…</string>
+    <string name="update_available">新しいバージョン（%1$s）があります。\n最新版のページを開きますか？</string>
+    <string name="update_open_page">ページを開く</string>
+    <string name="update_not_now">今はしない</string>
+    <string name="update_already_latest">最新版を使用しています（%1$s）。</string>
+    <string name="update_check_failed">更新情報を取得できませんでした。通信状況を確認し、しばらくしてから再度お試しください。</string>
+    <string name="update_retry">再試行</string>
 </resources>

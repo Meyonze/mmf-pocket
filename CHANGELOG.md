@@ -2,8 +2,9 @@
 
 ## 1.6.8 - 2026-11-13
 
-- Restyle the header wordmark with bold MMF and regular Pocket. Link the version
-  label to the latest GitHub release in the browser without app network access.
+- Restyle the header wordmark with bold MMF and regular Pocket. Check GitHub for
+  stable updates only when the version label is tapped; offer to open the release
+  page only if a newer version is available. No automatic checks or telemetry.
 - Refine the extreme-rate PCM cutoff grid to reduce reconstruction error against
   the existing filter model. Refresh converted-audio caches.
 - Expose requested AL register values in host diagnostics without applying AL DSP.
