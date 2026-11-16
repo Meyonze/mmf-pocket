@@ -15,8 +15,14 @@ not a measured improvement in handset fidelity or perceived sound quality.
 
 Shared immutable bank storage grows from 299520 to 594432 bytes (+294912,
 288 KiB). There are no additional convolution taps, per-voice buffers or
-per-sample allocations. More table rows must be initialized; Android startup,
-CPU and battery effects have not been measured.
+per-sample allocations. More table rows must be initialized.
+
+Host measurement (x86-64, GCC 13, -O3, shared machine, so noisy): constructing
+the extreme-rate bank took about 2-3 ms before and 4-6 ms after (five runs each).
+`tools/synth-benchmark.cpp` condition `pcm_ratio16_quality` (32 voices, the quick condition above 8:1;
+the 8:1 condition was not separately attributed) had a best-of-five realtime ratio of 5.698
+before and 5.666 after, a difference inside run-to-run variation. These are
+host figures only; Android startup, CPU and battery effects have not been measured.
 
 The complete high-rate resampling suite passes with ASan/UBSan, including the
 existing dynamic-loop, boundary cursor, silent-loop, native-rate and near-native
