@@ -1,5 +1,31 @@
 # Extreme-rate PCM cutoff interpolation
 
+## Next revision: 1/1024 cutoff grid (unreleased)
+
+The extreme-rate bank now uses 129 cutoff rows instead of 65, retaining the
+128 taps, eight fractional phases, window and 8..10 source-advance transition.
+Only the reconstruction path above 8:1 can change. Source timing, loop history,
+envelopes, gains and the conventional/legacy paths retain their existing rules.
+
+The same 240 off-grid cases described below have maximum absolute sample error
+0.000129370, versus 0.000429378 for the released 1/512 grid (about 70% lower).
+The acceptance bound is tightened from 0.0005 to 0.00015; the released grid
+fails that bound. This is an error against the selected independent FIR model,
+not a measured improvement in handset fidelity or perceived sound quality.
+
+Shared immutable bank storage grows from 299520 to 594432 bytes (+294912,
+288 KiB). There are no additional convolution taps, per-voice buffers or
+per-sample allocations. More table rows must be initialized; Android startup,
+CPU and battery effects have not been measured.
+
+The complete high-rate resampling suite passes with ASan/UBSan, including the
+existing dynamic-loop, boundary cursor, silent-loop, native-rate and near-native
+checks. Android builds and physical-device listening for this revision remain
+unverified. The app cache becomes `r91-pcm-grid128-v1` so existing conversions
+cannot hide the new reconstruction. Public version metadata is unchanged.
+
+## Released 1.6.8 baseline: 1/512 cutoff grid
+
 This change refines renderer reconstruction, not handset calibration. Above
 8:1 source advance the existing 128-tap PCM filter uses a cutoff table. Its
 bandwidth grid was 1/256; it is now 1/512. Eight fractional phases, the 128 taps,

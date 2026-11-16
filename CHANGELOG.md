@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Refine PCM reconstruction above 8:1 with a denser cutoff grid. Reduce maximum
+  error in the existing 240 synthetic cases by about 70% against the chosen FIR
+  reference, at a cost of 288 KiB shared storage. Invalidate older WAV caches.
+- Correct the privacy documentation to describe user-initiated GitHub update
+  checks and the Internet permission already present in the current app.
+
 ## 1.6.8 - 2026-11-13
 
 - Restyle the header wordmark with bold MMF and regular Pocket. Check GitHub for
