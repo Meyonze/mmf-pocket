@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Synthetic renderer-quality checks, not handset or ROM calibration.
+#include <cstring>
 #include "smaf_file.h"
 #include "ma_fm_core.h"
 #include "smaf_voice.h"
@@ -186,6 +187,29 @@ void tableEdges() {
     }
 }
 
+// Banks are lazy statics; prepareDownsamplingKernels() only chooses when they
+// are built. Render a sweep before any bank exists, then again after preparing
+// every bank, and require bit-identical samples.
+std::vector<float> lazySweep() {
+    std::vector<int16_t> pcm(2048);
+    for (size_t i = 0; i < pcm.size(); ++i)
+        pcm[i] = int16_t(std::lround(20000 * std::sin(0.37 * double(i)) + 9000 * std::sin(1.91 * double(i))));
+    std::vector<float> out;
+    for (double rate : {0.9, 1.0, 1.03, 1.2, 2.0, 3.9, 4.5, 6.0, 7.9, 8.5, 9.9, 12.0, 40.0, 300.0})
+        for (double fraction : {0.0, 0.173, 0.5, 0.911})
+            out.push_back(pcm_detail::interpolatePcm(pcm.data(), pcm.size(), 700, float(fraction),
+                                                     false, 0, 0, true, rate));
+    return out;
+}
+void lazyBankEquivalence() {
+    const std::vector<float> cold = lazySweep();
+    pcm_detail::prepareDownsamplingKernels(1.5);   // partial, rate-aware
+    pcm_detail::prepareDownsamplingKernels();      // every bank
+    const std::vector<float> warm = lazySweep();
+    require(cold.size() == warm.size() &&
+            std::memcmp(cold.data(), warm.data(), cold.size() * sizeof(float)) == 0,
+            "lazy bank construction leaves resampled output bit-identical");
+}
 void extremeTableAccuracy() {
     double maximumError = 0;
     for (double rate : {10.0, 12.0, 15.99, 16.01, 24.0, 32.0, 64.0, 100.0}) {
@@ -233,6 +257,7 @@ void extremeTableAccuracy() {
 #include "pcm-unity-regression.h"
 #include "pcm-near-nyquist-regression.h"
 int main() {
+    lazyBankEquivalence();
     spectral(); boundaries(); extremeRatios(); tableEdges(); extremeTableAccuracy();
     pcm_dynamic_regression::run(); pcm_boundary_cursor_regression::run();
     pcm_silent_loop_regression::run();

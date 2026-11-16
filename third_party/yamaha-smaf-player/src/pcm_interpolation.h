@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Renderer-quality interpolation, not a model of proprietary handset DSP.
 #pragma once
+#include <limits>
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -89,10 +90,16 @@ inline const NearUnityBank& nearUnityKernels() {
     return bank;
 }
 
-inline void prepareDownsamplingKernels() {
+// Build the downsampling banks a voice is likely to need. Banks are lazy
+// function-local statics, so this only moves one-time construction ahead of
+// rendering and never changes output: a bank not prepared here is built on
+// first use. The argument is the voice's current source advance; one octave of
+// headroom covers ordinary bend and vibrato. Omit it to prepare every bank.
+inline void prepareDownsamplingKernels(double advance = std::numeric_limits<double>::infinity()) {
     (void)downsamplingKernels();
-    (void)highRateKernels();
-    (void)extremeRateKernels();
+    const double reach = advance * 2.0;
+    if (!(reach <= 4.0)) (void)highRateKernels();
+    if (!(reach <= 8.0)) (void)extremeRateKernels();
 }
 
 inline const KernelTable& interpolationKernels() {

@@ -13,6 +13,15 @@ The acceptance bound is tightened from 0.0005 to 0.00015; the released grid
 fails that bound. This is an error against the selected independent FIR model,
 not a measured improvement in handset fidelity or perceived sound quality.
 
+Bank preparation is now rate-aware: `prepareDownsamplingKernels(advance)` builds
+the high-rate bank only if twice the voice's source advance exceeds 4 and the
+extreme-rate bank only if it exceeds 8; the unconditional form remains available.
+The banks are lazy function-local statics, so a bank not prepared early is built
+on first use and output is unchanged (a cold-versus-prepared sweep is compared
+bit for bit in `tools/high-rate-resample-test.cpp`). Songs whose PCM never needs
+the larger banks avoid about 1.2 MB and, by the host figures above, roughly
+8 ms; device effect is unmeasured.
+
 Coverage caveat: those 240 cases use only 0.35, 0.5 and 0.7 cycles per output
 sample (the last exceeds the output Nyquist). A wider host sweep (7 frequencies
 up to 0.5, 14 rates, extra phases and offsets, amplitude 30000) finds the worst
