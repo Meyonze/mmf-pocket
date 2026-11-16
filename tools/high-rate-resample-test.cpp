@@ -206,6 +206,28 @@ void extremeTableAccuracy() {
         }
     }
     std::cout << "128-tap off-grid maximum absolute sample error=" << maximumError << '\n';
+
+    // Wider sweep: frequencies up to 0.9 of the output Nyquist, mid-row rates
+    // and extra phases. The worst error sits here, not in the cases above.
+    double wideMaximum = 0;
+    for (double rate : {10.0, 10.08697, 10.5, 11.0, 12.0, 13.3, 15.99, 16.01, 20.0, 24.0, 32.0, 48.0, 64.0, 100.0}) {
+        for (double frequency : {0.3, 0.35, 0.4, 0.42, 0.45, 0.47, 0.5}) {
+            for (double offset : {0.0, pi / 2, 1.9635}) {
+                std::vector<int16_t> pcm(1024);
+                for (size_t i = 0; i < pcm.size(); ++i)
+                    pcm[i] = int16_t(std::lround(30000 * std::sin(2 * pi * frequency / rate * i + offset)));
+                for (double fraction : {0.037, 0.137, 0.3203, 0.333, 0.731, 0.999}) {
+                    const double position = 256 + fraction;
+                    const double error = std::fabs(sample(pcm, position, rate)
+                        - reference(pcm, position, rate, 128));
+                    wideMaximum = std::max(wideMaximum, error);
+                    require(error < 0.00025,
+                            "wide-sweep reconstruction stays within 0.00025 of independent continuous FIR");
+                }
+            }
+        }
+    }
+    std::cout << "128-tap wide-sweep maximum absolute sample error=" << wideMaximum << '\n';
 }
 #include "pcm-silent-loop-regression.h"
 #include "pcm-unity-regression.h"

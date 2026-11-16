@@ -13,6 +13,18 @@ The acceptance bound is tightened from 0.0005 to 0.00015; the released grid
 fails that bound. This is an error against the selected independent FIR model,
 not a measured improvement in handset fidelity or perceived sound quality.
 
+Coverage caveat: those 240 cases use only 0.35, 0.5 and 0.7 cycles per output
+sample (the last exceeds the output Nyquist). A wider host sweep (7 frequencies
+up to 0.5, 14 rates, extra phases and offsets, amplitude 30000) finds the worst
+error near 0.42-0.45 cycles per output sample at mid-row rates: 0.000220 with the
+1/1024 grid versus 0.000539 with the released 1/512 grid (about 59% lower).
+The test now also gates this sweep at 0.00025; the released grid fails it. An
+independent review reported a supremum of about 2.3e-4 over all sine inputs for
+rates 10..128. The 0.00015 bound and the ~70% figure describe the 240 sampled
+cases only. Errors below 10:1 (64-tap and 32-tap banks) were not changed by this
+revision and are about 7e-3 against the same kind of model in that review, which
+is a reported, not independently re-measured, figure.
+
 Shared immutable bank storage grows from 299520 to 594432 bytes (+294912,
 288 KiB). There are no additional convolution taps, per-voice buffers or
 per-sample allocations. More table rows must be initialized.
