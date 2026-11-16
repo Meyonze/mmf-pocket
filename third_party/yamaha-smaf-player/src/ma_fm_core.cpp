@@ -700,6 +700,7 @@ constexpr double kVm35ModDepth = 4.0;
 void FmVoice::noteOn(const FmVoicePatch& patch, double freqHz, float velocity) {
     densityFactor_ = 8; densityPhase_ = -1;
     nestedDensityFactor_ = -1; nestedDensityPhase_ = nestedDensityVibrato_ = -1;
+    budget = {};
     patch_ = patch;
     fourOp_ = patch.fourOp;
     algo_ = patch.algorithm & 7;

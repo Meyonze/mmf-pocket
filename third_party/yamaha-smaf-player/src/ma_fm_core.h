@@ -192,6 +192,10 @@ enum class FmSubframeMath : uint8_t { Exact, Hermite };
 // ── a playing voice ─────────────────────────────────────────────────────────
 class FmVoice {
 public:
+    // Player-side oversampling budget (adaptive nested FM only), decided at
+    // note-on. grant: 0 undecided, -1 declined for the whole note, >0 latched
+    // factor. units: sub-samples per frame this voice used last frame.
+    struct NestedBudget { int grant = 0; int units = 0; } budget;
     void setSampleRate(double sr) { sampleRate_ = sr; }
     void noteOn(const FmVoicePatch& patch, double freqHz, float velocity);
     void noteOff(bool holdOn = false);

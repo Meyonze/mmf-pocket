@@ -2273,11 +2273,15 @@ template<int Capacity,bool Nested,bool Adaptive> int MaPlayer::renderSineImpl_(f
         std::conditional_t<Adaptive,sine_output::NestedBankInput,Empty> extra;
         constexpr float kMixGain = .32f;
         if (!state.inputFinished) {
+            int unitsTotal = 0;
+            if constexpr(Adaptive) {
+                for (auto& v : pool_) { if (v.active()) unitsTotal += v.budget.units; else v.budget.units = 0; }
+            }
             for (int i = 0; i < kPoolSize; ++i) {
                 auto& voice = pool_[i]; if (!voice.active()) continue;
                 std::array<float, Capacity> samples;
                 int nestedDensity=0;
-                if constexpr(Adaptive)nestedDensity=voice.nestedSineDensityHint();
+                if constexpr(Adaptive)nestedDensity=grantNestedBudget_(voice.budget,voice.nestedSineDensityHint(),unitsTotal-voice.budget.units);
                 const bool boost = state.highBus && (nestedDensity==16||(!nestedDensity&&voice.sineDensityHint()==16));
                 boostedThisFrame = boostedThisFrame || boost;
                 const int density = nestedDensity ? nestedDensity : boost ? 16 : factor;
@@ -2285,6 +2289,11 @@ template<int Capacity,bool Nested,bool Adaptive> int MaPlayer::renderSineImpl_(f
                 if constexpr(Nested)filtered=voice.tickNestedSubframes(samples.data(),density,state.math);
                 else if constexpr(Adaptive)filtered=nestedDensity?voice.tickNestedSubframes(samples.data(),density,state.math):voice.tickSineSubframes(samples.data(),density,state.math);
                 else filtered=density>1&&voice.tickSineSubframes(samples.data(),density,state.math);
+                if constexpr(Adaptive) {
+                    const int units = filtered ? density : 0;
+                    unitsTotal += units - voice.budget.units;
+                    voice.budget.units = units;
+                }
                 if (filtered) {
                     auto* target = boost ? boosted.data() : high.data();
                     if constexpr(Adaptive)if(nestedDensity>=32)target=extra.use(nestedDensity);

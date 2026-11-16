@@ -5,6 +5,10 @@
 - Refine PCM reconstruction above 8:1 with a denser cutoff grid. Reduce maximum
   error in the existing 240 synthetic cases by about 70% against the chosen FIR
   reference, at a cost of 288 KiB shared storage. Invalidate older WAV caches.
+- Prepare high-rate PCM filter banks only for voices that can reach them (output
+  unchanged; banks stay lazy). Add a player-level strong serial FM benchmark and
+  a deterministic 512-unit oversampling budget for the opt-in adaptive nested FM
+  path, which the app does not enable.
 - Correct the privacy documentation to describe user-initiated GitHub update
   checks and the Internet permission already present in the current app.
 

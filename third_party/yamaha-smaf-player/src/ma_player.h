@@ -180,6 +180,23 @@ private:
 
     // ── fm voice pool ────────────────────────────────────────────────────────
     static constexpr int kPoolSize = 32;
+    // Adaptive nested FM may use at most this many oversampled sub-samples per
+    // frame across all filtered voices: the existing r91 worst case (32 x 16).
+    // Counted in factor units, never wall-clock, so output stays reproducible.
+    int nestedBudgetUnits_ = kPoolSize * 16;
+    // Decide a nested voice's factor. Admission happens at note-on only; a
+    // declined voice stays native for the whole note, and a promotion that does
+    // not fit keeps the latched factor (no demotion, no mute).
+    int grantNestedBudget_(FmVoice::NestedBudget& b, int want, int usedByOthers) const {
+        if (b.grant < 0 || want <= 0) return 0;
+        if (b.grant == 0) {
+            if (usedByOthers + want > nestedBudgetUnits_) { b.grant = -1; return 0; }
+            b.grant = want;
+        } else if (want > b.grant && usedByOthers + want <= nestedBudgetUnits_) {
+            b.grant = want;
+        }
+        return b.grant;
+    }
     std::array<FmVoice, kPoolSize> pool_{};
     std::array<float, kPoolSize> poolPan_{};      // live channel pan unless explicitly locked
     std::array<float, kPoolSize> poolPanLeft_{}, poolPanRight_{};
