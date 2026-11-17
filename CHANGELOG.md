@@ -11,6 +11,12 @@
   within about 2 dB. The 16x aliasing policy for serial MA7 voices now uses the
   VM35 bound (both modulators TL24 or higher). Not a hardware calibration, not
   verified by listening on other scores. Invalidate older WAV caches (r92).
+- Apply a generic reverb to MA7 scores that set the CC91 reverb send, per channel.
+  Against one reference rendering, the left/right correlation error dropped from
+  0.26 to 0.13 while the band balance stayed within about 0.1 dB. Scores without a
+  send are bit-identical; Mobile CC91 and CC93 (chorus) stay unsupported. Not the
+  chip's effect and not verified by listening on other scores. Invalidate older
+  WAV caches (r93).
 - Prepare high-rate PCM filter banks only for voices that can reach them (output
   unchanged; banks stay lazy). Add a player-level strong serial FM benchmark and
   a deterministic 512-unit oversampling budget for the opt-in adaptive nested FM

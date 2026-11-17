@@ -121,6 +121,7 @@ bool matchesMa7Center(const std::vector<float>& actual, const std::vector<float>
 #include "ma5-wave-regression.h"
 #include "ma7-pan-regression.h"
 #include "ma7-modulation-regression.h"
+#include "ma7-reverb-regression.h"
 #include "pcm-interpolation-regression.h"
 #include "pcm-downsample-regression.h"
 #include "score-audit-regression.h"
@@ -1480,6 +1481,7 @@ int main() {
     }
     checkMa5NativeWaves();
     checkMa7ModulationDepth();
+    checkMa7Reverb();
     checkMa7ChannelPan();
     checkTimedWaves();
     checkTimedVoices();

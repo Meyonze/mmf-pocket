@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Generic stereo reverb and chorus for the CC91/CC93 sends. Original synthesis
+// Generic stereo reverb for the CC91 send. Original synthesis
 // recipes, not a model of any handset or sound-source chip: the structure and
 // constants are DEV approximations chosen against one reference rendering.
 // Deterministic per-sample processing; no allocation after prepare().
@@ -13,13 +13,12 @@
 
 namespace fxchain::smaf {
 
+inline float flushTiny(float v) { return std::fabs(v) < 1e-20f ? 0.0f : v; }
+
 struct EffectParams {
     double reverbSeconds = 1.6;    // time for the low band to fall by 60 dB
-    double reverbDamping = 0.35;   // 0..1, higher darkens the tail faster
+    double reverbDamping = 0.2;    // 0..1, higher darkens the tail faster
     double reverbPreDelayMs = 12.0;
-    double chorusDelayMs = 14.0;
-    double chorusDepthMs = 3.5;
-    double chorusRateHz = 0.7;
 };
 
 class StereoReverb {
@@ -61,7 +60,7 @@ public:
             auto& buf = ap_[i];
             const float delayed = buf[apPos_[i]];
             const float v = x + 0.6f * delayed;
-            buf[apPos_[i]] = v;
+            buf[apPos_[i]] = flushTiny(v);
             if (++apPos_[i] == buf.size()) apPos_[i] = 0;
             x = delayed - 0.6f * v;
         }
@@ -69,7 +68,7 @@ public:
         std::array<float, kLines> y{};
         for (int i = 0; i < kLines; ++i) {
             const float raw = line_[i][pos_[i]];
-            lp_[i] = (1.0f - damp_) * raw + damp_ * lp_[i];
+            lp_[i] = flushTiny((1.0f - damp_) * raw + damp_ * lp_[i]);
             y[i] = lp_[i] * gain_[i];
         }
         std::array<float, kLines> m = y;
@@ -80,7 +79,7 @@ public:
         // Alternating-sign input weights decorrelate the lines.
         static constexpr float sign[kLines] = {1, -1, 1, 1, -1, 1, -1, -1};
         for (int i = 0; i < kLines; ++i) {
-            line_[i][pos_[i]] = m[i] * norm + x * 0.35f * sign[i];
+            line_[i][pos_[i]] = flushTiny(m[i] * norm + x * 0.35f * sign[i]);
             if (++pos_[i] == line_[i].size()) pos_[i] = 0;
         }
         float l = 0, r = 0;
@@ -95,41 +94,6 @@ private:
     float damp_ = 0.35f;
     std::vector<float> pre_; size_t prePos_ = 0;
     std::array<std::vector<float>, 2> ap_; std::array<size_t, 2> apPos_{};
-};
-
-class StereoChorus {
-public:
-    void prepare(double sampleRate, const EffectParams& p) {
-        sr_ = sampleRate;
-        base_ = p.chorusDelayMs * 0.001 * sampleRate;
-        depth_ = p.chorusDepthMs * 0.001 * sampleRate;
-        inc_ = 2.0 * 3.14159265358979323846 * p.chorusRateHz / sampleRate;
-        const size_t n = size_t(std::ceil(base_ + depth_)) + 4;
-        for (auto& b : buf_) b.assign(n, 0.0f);
-        pos_ = 0; phase_ = 0.0;
-    }
-    void reset() { for (auto& b : buf_) std::fill(b.begin(), b.end(), 0.0f); pos_ = 0; phase_ = 0.0; }
-    void process(float inL, float inR, float& outL, float& outR) {
-        buf_[0][pos_] = inL; buf_[1][pos_] = inR;
-        const size_t n = buf_[0].size();
-        auto tap = [&](int ch, double offset) {
-            double read = double(pos_) - offset;
-            while (read < 0) read += double(n);
-            const size_t i0 = size_t(read) % n, i1 = (i0 + 1) % n;
-            const float f = float(read - std::floor(read));
-            return buf_[ch][i0] * (1.0f - f) + buf_[ch][i1] * f;
-        };
-        // Quadrature LFOs: opposite channels move out of step, widening the image.
-        outL = tap(0, base_ + depth_ * std::sin(phase_));
-        outR = tap(1, base_ + depth_ * std::sin(phase_ + 1.5707963267948966));
-        if (++pos_ == n) pos_ = 0;
-        phase_ += inc_; if (phase_ > 6.283185307179586) phase_ -= 6.283185307179586;
-    }
-
-private:
-    double sr_ = 44100, base_ = 0, depth_ = 0, inc_ = 0, phase_ = 0;
-    std::array<std::vector<float>, 2> buf_;
-    size_t pos_ = 0;
 };
 
 } // namespace fxchain::smaf

@@ -20,6 +20,7 @@
 // output rate directly, so there is no resampling on the synth path.
 
 #include "smaf_file.h"
+#include "ma_effects.h"
 #include "ma_fm_core.h"
 #include "pcm_silence.h"
 #include "smaf_voice.h"
@@ -118,7 +119,7 @@ private:
                            Volume, Pan, Expression, PitchBend, Modulation, PitchBendRange,
                            WaveOn, WaveOff, AtrEnd, AtrNop, AtrVolume, AtrExpression, AtrPan, ScoreNop,
                            RpnMsb, RpnLsb, RpnData, NrpnSelect, Hold, VoiceActivation, WaveActivation,
-                           AllNotesOff, AllSoundOff, ResetControllers, Ma7AudioPan } type;
+                           AllNotesOff, AllSoundOff, ResetControllers, Ma7AudioPan, ReverbSend } type;
         uint16_t ch;
         int16_t  a;   // note / pc / cc-value / bend / wave number
         int16_t  b;   // velocity
@@ -156,6 +157,7 @@ private:
         // MA7/HandyPhone retain the prior policy pending separate calibration.
         bool fixedFmDrumPitch = true;
         float pan = 0.0f;             // -1..+1
+        float reverbSend = 0.0f;      // MA7 CC91 / 127, default off
         bool hold = false;            // Mobile Hold1, default off; Audio/ATR excluded
         double vibratoScale = 0.0;    // MA7 CC1 initial0 OFF; legacy paths retain1
         double bend = 0.0;            // in semitones
@@ -317,6 +319,15 @@ private:
     // gentle output low-pass (2-pole), the MA "analog lite" character: warms the
     // FM and tames the top-octave aliasing of the naive waveforms.
     float lp1L_ = 0, lp1R_ = 0, lp2L_ = 0, lp2R_ = 0, lpCoef_ = 0.0f;
+    // Generic reverb fed by MA7 CC91. Inactive (and bit-identical to the output
+    // without it) until a nonzero send is scheduled; reset on init and seek.
+    StereoReverb reverb_;
+    bool reverbActive_ = false;
+    float reverbPeak_ = 0.0f;     // recent wet-output level, for tail drain
+    static constexpr float kReverbReturn = 2.0f;
+    bool reverbQuiet_() const { return !reverbActive_ || reverbPeak_ < 1e-7f; }
+    void resetReverb_() { reverb_.reset(); reverbActive_ = false; reverbPeak_ = 0.0f; }
+    float sendOf_(int channel) const { return chans_[size_t(unsigned(channel) & 127)].reverbSend; }
     // transparent output peak limiter (instant attack, ~150 ms release).
     float limEnv_ = 0.0f, limRelease_ = 0.9999f;
 
