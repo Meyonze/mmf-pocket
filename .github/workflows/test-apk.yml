@@ -1,0 +1,77 @@
+name: Test APK
+
+# Builds an optimized APK for listening checks. It installs next to a public
+# release (different application id and label) and is signed with a throwaway
+# key generated on the runner, never the release key. Not for distribution.
+on:
+  workflow_dispatch:
+  # Also runs when this file changes, so a new branch can build it before merge.
+  push:
+    paths:
+      - .github/workflows/test-apk.yml
+
+permissions:
+  contents: read
+
+jobs:
+  test-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
+
+      - name: Install Android SDK components
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018" "cmake;3.22.1"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+
+      - name: Mark the working copy as a side-by-side test build
+        run: |
+          sed -i 's/applicationId "app.mmfpocket.player"/applicationId "app.mmfpocket.player.test"/' app/build.gradle
+          sed -i 's|<string name="app_name">MMF Pocket</string>|<string name="app_name">MMF Pocket 試聴</string>|' app/src/main/res/values/strings_clean.xml
+          grep -q 'applicationId "app.mmfpocket.player.test"' app/build.gradle
+          grep -q 'MMF Pocket 試聴' app/src/main/res/values/strings_clean.xml
+
+      - name: Build the release variant
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --stacktrace
+
+      - name: Align and sign with a throwaway key
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/test-apk"
+          mkdir -p "$out"
+          unsigned=app/build/outputs/apk/release/app-release-unsigned.apk
+          test -f "$unsigned"
+          tools="$ANDROID_HOME/build-tools/35.0.0"
+          pass="$(openssl rand -hex 16)"
+          keytool -genkeypair -keystore "$RUNNER_TEMP/throwaway.jks" -storepass "$pass" -keypass "$pass" \
+            -alias test -keyalg RSA -keysize 2048 -validity 30 -dname "CN=mmf-pocket-test"
+          "$tools/zipalign" -p -f 4 "$unsigned" "$RUNNER_TEMP/aligned.apk"
+          apk="$out/MMF-Pocket-test-${GITHUB_SHA::8}.apk"
+          "$tools/apksigner" sign --ks "$RUNNER_TEMP/throwaway.jks" --ks-key-alias test \
+            --ks-pass "pass:$pass" --key-pass "pass:$pass" --out "$apk" "$RUNNER_TEMP/aligned.apk"
+          "$tools/apksigner" verify --verbose "$apk"
+          "$tools/zipalign" -c -v 4 "$apk" > /dev/null
+          rm -f "$RUNNER_TEMP/throwaway.jks"
+          (cd "$out" && sha256sum "$(basename "$apk")" | tee SHA256SUMS.txt)
+
+      - name: Upload the test APK
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: mmf-pocket-test-apk
+          path: ${{ runner.temp }}/test-apk/
+          if-no-files-found: error
+          retention-days: 3
