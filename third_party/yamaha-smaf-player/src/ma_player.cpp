@@ -224,6 +224,8 @@ void MaPlayer::auditVoice_(const ParsedVoice& v, uint64_t at) {
         audit_(D::VoiceDefinition, S::Unapplied, 0x101, v.key.pc, at);
     }
     if (v.isPcm && v.pcm.rom) audit_(D::VoiceDefinition, S::Compatibility, 0x102, v.pcm.waveId, at);
+    // Static Pitch-EG offset: decoded from one observed shape, so Partial.
+    if (v.isPcm && v.pcm.pitchCents) audit_(D::VoiceDefinition, S::Partial, 0x140, v.pcm.pitchCents, at);
     const int count = v.isPcm ? 1 : v.patch.fourOp ? 4 : 2;
     for (int i = 0; i < count; ++i) {
         const auto& op = v.isPcm ? v.pcm.env : v.patch.ops[size_t(i)];
@@ -1480,6 +1482,7 @@ bool MaPlayer::startPcm_(int ch, int rawNote, int soundingNote, const ParsedVoic
     bool isDrum = v.key.bankMSB == 125 || v.key.drumNote != 0;
     double base = double(v.pcm.fs) / double(rate_);
     double semis = isDrum ? 0.0 : double(soundingNote - 60);   // root C4
+    semis += double(v.pcm.pitchCents) / 100.0;   // MA7 static Pitch-EG offset
     pv.baseRate = base * std::pow(2.0, semis / 12.0);
     pv.rate = pv.baseRate * std::pow(2.0, c.bend / 12.0);
     pv.pos = 0.0;

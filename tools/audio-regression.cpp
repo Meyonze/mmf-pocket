@@ -1070,6 +1070,32 @@ void checkMa7WaveRam() {
     auto expandedFile = ma7;
     setVoice(expandedFile,expanded); appendExclusive(expandedFile,bulk);
     check(renderAll(expandedFile)==renderAll(ma7), "MA7 zero Pitch-EG preserves WT playback");
+    // The one observed nonzero shape (byte 3 a signed level, byte 8 = 1, the rest
+    // zero) is a static offset of 10 cents per unit; any other shape stays rejected.
+    {
+        auto staticEg = expanded; const size_t ext = staticEg.size() - 9;
+        staticEg[ext + 3] = 0xfd; staticEg[ext + 8] = 1;
+        const auto parsed = parseVoiceExclusive(staticEg.data(), staticEg.size());
+        check(parsed.valid && parsed.pcm.waveId == 1 && parsed.pcm.pitchCents == -30,
+              "MA7 static Pitch-EG decodes as a -30 cent offset");
+        check(parseVoiceExclusive(expanded.data(), expanded.size()).pcm.pitchCents == 0,
+              "MA7 zero Pitch-EG has no offset");
+        auto up = staticEg; up[ext + 3] = 2;
+        check(parseVoiceExclusive(up.data(), up.size()).pcm.pitchCents == 20, "positive static level raises pitch");
+        for (int byte : {0, 1, 2, 4, 5, 6, 7}) {
+            auto dynamic = staticEg; dynamic[ext + size_t(byte)] = 1;
+            check(!parseVoiceExclusive(dynamic.data(), dynamic.size()).valid,
+                  "other nonzero Pitch-EG bytes stay rejected");
+        }
+        auto noFlag = staticEg; noFlag[ext + 8] = 0;
+        check(!parseVoiceExclusive(noFlag.data(), noFlag.size()).valid, "static level without the flag stays rejected");
+        auto staticFile = ma7; setVoice(staticFile, staticEg); appendExclusive(staticFile, bulk);
+        const auto shifted = renderAll(staticFile);
+        check(shifted != renderAll(ma7), "static Pitch-EG changes WT playback");
+        check(shifted == renderAll(staticFile, 1) && shifted == renderAll(staticFile, 1024),
+              "static Pitch-EG playback is block independent");
+        for (float x : shifted) check(std::isfinite(x), "static Pitch-EG output finite");
+    }
     expanded.back()=1;
     check(!parseVoiceExclusive(expanded.data(),expanded.size()).valid,
           "nonneutral Pitch-EG is not silently discarded");
