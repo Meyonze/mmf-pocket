@@ -97,7 +97,7 @@ void spectra() {
             }
         }
         const double base=440*std::pow(2.,double(note-69)/12)/rate;
-        const int density=sine_density::needs16(tau*4*std::pow(10.,-.75*tl/20),base*carrier,base*mod)?16:8;
+        const int density=sine_density::needs16(tau*fxchain::smaf::kModernPmDepth*std::pow(10.,-.75*tl/20),base*carrier,base*mod)?16:8;
         const auto adaptive=renderReduced(c,graph,8,FmSubframeMath::Hermite,true);
         require(adaptive==renderReduced(c,graph,density,FmSubframeMath::Hermite),"reduced adaptive density selects wrong pair");
         if (note==96&&carrier==5&&tl==0) {

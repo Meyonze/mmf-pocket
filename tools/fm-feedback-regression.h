@@ -36,8 +36,8 @@ std::vector<float> independent(const FmVoicePatch& p,int rate) {
     std::array<std::array<float,2>,4> history{};
     bool ma7Set=p.modernTimbre;
     for(int i=0;i<count;++i)ma7Set=ma7Set&&p.ops[i].ma7Multipliers;
-    // VM35 and complete MA7 operator sets share the 4-cycle PM normalization.
-    const double depth=(p.modernTimbre&&p.ops[0].ma35Multipliers)||ma7Set?4.0:0.42;
+    // VM35 and complete MA7 operator sets share one PM depth (2.5 cycles).
+    const double depth=(p.modernTimbre&&p.ops[0].ma35Multipliers)||ma7Set?fxchain::smaf::kModernPmDepth:0.42;
     auto step=[&](int op,double incoming) {
         const int setting=p.ops[op].fb;
         const double amount=p.modernTimbre?nominalCycles(setting):double(setting)/24.0;
@@ -82,7 +82,7 @@ void directOutputLoops() {
     }
 }
 void reuse() {
-    // VM35 and complete MA7 sets share the 4-cycle PM depth; their multiplier
+    // VM35 and complete MA7 sets share one PM depth; their multiplier
     // tables differ (code 13: x12 versus x1.498), so use that code to tell them apart.
     auto tables=[](int profile){auto p=patchFor(0,5,profile);for(auto& op:p.ops)op.multi=13;return p;};
     check(synth(patchFor(0,5,0))!=synth(patchFor(0,5,1))&&

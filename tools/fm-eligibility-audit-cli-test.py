@@ -74,7 +74,8 @@ class CliTest(unittest.TestCase):
         self.original = FM.encode(probe)
         self.path.write_bytes(self.original)
         r = self.report('15')
-        self.assertGreater(r['maximum_pm_index_upper'], 20)
+        # TL0 index is 2*pi times the modern PM depth (2.5 cycles: about 15.7).
+        self.assertGreater(r['maximum_pm_index_upper'], 15)
         self.assertGreater(sum(v for k, v in r['steady_model_factor_voice_frames'].items() if k != '1'), 0)
 
     def test_parallel_pair_candidate_is_separate(self):

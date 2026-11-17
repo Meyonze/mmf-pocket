@@ -11,6 +11,11 @@
   within about 2 dB. The 16x aliasing policy for serial MA7 voices now uses the
   VM35 bound (both modulators TL24 or higher). Not a hardware calibration, not
   verified by listening on other scores. Invalidate older WAV caches (r92).
+- Use a 2.5-cycle phase-modulation depth for VM35 voices in the modern profile
+  and for complete MA7 voices (was 4). Against external recordings of two real
+  scores in different formats, 4 was brighter than both (up to 5.3 dB above
+  1 kHz); 2.5 gave the smallest worst-case brightness error (1.7 dB) and the
+  best band-envelope agreement in both. Invalidate older WAV caches (r96).
 - High-pass the reverb send at 150 Hz so bass notes stay centered. Against one
   reference recording the left/right correlation error fell from 0.136 to 0.120
   and the side/mid error from 1.86 to 1.56 dB. Invalidate older WAV caches (r95).

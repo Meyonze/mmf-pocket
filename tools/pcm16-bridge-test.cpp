@@ -41,7 +41,7 @@ Bytes fixture(int kind){
         // Expanded MA7 setup and Format3 score, including fractional MULTI.
         Bytes score{3,0,0x10,0x10};score.resize(36,0);
         Bytes voice{0x43,0x79,8,0x7f,0x21,0,0,0,0,0,0,0,0x79,6};
-        // MA7 shares VM35's 4-cycle PM depth, so the modulators use TL24 (the weak-nested bound).
+        // MA7 shares VM35's PM depth, so the modulators use TL24 (the weak-nested bound).
         const int mult[4]={1,kind==30?11:7,kind==30?14:3,kind==30?13:5};
         for(int j=0;j<4;++j){
             const int ar=(kind==33&&j==2)||(kind==34&&j==3)?0:15;

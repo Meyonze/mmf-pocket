@@ -60,7 +60,7 @@ std::vector<double> renderAdaptive(const Case& c,int graph){
 }
 void spectra(){size_t cases=0,boosted=0;double maxError=0;
  for(int graph:{0,7})for(int note:{60,72,84,96})for(auto [carrier,modulator]:std::array<std::pair<int,int>,2>{{{2,3},{5,7}}})for(int tl:{0,24,36}){
-  const Case c{note,carrier,modulator,tl};const double base=hz(note)/rate,beta=tau*4*std::pow(10.,-.75*tl/20);
+  const Case c{note,carrier,modulator,tl};const double base=hz(note)/rate,beta=tau*fxchain::smaf::kModernPmDepth*std::pow(10.,-.75*tl/20);
   const int selected=sine_density::needs16(beta,base*carrier,base*modulator)?16:8;boosted+=selected==16;
   const auto actual=renderAdaptive(c,graph);
   const auto expected=graph==7?algorithm7::reference7(c,selected,false):Model(c).reference(selected,false);
@@ -70,7 +70,9 @@ void spectra(){size_t cases=0,boosted=0;double maxError=0;
   if(note==96&&carrier==5&&tl==0){
    const auto ideal=graph==7?algorithm7::reference7(c,0,true):Model(c).reference(0,true);
    const auto old=graph==7?algorithm7::render7(c,8,FmSubframeMath::Hermite):render(c,8,FmSubframeMath::Hermite);
-   require(selected==16&&error(actual,ideal)<error(old,ideal)*.001,"strong high-register error did not improve");
+   // At the 2.5-cycle modern depth 8x already aliases less, so 16x improves the
+   // strongest case by about 30-40x (it was over 1000x at 4 cycles).
+   require(selected==16&&error(actual,ideal)<error(old,ideal)*.05,"strong high-register error did not improve");
    std::cout<<"graph"<<graph<<" note96 ideal-band RMS fixed8="<<error(old,ideal)<<" adaptive="<<error(actual,ideal)<<'\n';
   }++cases;
  }
@@ -120,7 +122,12 @@ void mixedDense(){
 }
 
 void transientCompatibility(){size_t cases=0;
- for(int graph:{0,7})for(int note:{85,86})for(int gate:{1,44,441})for(bool hard:{false,true}){
+ // The first two notes the policy boosts for carrier 5 / modulator 7 at TL0, from the
+ // current modern PM depth (85/86 at 4 cycles, 92/93 at 2.5).
+ int first=0;
+ for(int n=60;n<=108&&!first;++n)if(sine_density::needs16(tau*fxchain::smaf::kModernPmDepth,hz(n)/rate*5,hz(n)/rate*7))first=n;
+ require(first>0&&first<108,"no boosted edge note for the transient study");
+ for(int graph:{0,7})for(int note:{first,first+1})for(int gate:{1,44,441})for(bool hard:{false,true}){
   std::array<std::vector<double>,2> outputs;
   for(int i=0;i<2;++i){MaPlayer p;const Case c{note,5,7,0};const auto f=graph==7?algorithm7::fixture(c):player_sideband::fixture(c);
    require(p.init(f,rate,false,{i?16:8,FmSubframeMath::Hermite,i==0}),"transient reference init");

@@ -689,18 +689,17 @@ float FmOperator::tick(double modCycles, double lfoSin, double vibratoScale) {
 // ── FmVoice ──────────────────────────────────────────────────────────────────
 namespace {
 // Phase-modulation edge scales, in cycles per unit operator output.
-// Compatibility patches retain their original heuristic. Parsed VM35 tones
-// in the modern profile use the independent FM reference normalization:
-// 2^13 output * 2^15 phase shift / 2^26 phase period = 4 cycles (SiON).
-// Controlled listening supports this DEV candidate, not hardware-exactness.
+// Compatibility patches retain their original heuristic. Parsed VM35 tones in
+// the modern profile and complete MA7 operator sets share one depth. It was 4
+// cycles (an independent FM reference normalization, 2^13 * 2^15 / 2^26). Two
+// external renderings of real scores in different formats (one MA7, one Mobile
+// VM35) were compared at 2..4 cycles: both were brighter than the recording at
+// 4 (by up to 5.3 dB above 1 kHz relative to the band below), and 2.5 gave the
+// smallest worst-case brightness error (1.7 dB) and the best band-envelope
+// error and correlation in both. Two scores only; not a hardware calibration.
 constexpr double kCompatibilityModDepth = 0.42;
-constexpr double kVm35ModDepth = 4.0;
-// Complete MA7 operator sets use the same FM normalization as VM35: the chip
-// family shares the operator core, and 0.42 left every MA7 FM voice with far
-// fewer sidebands than a reference rendering of the same score (the 1 kHz-16 kHz
-// level, relative to the band below 1 kHz, was about 6-7 dB low; at 4 cycles it
-// is within about 2 dB). One reference score only; not a hardware calibration.
-constexpr double kMa7ModDepth = 4.0;
+constexpr double kVm35ModDepth = kModernPmDepth;
+constexpr double kMa7ModDepth = kModernPmDepth;
 }
 
 void FmVoice::noteOn(const FmVoicePatch& patch, double freqHz, float velocity) {
@@ -927,8 +926,8 @@ bool FmVoice::weakNestedSine_() const {
         vm35 = vm35 && op.ma35Multipliers && !op.ma7Multipliers;
         ma7 = ma7 && op.ma7Multipliers && !op.fixedFrequency && op.ma7Detune == 0;
     }
-    // Complete MA7 sets now share VM35's 4-cycle PM depth, so both families use
-    // the TL24 bound validated for VM35. Mixed and compatibility patches must not
+    // Complete MA7 sets share VM35's PM depth, so both families use the TL24
+    // bound validated for VM35 at 4 cycles (conservative at the current depth). Mixed and compatibility patches must not
     // enter merely because they use the same modulation-depth value.
     return (ma7 || vm35) && patch_.ops[1].tl >= 24 && patch_.ops[2].tl >= 24;
 }

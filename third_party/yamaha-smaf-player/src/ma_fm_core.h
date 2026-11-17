@@ -28,6 +28,10 @@
 #include <vector>
 
 namespace fxchain::smaf {
+// Phase-modulation depth, in cycles per unit operator output, shared by VM35
+// voices in the modern profile and complete MA7 operator sets (see ma_fm_core.cpp).
+inline constexpr double kModernPmDepth = 2.5;
+
 
 // Low-frequency sine lookup, bounded linear-interpolation error <3e-7.
 // Input is a finite normalized phase [0,1); used by the new PCM LFO path.

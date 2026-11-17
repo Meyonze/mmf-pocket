@@ -52,7 +52,7 @@ struct Model {
     explicit Model(Case value):c(value) {
         // sin(Ct+b2*sin(Mt+b1*sin(It))) expands as
         // sum J_n(b2) J_k(n*b1) sin((C+n*M+k*I)t).
-        const double depth=4; // MA7 and VM35 share the 4-cycle PM normalization
+        const double depth=fxchain::smaf::kModernPmDepth; // MA7 and VM35 share one PM depth
         const double beta=tau*depth*std::pow(10.,-.75*std::min(c.innerTl,c.middleTl)/20);
         const double base=440*std::pow(2.,double(c.note-69)/12)/rate;
         const double inner=ratio(c.inner,c.ma7),middle=ratio(c.middle,c.ma7),carrier=ratio(c.carrier,c.ma7);
@@ -82,7 +82,10 @@ struct Model {
             if(std::abs(it->second)<1e-15){discarded+=std::abs(it->second);it=harmonics.erase(it);}
             else ++it;
         }
-        require(discarded<1e-12,"nested coefficient pruning error too large");
+        // Pruned coefficients must stay far below the 4e-7..2e-6 RMS tolerances of
+        // the comparisons that use this model. Fractional MA7 ratios at TL0 leave
+        // many distinct tiny terms (about 2e-12 at the 2.5-cycle depth).
+        require(discarded<1e-10,"nested coefficient pruning error too large");
         for(int j=0;j<128;++j) {
             const long double t=j*.372143L;long double sum=0;
             for(auto [h,v]:harmonics)sum+=v*std::sin((h/1000.L)*t);
@@ -185,7 +188,7 @@ template<bool Fast> std::vector<double> transientRender(const Case& c,int factor
 std::vector<double> transientReference(const Case& c,int factor,int gate,bool release) {
     const int length=gate+320;
     const double initial=440*std::pow(2.,double(c.note-69)/12)/rate;
-    const double depth=4,direct=std::pow(10.,-.75*18/20);
+    const double depth=fxchain::smaf::kModernPmDepth,direct=std::pow(10.,-.75*18/20);
     const double b1=tau*depth*std::pow(10.,-.75*c.innerTl/20),b2=tau*depth*std::pow(10.,-.75*c.middleTl/20);
     // Frozen RR15 software law: all effective rates>=60 use2.63ms to -96dB.
     // No envelope parameters or levels are read from a synthesized voice.
@@ -302,7 +305,7 @@ void policies() {
     for(int tl1:{0,12,24,63})for(int tl2:{0,12,24,63}) {
         auto c=cases.back();c.ma7=true;auto p=patch(c);p.ops[1].tl=uint8_t(tl1);p.ops[2].tl=uint8_t(tl2);
         FmVoice v;v.setSampleRate(rate);v.noteOn(p,2093,1);
-        // MA7 now shares VM35's 4-cycle PM depth, so it uses the same TL24 bound.
+        // MA7 shares VM35's PM depth, so it uses the same TL24 bound.
         if(tl1>=24&&tl2>=24) {
             require(v.supportsSineSubframes()&&v.sineDensityHint()==16,"MA7 nested class must use16x");
             v.setPitch(523);require(v.sineDensityHint()==16,"MA7 nested density decreased during note");

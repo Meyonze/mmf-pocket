@@ -5,6 +5,7 @@
 #include "fm-recursive-nested-probe.h"
 #include "fm-nested-density-plan.h"
 #include <memory>
+#include <optional>
 namespace recursive_test {
 using player_sideband::require;
 void phases() {
@@ -33,19 +34,24 @@ void phases() {
 void plans() {
     bool unproven=false,f16=false,f32=false,f64=false,f128=false;int count=0;
     for(const nested::Case c:std::array<nested::Case,6>{{
+        // At the 2.5-cycle modern depth these give 16/32/16/64/unproven/128x.
         {84,3,2,5,18,18},{96,7,3,5,18,18},{84,3,2,5,12,12},
-        {96,7,3,5,12,12},{84,1,1,1,0,0},{96,3,2,5,0,0}}}) {
-        const nested::Model model(c);const double base=440*std::pow(2.,double(c.note-69)/12)/44100;
-        const double beta=nested::tau*4*std::pow(10.,-.75*c.innerTl/20);
+        {96,7,3,5,12,12},{96,7,3,5,0,0},{96,3,2,5,0,0}}}) {
+        // Build the independent coefficients only when a plan needs them: the
+        // unproven case has too many distinct sidebands for the pruning bound.
+        std::optional<nested::Model> lazyModel;
+        auto model=[&]() -> const nested::Model& { if(!lazyModel)lazyModel.emplace(c); return *lazyModel; };
+        const double base=440*std::pow(2.,double(c.note-69)/12)/44100;
+        const double beta=nested::tau*fxchain::smaf::kModernPmDepth*std::pow(10.,-.75*c.innerTl/20);
         const fm_nested_plan::Spectrum s{beta,beta,base*c.inner,base*c.middle,base*c.carrier,base/2,std::pow(10.,-.75*18/20),base};
         const auto p=fm_nested_plan::choose(s,1e-4);
         unproven=unproven||p.factor==0;f16=f16||p.factor==16;f32=f32||p.factor==32;f64=f64||p.factor==64;f128=f128||p.factor==128;
         if(p.factor) {
-            double actual=0;for(auto [h,v]:model.harmonics)if(base*(h/1000.)>=p.factor-.5)actual+=std::abs(v);
+            double actual=0;for(auto [h,v]:model().harmonics)if(base*(h/1000.)>=p.factor-.5)actual+=std::abs(v);
             require(actual<=p.tail+1e-12&&actual<=1e-4+1e-12,"planned alias tail exceeded independent coefficient sum");
         }
         const auto lattice=fm_nested_plan::choose(s,1e-4,128,fm_nested_plan::Method::KnownLattice);
-        if(lattice.factor){double actual=0;for(auto [h,v]:model.harmonics)if(base*(h/1000.)>=lattice.factor-.5)actual+=std::abs(v);
+        if(lattice.factor){double actual=0;for(auto [h,v]:model().harmonics)if(base*(h/1000.)>=lattice.factor-.5)actual+=std::abs(v);
             require(actual<=lattice.tail+1e-12&&actual<=1e-4+1e-12,"known-lattice plan exceeded independent coefficients");}
         for(int cap:{16,32,64,128}) {
             const auto limited=fm_nested_plan::choose(s,1e-4,cap);

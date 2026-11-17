@@ -41,7 +41,7 @@ struct Model {
   // Frozen current VM35 policy, not values read back from engine internals.
   const double base=440*std::pow(2.,double(c.note-69)/12)/rate;
   carrier=base*c.carrier;modulator=base*c.modulator;
-  index=tau*4*std::pow(10.,-.75*c.tl/20);
+  index=tau*fxchain::smaf::kModernPmDepth*std::pow(10.,-.75*c.tl/20);
   double energy=0;
   for(int k=0;k<=order;++k){bessel[size_t(k)]=std::cyl_bessel_j(double(k),index);energy+=bessel[size_t(k)]*bessel[size_t(k)]*(k?2:1);}
   require(std::abs(energy-1)<1e-12,"Bessel energy incomplete");
