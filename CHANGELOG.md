@@ -11,6 +11,9 @@
   within about 2 dB. The 16x aliasing policy for serial MA7 voices now uses the
   VM35 bound (both modulators TL24 or higher). Not a hardware calibration, not
   verified by listening on other scores. Invalidate older WAV caches (r92).
+- High-pass the reverb send at 150 Hz so bass notes stay centered. Against one
+  reference recording the left/right correlation error fell from 0.136 to 0.120
+  and the side/mid error from 1.86 to 1.56 dB. Invalidate older WAV caches (r95).
 - Decode the one observed static shape of the MA7 WT Pitch-EG extension as a
   constant offset of 10 cents per level unit, so those voices play their authored
   RAM waveform instead of an FM substitute. In one reference score this restored

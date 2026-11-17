@@ -19,6 +19,7 @@ struct EffectParams {
     double reverbSeconds = 1.6;    // time for the low band to fall by 60 dB
     double reverbDamping = 0.2;    // 0..1, higher darkens the tail faster
     double reverbPreDelayMs = 12.0;
+    double reverbHighPassHz = 150.0; // the send keeps the bass out of the tail
 };
 
 class StereoReverb {
@@ -37,6 +38,8 @@ public:
             lp_[i] = 0.0f;
         }
         damp_ = float(std::clamp(p.reverbDamping, 0.0, 0.95));
+        hpCoef_ = p.reverbHighPassHz > 0 ? float(std::exp(-2.0 * 3.14159265358979323846 * p.reverbHighPassHz / sampleRate)) : 0.0f;
+        hpState_ = 0.0f;
         const int pre = std::max(1, int(std::lround(p.reverbPreDelayMs * scale)));
         pre_.assign(size_t(pre), 0.0f); prePos_ = 0;
         for (int i = 0; i < 2; ++i) {
@@ -48,11 +51,15 @@ public:
         for (auto& l : line_) std::fill(l.begin(), l.end(), 0.0f);
         for (auto& l : ap_) std::fill(l.begin(), l.end(), 0.0f);
         std::fill(pre_.begin(), pre_.end(), 0.0f);
-        pos_.fill(0); apPos_.fill(0); prePos_ = 0; lp_.fill(0.0f);
+        pos_.fill(0); apPos_.fill(0); prePos_ = 0; lp_.fill(0.0f); hpState_ = 0.0f;
     }
     // Returns the wet stereo pair for one input frame.
     void process(float inL, float inR, float& outL, float& outR) {
         float x = 0.5f * (inL + inR);
+        // One-pole high-pass on the send: low notes stay centered, as in the
+        // reference, instead of spreading into a decorrelated bass tail.
+        hpState_ = flushTiny(hpCoef_ * hpState_ + (1.0f - hpCoef_) * x);
+        x -= hpState_;
         // Pre-delay, then two series all-pass diffusers.
         float d = pre_[prePos_]; pre_[prePos_] = x; if (++prePos_ == pre_.size()) prePos_ = 0;
         x = d;
@@ -92,6 +99,7 @@ private:
     std::array<size_t, kLines> pos_{};
     std::array<float, kLines> gain_{}, lp_{};
     float damp_ = 0.35f;
+    float hpCoef_ = 0.0f, hpState_ = 0.0f;
     std::vector<float> pre_; size_t prePos_ = 0;
     std::array<std::vector<float>, 2> ap_; std::array<size_t, 2> apPos_{};
 };
