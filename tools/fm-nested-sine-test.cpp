@@ -52,7 +52,7 @@ struct Model {
     explicit Model(Case value):c(value) {
         // sin(Ct+b2*sin(Mt+b1*sin(It))) expands as
         // sum J_n(b2) J_k(n*b1) sin((C+n*M+k*I)t).
-        const double depth=c.ma7?.42:4;
+        const double depth=4; // MA7 and VM35 share the 4-cycle PM normalization
         const double beta=tau*depth*std::pow(10.,-.75*std::min(c.innerTl,c.middleTl)/20);
         const double base=440*std::pow(2.,double(c.note-69)/12)/rate;
         const double inner=ratio(c.inner,c.ma7),middle=ratio(c.middle,c.ma7),carrier=ratio(c.carrier,c.ma7);
@@ -133,8 +133,8 @@ void spectra() {
     for(auto tl:std::array<std::pair<int,int>,4>{{{24,24},{24,36},{36,24},{63,63}}})study.push_back({note,m[0],m[1],m[2],tl.first,tl.second});
     for(int note:{124,125,127})study.push_back({note,2,2,2,24,24});
     for(int note:{48,84,96,120})for(auto m:std::array<std::array<int,3>,6>{{{1,1,1},{3,2,5},{7,3,5},{0,11,13},{11,13,14},{14,15,0}}})
-    for(auto tl:std::array<std::pair<int,int>,3>{{{0,0},{12,24},{63,63}}})study.push_back({note,m[0],m[1],m[2],tl.first,tl.second,true});
-    for(int note:{124,125,127})study.push_back({note,2,2,2,0,0,true});
+    for(auto tl:std::array<std::pair<int,int>,3>{{{24,24},{24,36},{63,63}}})study.push_back({note,m[0],m[1],m[2],tl.first,tl.second,true});
+    for(int note:{124,125,127})study.push_back({note,2,2,2,24,24,true});
     for(const auto& c:study) {
         const Model model(c);MaPlayer p,app,explicit16;
         require(p.init(fixture(c),rate)&&app.init(fixture(c),rate,false,{8,FmSubframeMath::Hermite,true}),"nested fixture init");
@@ -185,7 +185,7 @@ template<bool Fast> std::vector<double> transientRender(const Case& c,int factor
 std::vector<double> transientReference(const Case& c,int factor,int gate,bool release) {
     const int length=gate+320;
     const double initial=440*std::pow(2.,double(c.note-69)/12)/rate;
-    const double depth=c.ma7?.42:4,direct=std::pow(10.,-.75*18/20);
+    const double depth=4,direct=std::pow(10.,-.75*18/20);
     const double b1=tau*depth*std::pow(10.,-.75*c.innerTl/20),b2=tau*depth*std::pow(10.,-.75*c.middleTl/20);
     // Frozen RR15 software law: all effective rates>=60 use2.63ms to -96dB.
     // No envelope parameters or levels are read from a synthesized voice.
@@ -246,7 +246,7 @@ void clocks() {
     for(bool fast:{false,true})for(int pattern=0;pattern<4;++pattern) {
         auto p=patch(cases[0]);p.modernTimbre=profile!=0;p.lfo=2;
         for(auto& o:p.ops){o.am=o.vib=true;o.dam=o.dvb=2;o.holdEnabled=true;o.ma35Multipliers=profile>=2;o.ma7Multipliers=profile==3;if(pattern==1){o.ar=8;o.sr=3;}}
-        if(profile==3){p.ops[1].tl=p.ops[2].tl=0;p.ops[1].multi=11;p.ops[2].multi=13;p.ops[3].multi=14;}
+        if(profile==3){p.ops[1].tl=p.ops[2].tl=24;p.ops[1].multi=11;p.ops[2].multi=13;p.ops[3].multi=14;}
         if(pattern==2){p.ops[1].ar=0;p.ops[1].rateLowBits=8;}
         FmVoice v,original;for(auto* x:{&v,&original}){x->setSampleRate(sampleRate);x->noteOn(p,317,.63f);}
         auto core=v;const bool production=profile>=2;
@@ -302,8 +302,13 @@ void policies() {
     for(int tl1:{0,12,24,63})for(int tl2:{0,12,24,63}) {
         auto c=cases.back();c.ma7=true;auto p=patch(c);p.ops[1].tl=uint8_t(tl1);p.ops[2].tl=uint8_t(tl2);
         FmVoice v;v.setSampleRate(rate);v.noteOn(p,2093,1);
-        require(v.supportsSineSubframes()&&v.sineDensityHint()==16,"MA7 nested class must use16x");
-        v.setPitch(523);require(v.sineDensityHint()==16,"MA7 nested density decreased during note");
+        // MA7 now shares VM35's 4-cycle PM depth, so it uses the same TL24 bound.
+        if(tl1>=24&&tl2>=24) {
+            require(v.supportsSineSubframes()&&v.sineDensityHint()==16,"MA7 nested class must use16x");
+            v.setPitch(523);require(v.sineDensityHint()==16,"MA7 nested density decreased during note");
+        } else {
+            require(!v.supportsSineSubframes()&&v.sineDensityHint()==0,"strong MA7 nested class admitted below TL24");
+        }
     }
     for(int kind=0;kind<6;++kind) {
         auto c=cases.back();c.ma7=true;auto p=patch(c);

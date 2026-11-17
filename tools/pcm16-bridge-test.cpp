@@ -41,10 +41,11 @@ Bytes fixture(int kind){
         // Expanded MA7 setup and Format3 score, including fractional MULTI.
         Bytes score{3,0,0x10,0x10};score.resize(36,0);
         Bytes voice{0x43,0x79,8,0x7f,0x21,0,0,0,0,0,0,0,0x79,6};
+        // MA7 shares VM35's 4-cycle PM depth, so the modulators use TL24 (the weak-nested bound).
         const int mult[4]={1,kind==30?11:7,kind==30?14:3,kind==30?13:5};
         for(int j=0;j<4;++j){
             const int ar=(kind==33&&j==2)||(kind==34&&j==3)?0:15;
-            append(voice,{uint8_t(kind==31&&j==1?4:0),0xa0,uint8_t(ar<<4),uint8_t((j==0?18:0)<<2),0,0,uint8_t(kind==35&&j==2?6<<3:0),0,0,uint8_t(mult[j]<<4|(kind==32&&j==2?1:0))});
+            append(voice,{uint8_t(kind==31&&j==1?4:0),0xa0,uint8_t(ar<<4),uint8_t((j==0?18:j==1||j==2?24:0)<<2),0,0,uint8_t(kind==35&&j==2?6<<3:0),0,0,uint8_t(mult[j]<<4|(kind==32&&j==2?1:0))});
         }
         Bytes setup{0xf0,uint8_t(voice.size()+1)};append(setup,voice);setup.push_back(0xf7);
         append(score,chunk("Mtsu",setup));

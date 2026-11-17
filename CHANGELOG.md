@@ -5,6 +5,12 @@
 - Refine PCM reconstruction above 8:1 with a denser cutoff grid. Reduce maximum
   error in the existing 240 synthetic cases by about 70% against the chosen FIR
   reference, at a cost of 288 KiB shared storage. Invalidate older WAV caches.
+- Render complete MA7 FM voices with the same 4-cycle phase-modulation depth as
+  VM35 (was 0.42). Against one reference rendering of a real MA7 score, the level
+  of 1 kHz and above relative to the band below was about 6-7 dB low and is now
+  within about 2 dB. The 16x aliasing policy for serial MA7 voices now uses the
+  VM35 bound (both modulators TL24 or higher). Not a hardware calibration, not
+  verified by listening on other scores. Invalidate older WAV caches (r92).
 - Prepare high-rate PCM filter banks only for voices that can reach them (output
   unchanged; banks stay lazy). Add a player-level strong serial FM benchmark and
   a deterministic 512-unit oversampling budget for the opt-in adaptive nested FM

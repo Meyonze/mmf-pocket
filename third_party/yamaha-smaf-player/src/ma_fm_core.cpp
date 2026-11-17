@@ -695,6 +695,12 @@ namespace {
 // Controlled listening supports this DEV candidate, not hardware-exactness.
 constexpr double kCompatibilityModDepth = 0.42;
 constexpr double kVm35ModDepth = 4.0;
+// Complete MA7 operator sets use the same FM normalization as VM35: the chip
+// family shares the operator core, and 0.42 left every MA7 FM voice with far
+// fewer sidebands than a reference rendering of the same score (the 1 kHz-16 kHz
+// level, relative to the band below 1 kHz, was about 6-7 dB low; at 4 cycles it
+// is within about 2 dB). One reference score only; not a hardware calibration.
+constexpr double kMa7ModDepth = 4.0;
 }
 
 void FmVoice::noteOn(const FmVoicePatch& patch, double freqHz, float velocity) {
@@ -724,7 +730,9 @@ void FmVoice::noteOn(const FmVoicePatch& patch, double freqHz, float velocity) {
         vm35 = vm35 && patch.ops[i].ma35Multipliers && !patch.ops[i].ma7Multipliers;
     // Recompute for every allocation/retrigger; never leak a previous family
     // into fallback, VMA, expanded MA7, or mixed synthetic operator patches.
-    modDepth_ = vm35 ? kVm35ModDepth : kCompatibilityModDepth;
+    bool ma7Family = patch.modernTimbre;
+    for (int i = 0; i < nops; ++i) ma7Family = ma7Family && patch.ops[i].ma7Multipliers;
+    modDepth_ = vm35 ? kVm35ModDepth : ma7Family ? kMa7ModDepth : kCompatibilityModDepth;
     for (int i = 0; i < nops; ++i) {
         int offset = patch.ops[i].ksr ? block * 2 + high : block / 2;
         ops_[i].configure(patch.ops[i], sampleRate_, offset, patch.modernTimbre);
@@ -919,10 +927,10 @@ bool FmVoice::weakNestedSine_() const {
         vm35 = vm35 && op.ma35Multipliers && !op.ma7Multipliers;
         ma7 = ma7 && op.ma7Multipliers && !op.fixedFrequency && op.ma7Detune == 0;
     }
-    // MA7's maximum0.42-cycle PM is below VM35's4 cycles at TL24.
-    // Keep the validated families coherent; mixed and compatibility patches
-    // must not enter merely because they use the same modulation-depth value.
-    return ma7 || (vm35 && patch_.ops[1].tl >= 24 && patch_.ops[2].tl >= 24);
+    // Complete MA7 sets now share VM35's 4-cycle PM depth, so both families use
+    // the TL24 bound validated for VM35. Mixed and compatibility patches must not
+    // enter merely because they use the same modulation-depth value.
+    return (ma7 || vm35) && patch_.ops[1].tl >= 24 && patch_.ops[2].tl >= 24;
 }
 
 bool FmVoice::supportsSineSubframes() const {

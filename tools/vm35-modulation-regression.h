@@ -65,7 +65,7 @@ void checkVm35Modulation(){
         compat=vm;for(auto& op:compat.ops)op.ma35Multipliers=false;
         checkReference(reused,compat,.42); // VMA/default/fallback family
         for(auto& op:compat.ops)op.ma7Multipliers=true;
-        checkReference(reused,compat,.42); // native expanded MA7
+        checkReference(reused,compat,4); // complete native expanded MA7 shares the VM35 PM depth
         compat=vm;compat.ops[1].ma35Multipliers=false;checkReference(reused,compat,.42);
         compat=vm;compat.ops[1].ma7Multipliers=true;checkReference(reused,compat,.42);
         checkReference(reused,vm,4); // reuse must restore VM35 depth

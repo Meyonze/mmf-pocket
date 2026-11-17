@@ -48,7 +48,7 @@ host figures only; Android startup, CPU and battery effects have not been measur
 The complete high-rate resampling suite passes with ASan/UBSan, including the
 existing dynamic-loop, boundary cursor, silent-loop, native-rate and near-native
 checks. Android builds and physical-device listening for this revision remain
-unverified. The app cache becomes `r91-pcm-grid128-v1` so existing conversions
+unverified. The app cache becomes `r91-pcm-grid128-v1` (later superseded by `r92-ma7-pm4-v1` in the same unreleased build) so existing conversions
 cannot hide the new reconstruction. Public version metadata is unchanged.
 
 ## Released 1.6.8 baseline: 1/512 cutoff grid
