@@ -1518,6 +1518,13 @@ bool MaPlayer::startPcm_(int ch, int rawNote, int soundingNote, const ParsedVoic
     pv.zeroLoopTail = zeroLoop;
     pv.silentLoop = ws->retireSilentLoop && zeroLoop;
     pv.env.configure(v.pcm.env, double(rate_)); pv.env.keyOn();
+    // MA7 RAM-wave (WT) voices with the fastest authored attack: two external
+    // recordings of different scores rise over about 16 ms (10-90%) where the
+    // waveform alone rises in 4-10 ms, so a short linear fade-in is applied.
+    // Drums, ROM-wave substitutes and recorded Audio keep their instant attack.
+    pv.attackFade = 0; pv.attackAge = 0;
+    if (v.pcm.voiceWaveOnly && !isDrum && v.pcm.env.ar >= 15)
+        pv.attackFade = std::max<uint32_t>(1, uint32_t(std::lround(kMa7WtAttackFadeMs * 0.001 * double(rate_))));
     pv.gain = float(std::pow(10.0, -0.75 * double(v.pcm.env.tl) / 20.0));
     // Match FM voices: authored note velocity is part of the musical balance,
     // not just channel volume. Ignoring it made sampled drums and instruments
@@ -1669,6 +1676,7 @@ float MaPlayer::PcmVoice::tick() {
     }
     // Interpolation quality must not reorder the established voice-steal policy.
     recentLevel += (std::fabs(allocationLevel) - recentLevel) * 0.01f;
+    if (attackFade && attackAge < attackFade) { result *= float(attackAge + 1) / float(attackFade); ++attackAge; }
     return result;
 }
 

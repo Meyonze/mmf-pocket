@@ -96,7 +96,10 @@ void addPcmFixture(SmafFile& file, int waveId = 1, uint8_t rr = 9) {
 // with limiting. Authored endpoint rests and profile-dependent releases
 // may leave different silence lengths. Extra samples must stay below the
 // existing output-filter drain floor, not hide a delayed sounding note.
-bool matchesMa7Center(const std::vector<float>& actual, const std::vector<float>& legacy) {
+// fadedHead: the MA7 RAM-wave voice fades in over its first 16 ms, so its head may only be
+// quieter than the reference (never louder); past the fade it must match exactly.
+bool matchesMa7Center(const std::vector<float>& actual, const std::vector<float>& legacy, bool fadedHead = false) {
+    const size_t head = fadedHead ? 2 * (size_t(0.016 * 8000) + 2) : 0;
     const double angle=1.5707963267948966*64.0/127.0;
     const float gains[2]={float(std::cos(angle)),float(std::sin(angle))};
     for(size_t i=std::min(actual.size(),legacy.size());i<std::max(actual.size(),legacy.size());++i) {
@@ -107,6 +110,7 @@ bool matchesMa7Center(const std::vector<float>& actual, const std::vector<float>
     for(size_t i=0;i<count;++i) {
         const float a=i<actual.size()?actual[i]:0;
         const float b=i<legacy.size()?legacy[i]*gains[i&1]:0;
+        if(i<head){ if(std::fabs(a)>std::fabs(b)+1e-6f)return false; continue; }
         if(std::fabs(a-b)>1e-6f)return false;
     }
     return true;
@@ -184,7 +188,17 @@ void checkPcmModulation() {
             reference[i]=uint8_t(decoded>>8);reference[i+1]=uint8_t(decoded);
         }
         appendExclusive(expanded,bulk);
-        check(renderAll(quantized)==renderAll(expanded),"MA7 and VM35 share PCM modulation interpretation");
+        // MA7 RAM-wave voices with the fastest attack fade in over 16 ms (128 samples at
+        // 8 kHz); the VM35 stream voice does not. Past the fade the modulation (LFO, AM,
+        // vibrato) must match exactly, so compare the tails and check the head separately.
+        const auto vm35Voice = renderAll(quantized), ma7Voice = renderAll(expanded);
+        const size_t head = 2 * (size_t(0.016 * 8000) + 2);
+        check(vm35Voice.size() == ma7Voice.size() && vm35Voice.size() > head + 64 &&
+              std::equal(vm35Voice.begin() + long(head), vm35Voice.end(), ma7Voice.begin() + long(head)),
+              "MA7 and VM35 share PCM modulation interpretation");
+        float vm35Peak = 0, ma7Peak = 0;
+        for (size_t i = 0; i < 2 * 16; ++i) { vm35Peak = std::max(vm35Peak, std::fabs(vm35Voice[i])); ma7Peak = std::max(ma7Peak, std::fabs(ma7Voice[i])); }
+        check(vm35Peak > 0 && ma7Peak < vm35Peak * 0.5f, "MA7 RAM-wave fastest attack fades in over its first 16 ms");
         MaPlayer p;check(p.init(direct,8000),"modulation seek initializes");
         std::vector<float> replay,buf(512*2);int n;
         while((n=p.render(buf.data(),512))>0) {}
@@ -1033,7 +1047,7 @@ void checkMa7WaveRam() {
         wave.data.push_back(uint8_t(signedSample));
     }
     appendExclusive(ma7,bulk);
-    check(matchesMa7Center(renderAll(ma7),renderAll(legacy)), "MA7 native unsigned PCM8 agrees with PCM16 reference apart from pan law");
+    check(matchesMa7Center(renderAll(ma7),renderAll(legacy),true), "MA7 native unsigned PCM8 agrees with PCM16 reference apart from pan law");
     check(renderAll(ma7,31)==renderAll(ma7,512), "MA7 wave rendering independent of output block size");
     check(player.init(ma7,8000), "MA7 PCM8 initializes");
     player.render(samples,512);
@@ -1110,7 +1124,7 @@ void checkMa7WaveRam() {
     bulk.resize(7); bulk[6]=0;
     bulk.insert(bulk.end(),wave.data.begin(),wave.data.end());
     setVoice(ma7,wt); appendExclusive(ma7,bulk);
-    check(matchesMa7Center(renderAll(ma7),renderAll(legacy)), "MA7 raw ADPCM agrees with legacy decoder apart from pan law");
+    check(matchesMa7Center(renderAll(ma7),renderAll(legacy),true), "MA7 raw ADPCM agrees with legacy decoder apart from pan law");
 
     setVoice(ma7,wt); bulk[6]=4; appendExclusive(ma7,bulk);
     check(player.init(ma7,8000), "MA7 unknown codec initializes");
@@ -1151,7 +1165,7 @@ void checkMa7SignedWaveRam() {
     appendExclusive(file,signedBulk);
     const auto legacyExpected=renderAll(direct);
     const auto expected=renderAll(file);
-    check(matchesMa7Center(expected,legacyExpected),"MA7 signed PCM8 all byte values match PCM16 reference apart from pan law");
+    check(matchesMa7Center(expected,legacyExpected,true),"MA7 signed PCM8 all byte values match PCM16 reference apart from pan law");
     auto unsignedFile=file; setVoice(unsignedFile,wt); appendExclusive(unsignedFile,unsignedBulk);
     check(expected==renderAll(unsignedFile),"MA7 signed PCM8 matches offset unsigned PCM8");
     check(expected==renderAll(file,1) && expected==renderAll(file,1024),

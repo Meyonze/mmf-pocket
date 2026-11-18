@@ -181,6 +181,8 @@ private:
     std::map<int, std::array<AtrChan, 4>> atrChans_;
 
     // ── fm voice pool ────────────────────────────────────────────────────────
+    // Fade-in applied to fastest-attack MA7 RAM-wave voices (see startPcm_).
+    static constexpr double kMa7WtAttackFadeMs = 16.0;
     static constexpr int kPoolSize = 32;
     // Adaptive nested FM may use at most this many oversampled sub-samples per
     // frame across all filtered voices: the existing r91 worst case (32 x 16).
@@ -226,6 +228,8 @@ private:
         double pos = 0.0, rate = 1.0, baseRate = 1.0;
         double lfoPhase = 0.0, lfoInc = 0.0, vibDepth = 0.0, baseVibDepth = 0.0;
         float amDepth = 0.0f;
+        // Fade-in length (samples) for a maximum-rate MA7 RAM-wave attack; 0 = none.
+        uint32_t attackFade = 0, attackAge = 0;
         size_t loopStart = 0, loopEnd = 0; bool loop = false;
         bool zeroSource = false; // entire immutable playback range, not just its loop
         bool zeroLoopTail = false; // loop and all later decoded samples are zero

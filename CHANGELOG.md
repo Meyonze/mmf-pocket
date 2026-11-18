@@ -11,6 +11,11 @@
   within about 2 dB. The 16x aliasing policy for serial MA7 voices now uses the
   VM35 bound (both modulators TL24 or higher). Not a hardware calibration, not
   verified by listening on other scores. Invalidate older WAV caches (r92).
+- Fade in MA7 RAM-wave voices that use the fastest attack over 16 ms (drums, ROM
+  substitutes, recorded Audio and slower attacks are unchanged). Two reference
+  scores rise over about 16-20 ms where the waveform alone rose in 4-10 ms; at 16 ms
+  the per-note rise-time difference fell from 17.2 to 10.6 ms and from 12.8 to
+  9.4 ms. Not verified by listening. Invalidate older WAV caches (r97).
 - Use a 2.5-cycle phase-modulation depth for VM35 voices in the modern profile
   and for complete MA7 voices (was 4). Against external recordings of two real
   scores in different formats, 4 was brighter than both (up to 5.3 dB above
