@@ -42,9 +42,6 @@ struct PcmParams {
     float    pan = 0.0f;
     FmOpPatch env;             // AR/DR/SR/RR/SL/TL reused for the amplitude EG
     uint8_t lfo = 0;           // same four rate selections as the FM voice
-    // MA7 WT Pitch-EG with the one observed static shape: a constant offset of
-    // 10 cents per signed level unit. Other envelope shapes are not decoded.
-    int pitchCents = 0;
 };
 
 // Decoded MA7 AL register fields, retained for diagnostics. Physical cutoff,

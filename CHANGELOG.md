@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Stop playing MA7 WT voices that carry a static Pitch-EG as their authored RAM
+  waveform (undoes r94); they play as the generic FM substitute again, as in the
+  public 1.6.8. On the one score with a listening report the RAM waveform made the
+  main melody sound rough, and the 1.6.8 behavior was closer to the reference
+  video. The substitute's pitch already matched the recording. Reverts the
+  Pitch-EG decoding only; r95-r97 are unchanged. Invalidate older WAV caches (r98).
 - Refine PCM reconstruction above 8:1 with a denser cutoff grid. Reduce maximum
   error in the existing 240 synthetic cases by about 70% against the chosen FIR
   reference, at a cost of 288 KiB shared storage. Invalidate older WAV caches.

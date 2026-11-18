@@ -249,18 +249,11 @@ ParsedVoice parseVoiceExclusive(const uint8_t* p, size_t n) {
         }
 
         // An observed MA-7 WT+AL+Pitch-EG image adds nine bytes after the
-        // 34-byte WT+AL body. The all-zero extension is neutral. One nonzero
-        // shape is decoded as a static offset: only byte 3 (a signed level)
-        // set and byte 8 equal to 1. Measured against a reference rendering,
-        // level -3 lowered the pitch by 29.6 cents, so a unit is taken as 10
-        // cents. Any other nonzero envelope must not silently become a static
-        // patch and stays rejected.
+        // 34-byte WT+AL body. Only its all-zero extension is supported here;
+        // nonzero pitch envelopes must not silently become a static patch.
         const bool neutralPitchEg = flags == 7 && vn == 43 &&
             std::all_of(voice + 34, voice + 43, [](uint8_t b) { return b == 0; });
-        const bool staticPitchEg = flags == 7 && vn == 43 && voice[37] != 0 && voice[42] == 1 &&
-            voice[34] == 0 && voice[35] == 0 && voice[36] == 0 &&
-            voice[38] == 0 && voice[39] == 0 && voice[40] == 0 && voice[41] == 0;
-        const bool wt = (flags == 1 && vn == 18) || (flags == 3 && vn == 34) || neutralPitchEg || staticPitchEg;
+        const bool wt = (flags == 1 && vn == 18) || (flags == 3 && vn == 34) || neutralPitchEg;
         if (wt) {
             uint8_t vm35[16]{};
             std::copy(voice + 1, voice + 10, vm35);
@@ -274,7 +267,6 @@ ParsedVoice parseVoiceExclusive(const uint8_t* p, size_t n) {
             // these avoids rounding every odd rate down to a legacy rate.
             out.pcm.env.rateLowBits = voice[10] & 0x0f;
             if (flags != 1) readAnalogLite(voice + 17, out.al);
-            if (staticPitchEg) out.pcm.pitchCents = int(int8_t(voice[37])) * 10;
             return out;
         }
         return out;
