@@ -39,9 +39,10 @@ jobs:
       - name: Mark the working copy as a side-by-side test build
         run: |
           sed -i 's/applicationId "app.mmfpocket.player"/applicationId "app.mmfpocket.player.test"/' app/build.gradle
-          sed -i 's|<string name="app_name">MMF Pocket</string>|<string name="app_name">MMF Pocket 試聴</string>|' app/src/main/res/values/strings_clean.xml
+          # The label carries the short commit id so the installed build can be told apart.
+          sed -i "s|<string name=\"app_name\">MMF Pocket</string>|<string name=\"app_name\">試聴 ${GITHUB_SHA::7}</string>|" app/src/main/res/values/strings_clean.xml
           grep -q 'applicationId "app.mmfpocket.player.test"' app/build.gradle
-          grep -q 'MMF Pocket 試聴' app/src/main/res/values/strings_clean.xml
+          grep -q "試聴 ${GITHUB_SHA::7}" app/src/main/res/values/strings_clean.xml
 
       - name: Build the release variant
         run: |
