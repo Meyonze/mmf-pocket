@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Return the VM35 phase-modulation depth to 4 cycles, as in 1.6.8 (r96 had lowered
+  it to 2.5); complete MA7 voices stay at 2.5. On a VM35 score the r98 build sounded
+  too round next to 1.6.8, and a build with only VM35 at 4 cycles sounded close to
+  1.6.8. The band-level comparison against the reference recording had favored 2.5
+  but did not match the listening result. Invalidate older WAV caches (r99).
 - Stop playing MA7 WT voices that carry a static Pitch-EG as their authored RAM
   waveform (undoes r94); they play as the generic FM substitute again, as in the
   public 1.6.8. On the one score with a listening report the RAM waveform made the

@@ -15,7 +15,7 @@ on:
           - d042
           - nopeg
           - nofade
-          - vm4
+          - vm25
   # Also runs when this file changes, so a new branch can build it before merge.
   push:
     paths:
@@ -55,23 +55,23 @@ jobs:
           src=third_party/yamaha-smaf-player/src
           case "${VARIANT:-none}" in
             none) ;;
-            d042) # FM phase-modulation depth back to the pre-r92 value
-              sed -i 's/kModernPmDepth = 2.5;/kModernPmDepth = 0.42;/' "$src/ma_fm_core.h"
-              grep -q 'kModernPmDepth = 0.42;' "$src/ma_fm_core.h" ;;
+            d042) # MA7 FM phase-modulation depth back to the 1.6.8 value
+              sed -i 's/kMa7PmDepth = 2.5;/kMa7PmDepth = 0.42;/' "$src/ma_fm_core.h"
+              grep -q 'kMa7PmDepth = 0.42;' "$src/ma_fm_core.h" ;;
             nopeg) # do not accept the static Pitch-EG form (those voices play as before r94)
               sed -i 's/const bool staticPitchEg = flags == 7/const bool staticPitchEg = false \&\& flags == 7/' "$src/smaf_voice.cpp"
               grep -q 'staticPitchEg = false && flags == 7' "$src/smaf_voice.cpp" ;;
-            vm4) # VM35 phase-modulation depth back to the 1.6.8 value (4 cycles)
-              sed -i 's/kVm35ModDepth = kModernPmDepth;/kVm35ModDepth = 4.0;/' "$src/ma_fm_core.cpp"
-              grep -q 'kVm35ModDepth = 4.0;' "$src/ma_fm_core.cpp" ;;
+            vm25) # VM35 phase-modulation depth as in r96-r98 (2.5 cycles)
+              sed -i 's/kVm35ModDepth = kVm35PmDepth;/kVm35ModDepth = 2.5;/' "$src/ma_fm_core.cpp"
+              grep -q 'kVm35ModDepth = 2.5;' "$src/ma_fm_core.cpp" ;;
             nofade) # no 16 ms attack fade
               sed -i 's/kMa7WtAttackFadeMs = 16.0/kMa7WtAttackFadeMs = 0.0/' "$src/ma_player.h"
               grep -q 'kMa7WtAttackFadeMs = 0.0' "$src/ma_player.h" ;;
             *) echo "unknown variant"; exit 1 ;;
           esac
           if [ "${VARIANT:-none}" != none ]; then
-            sed -i "s/RENDER_CACHE_VERSION = \"r98-pitcheg-off-v1\"/RENDER_CACHE_VERSION = \"r98-pitcheg-off-v1-${VARIANT}\"/" app/src/main/java/app/mmfpocket/player/MmfAudioRepository.java
-            grep -q "r98-pitcheg-off-v1-${VARIANT}" app/src/main/java/app/mmfpocket/player/MmfAudioRepository.java
+            sed -i "s/RENDER_CACHE_VERSION = \"r99-vm35-depth4-v1\"/RENDER_CACHE_VERSION = \"r99-vm35-depth4-v1-${VARIANT}\"/" app/src/main/java/app/mmfpocket/player/MmfAudioRepository.java
+            grep -q "r99-vm35-depth4-v1-${VARIANT}" app/src/main/java/app/mmfpocket/player/MmfAudioRepository.java
           fi
 
       - name: Mark the working copy as a side-by-side test build

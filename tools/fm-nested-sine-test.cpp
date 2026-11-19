@@ -52,7 +52,7 @@ struct Model {
     explicit Model(Case value):c(value) {
         // sin(Ct+b2*sin(Mt+b1*sin(It))) expands as
         // sum J_n(b2) J_k(n*b1) sin((C+n*M+k*I)t).
-        const double depth=fxchain::smaf::kModernPmDepth; // MA7 and VM35 share one PM depth
+        const double depth=c.ma7?fxchain::smaf::kMa7PmDepth:fxchain::smaf::kVm35PmDepth; // MA7 2.5 cycles, VM35 4
         const double beta=tau*depth*std::pow(10.,-.75*std::min(c.innerTl,c.middleTl)/20);
         const double base=440*std::pow(2.,double(c.note-69)/12)/rate;
         const double inner=ratio(c.inner,c.ma7),middle=ratio(c.middle,c.ma7),carrier=ratio(c.carrier,c.ma7);
@@ -188,7 +188,7 @@ template<bool Fast> std::vector<double> transientRender(const Case& c,int factor
 std::vector<double> transientReference(const Case& c,int factor,int gate,bool release) {
     const int length=gate+320;
     const double initial=440*std::pow(2.,double(c.note-69)/12)/rate;
-    const double depth=fxchain::smaf::kModernPmDepth,direct=std::pow(10.,-.75*18/20);
+    const double depth=c.ma7?fxchain::smaf::kMa7PmDepth:fxchain::smaf::kVm35PmDepth,direct=std::pow(10.,-.75*18/20);
     const double b1=tau*depth*std::pow(10.,-.75*c.innerTl/20),b2=tau*depth*std::pow(10.,-.75*c.middleTl/20);
     // Frozen RR15 software law: all effective rates>=60 use2.63ms to -96dB.
     // No envelope parameters or levels are read from a synthesized voice.

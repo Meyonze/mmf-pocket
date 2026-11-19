@@ -36,8 +36,8 @@ std::vector<float> independent(const FmVoicePatch& p,int rate) {
     std::array<std::array<float,2>,4> history{};
     bool ma7Set=p.modernTimbre;
     for(int i=0;i<count;++i)ma7Set=ma7Set&&p.ops[i].ma7Multipliers;
-    // VM35 and complete MA7 operator sets share one PM depth (2.5 cycles).
-    const double depth=(p.modernTimbre&&p.ops[0].ma35Multipliers)||ma7Set?fxchain::smaf::kModernPmDepth:0.42;
+    // VM35 uses 4 cycles, complete MA7 operator sets 2.5 cycles.
+    const double depth=ma7Set?fxchain::smaf::kMa7PmDepth:(p.modernTimbre&&p.ops[0].ma35Multipliers)?fxchain::smaf::kVm35PmDepth:0.42;
     auto step=[&](int op,double incoming) {
         const int setting=p.ops[op].fb;
         const double amount=p.modernTimbre?nominalCycles(setting):double(setting)/24.0;

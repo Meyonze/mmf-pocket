@@ -698,8 +698,8 @@ namespace {
 // smallest worst-case brightness error (1.7 dB) and the best band-envelope
 // error and correlation in both. Two scores only; not a hardware calibration.
 constexpr double kCompatibilityModDepth = 0.42;
-constexpr double kVm35ModDepth = kModernPmDepth;
-constexpr double kMa7ModDepth = kModernPmDepth;
+constexpr double kVm35ModDepth = kVm35PmDepth;
+constexpr double kMa7ModDepth = kMa7PmDepth;
 }
 
 void FmVoice::noteOn(const FmVoicePatch& patch, double freqHz, float velocity) {

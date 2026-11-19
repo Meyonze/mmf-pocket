@@ -42,7 +42,7 @@ void plans() {
         std::optional<nested::Model> lazyModel;
         auto model=[&]() -> const nested::Model& { if(!lazyModel)lazyModel.emplace(c); return *lazyModel; };
         const double base=440*std::pow(2.,double(c.note-69)/12)/44100;
-        const double beta=nested::tau*fxchain::smaf::kModernPmDepth*std::pow(10.,-.75*c.innerTl/20);
+        const double beta=nested::tau*(c.ma7?fxchain::smaf::kMa7PmDepth:fxchain::smaf::kVm35PmDepth)*std::pow(10.,-.75*c.innerTl/20);
         const fm_nested_plan::Spectrum s{beta,beta,base*c.inner,base*c.middle,base*c.carrier,base/2,std::pow(10.,-.75*18/20),base};
         const auto p=fm_nested_plan::choose(s,1e-4);
         unproven=unproven||p.factor==0;f16=f16||p.factor==16;f32=f32||p.factor==32;f64=f64||p.factor==64;f128=f128||p.factor==128;
