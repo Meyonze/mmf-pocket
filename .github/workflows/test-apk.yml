@@ -16,6 +16,7 @@ on:
           - nopeg
           - nofade
           - vm25
+          - ma4
   # Also runs when this file changes, so a new branch can build it before merge.
   push:
     paths:
@@ -61,6 +62,9 @@ jobs:
             nopeg) # do not accept the static Pitch-EG form (those voices play as before r94)
               sed -i 's/const bool staticPitchEg = flags == 7/const bool staticPitchEg = false \&\& flags == 7/' "$src/smaf_voice.cpp"
               grep -q 'staticPitchEg = false && flags == 7' "$src/smaf_voice.cpp" ;;
+            ma4) # complete MA7 voices at the same 4-cycle PM depth as VM35
+              sed -i 's/kMa7PmDepth = 2.5;/kMa7PmDepth = 4.0;/' "$src/ma_fm_core.h"
+              grep -q 'kMa7PmDepth = 4.0;' "$src/ma_fm_core.h" ;;
             vm25) # VM35 phase-modulation depth as in r96-r98 (2.5 cycles)
               sed -i 's/kVm35ModDepth = kVm35PmDepth;/kVm35ModDepth = 2.5;/' "$src/ma_fm_core.cpp"
               grep -q 'kVm35ModDepth = 2.5;' "$src/ma_fm_core.cpp" ;;
