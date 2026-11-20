@@ -1,63 +1,36 @@
 # Changelog
 
-## Unreleased
+## 1.6.9 - 2026-11-20
 
-- Render complete MA7 FM voices at the same 4-cycle phase-modulation depth as VM35
-  (r96 had lowered it to 2.5). Against the recording of a further MA7 score, 2.5
-  left the 2 kHz and above bands 5-10 dB low; a depth of 4 brought them within
-  about 3 dB and gave the smallest band-envelope error of the depths tried, and a
-  listener found the 4-cycle build closer to the recording. One score, listening
-  report from one listener. Invalidate older WAV caches (r100).
-- Return the VM35 phase-modulation depth to 4 cycles, as in 1.6.8 (r96 had lowered
-  it to 2.5); complete MA7 voices stay at 2.5. On a VM35 score the r98 build sounded
-  too round next to 1.6.8, and a build with only VM35 at 4 cycles sounded close to
-  1.6.8. The band-level comparison against the reference recording had favored 2.5
-  but did not match the listening result. Invalidate older WAV caches (r99).
-- Stop playing MA7 WT voices that carry a static Pitch-EG as their authored RAM
-  waveform (undoes r94); they play as the generic FM substitute again, as in the
-  public 1.6.8. On the one score with a listening report the RAM waveform made the
-  main melody sound rough, and the 1.6.8 behavior was closer to the reference
-  video. The substitute's pitch already matched the recording. Reverts the
-  Pitch-EG decoding only; r95-r97 are unchanged. Invalidate older WAV caches (r98).
-- Refine PCM reconstruction above 8:1 with a denser cutoff grid. Reduce maximum
-  error in the existing 240 synthetic cases by about 70% against the chosen FIR
-  reference, at a cost of 288 KiB shared storage. Invalidate older WAV caches.
 - Render complete MA7 FM voices with the same 4-cycle phase-modulation depth as
-  VM35 (was 0.42). Against one reference rendering of a real MA7 score, the level
-  of 1 kHz and above relative to the band below was about 6-7 dB low and is now
-  within about 2 dB. The 16x aliasing policy for serial MA7 voices now uses the
-  VM35 bound (both modulators TL24 or higher). Not a hardware calibration, not
-  verified by listening on other scores. Invalidate older WAV caches (r92).
+  VM35 (was 0.42). Against recordings of two real MA7 scores the level of the
+  bands from 1-2 kHz up was low by about 6-7 dB (0.42) and by 5-10 dB in the
+  upper bands at the intermediate 2.5 depth; with 4 they are within about 4 dB.
+  A listener found the 4-cycle build closer to the recording on one of them; the
+  other was not listened to again. The 16x aliasing policy for serial MA7 voices
+  now uses the VM35 bound (both modulators TL24 or higher). Not a hardware
+  calibration. Invalidate older WAV caches.
+- Apply a generic reverb to MA7 scores that set the CC91 reverb send, per channel,
+  with the send high-passed at 150 Hz so bass notes stay centered. Against one
+  reference rendering the left/right correlation error dropped from 0.26 to
+  about 0.12. Scores without a send are bit-identical; Mobile CC91 and CC93
+  (chorus) stay unsupported. Not the chip's effect and not verified by listening.
 - Fade in MA7 RAM-wave voices that use the fastest attack over 16 ms (drums, ROM
   substitutes, recorded Audio and slower attacks are unchanged). Two reference
-  scores rise over about 16-20 ms where the waveform alone rose in 4-10 ms; at 16 ms
-  the per-note rise-time difference fell from 17.2 to 10.6 ms and from 12.8 to
-  9.4 ms. Not verified by listening. Invalidate older WAV caches (r97).
-- Use a 2.5-cycle phase-modulation depth for VM35 voices in the modern profile
-  and for complete MA7 voices (was 4). Against external recordings of two real
-  scores in different formats, 4 was brighter than both (up to 5.3 dB above
-  1 kHz); 2.5 gave the smallest worst-case brightness error (1.7 dB) and the
-  best band-envelope agreement in both. Invalidate older WAV caches (r96).
-- High-pass the reverb send at 150 Hz so bass notes stay centered. Against one
-  reference recording the left/right correlation error fell from 0.136 to 0.120
-  and the side/mid error from 1.86 to 1.56 dB. Invalidate older WAV caches (r95).
-- Decode the one observed static shape of the MA7 WT Pitch-EG extension as a
-  constant offset of 10 cents per level unit, so those voices play their authored
-  RAM waveform instead of an FM substitute. In one reference score this restored
-  192 notes and matched the recorded melody pitch within 0.2 cents. Other nonzero
-  Pitch-EG shapes stay rejected. Invalidate older WAV caches (r94).
-- Apply a generic reverb to MA7 scores that set the CC91 reverb send, per channel.
-  Against one reference rendering, the left/right correlation error dropped from
-  0.26 to 0.13 while the band balance stayed within about 0.1 dB. Scores without a
-  send are bit-identical; Mobile CC91 and CC93 (chorus) stay unsupported. Not the
-  chip's effect and not verified by listening on other scores. Invalidate older
-  WAV caches (r93).
-- Prepare high-rate PCM filter banks only for voices that can reach them (output
-  unchanged; banks stay lazy). Add a player-level strong serial FM benchmark and
-  a deterministic 512-unit oversampling budget for the opt-in adaptive nested FM
-  path, which the app does not enable.
+  scores rise over about 16-20 ms where the waveform alone rose in 4-10 ms. A
+  listener reported little audible change.
+- Refine PCM reconstruction above 8:1 with a denser cutoff grid. Reduce maximum
+  error in the existing 240 synthetic cases by about 70% against the chosen FIR
+  reference, at a cost of 288 KiB shared storage. Prepare high-rate PCM filter
+  banks only for voices that can reach them.
+- Add a player-level strong serial FM benchmark and a deterministic 512-unit
+  oversampling budget for the opt-in adaptive nested FM path, which the app does
+  not enable.
 - Correct the privacy documentation to describe user-initiated GitHub update
   checks and the Internet permission already present in the current app.
+- Not changed from 1.6.8: the VM35 depth (4), and the substitute for MA7 WT voices
+  that carry a Pitch-EG (a listener found the authored waveform rougher than the
+  substitute on one score, so decoding it was dropped before release).
 
 ## 1.6.8 - 2026-11-13
 
