@@ -217,6 +217,10 @@ class ReleaseTests(unittest.TestCase):
             R.ensure_tag(self.state)
         self.assertEqual(api.call_args_list[1].args[1]['object'], COMMIT)
         self.assertEqual(api.call_args_list[1].args[1]['type'], 'commit')
+        tagger = api.call_args_list[1].args[1]['tagger']
+        self.assertEqual((tagger['name'], tagger['email']),
+                         ('Meyonze', '295086709+Meyonze@users.noreply.github.com'))
+        self.assertRegex(tagger['date'], r'^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z$')
         self.assertEqual(api.call_args_list[2].args[1], {'ref':'refs/tags/v1.6.5','sha':'c'*40})
 
     def test_new_signed_draft_is_created_without_publishing(self):

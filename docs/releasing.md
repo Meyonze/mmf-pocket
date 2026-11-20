@@ -38,6 +38,8 @@ environment, then restores the key only in a private runner temporary directory
 for signing and removes it afterward. It verifies package/version, non-debug
 build type, alignment, v2 signing and the existing public certificate fingerprint
 `1C79EF3491BD915618F989E053C29648AF1AF0910D9E7150919D0D64D896C59E`.
+The annotated tag is created with the public identity (Meyonze, GitHub noreply
+address) as tagger, never the Actions bot, as AGENTS.md requires.
 Only the signed universal APK and SHA256SUMS.txt are attached. Both uploaded draft
 assets are downloaded and checked before publication. Existing public releases,
 different tag targets and conflicting draft assets are not replaced.
