@@ -3,6 +3,7 @@
 """GitHub Actions release gates, isolated signing and guarded publication."""
 import argparse
 import base64
+import datetime
 import hashlib
 import json
 import os
@@ -13,6 +14,8 @@ import sys
 import tempfile
 
 REPOSITORY = 'Meyonze/mmf-pocket'
+TAGGER_NAME = 'Meyonze'
+TAGGER_EMAIL = '295086709+Meyonze@users.noreply.github.com'
 PACKAGE = 'app.mmfpocket.player'
 CERTIFICATE = '1C79EF3491BD915618F989E053C29648AF1AF0910D9E7150919D0D64D896C59E'
 
@@ -188,8 +191,12 @@ def sign(state, output):
 def ensure_tag(state):
     existing = api(f"git/ref/tags/{state['tag']}", missing_ok=True)
     if existing is None:
+        # The repository's public identity is the tagger, never the Actions bot.
         tagged = api('git/tags', {'tag': state['tag'], 'message': f"MMF Pocket {state['version']}",
-                                  'object': state['commit'], 'type': 'commit'})
+                                  'object': state['commit'], 'type': 'commit',
+                                  'tagger': {'name': TAGGER_NAME, 'email': TAGGER_EMAIL,
+                                             'date': datetime.datetime.now(datetime.timezone.utc)
+                                             .strftime('%Y-%m-%dT%H:%M:%SZ')}})
         api('git/refs', {'ref': f"refs/tags/{state['tag']}", 'sha': tagged['sha']})
     require(api(f"commits/{state['tag']}")['sha'] == state['commit'], 'Existing tag points elsewhere')
 
