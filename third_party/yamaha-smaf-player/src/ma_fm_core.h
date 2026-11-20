@@ -31,7 +31,7 @@ namespace fxchain::smaf {
 // Phase-modulation depth, in cycles per unit operator output, for VM35 voices in
 // the modern profile and for complete MA7 operator sets (see ma_fm_core.cpp).
 inline constexpr double kVm35PmDepth = 4.0;
-inline constexpr double kMa7PmDepth = 2.5;
+inline constexpr double kMa7PmDepth = 4.0;
 
 
 // Low-frequency sine lookup, bounded linear-interpolation error <3e-7.

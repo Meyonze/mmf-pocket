@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Render complete MA7 FM voices at the same 4-cycle phase-modulation depth as VM35
+  (r96 had lowered it to 2.5). Against the recording of a further MA7 score, 2.5
+  left the 2 kHz and above bands 5-10 dB low; a depth of 4 brought them within
+  about 3 dB and gave the smallest band-envelope error of the depths tried, and a
+  listener found the 4-cycle build closer to the recording. One score, listening
+  report from one listener. Invalidate older WAV caches (r100).
 - Return the VM35 phase-modulation depth to 4 cycles, as in 1.6.8 (r96 had lowered
   it to 2.5); complete MA7 voices stay at 2.5. On a VM35 score the r98 build sounded
   too round next to 1.6.8, and a build with only VM35 at 4 cycles sounded close to

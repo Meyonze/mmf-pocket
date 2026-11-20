@@ -16,7 +16,7 @@ on:
           - nopeg
           - nofade
           - vm25
-          - ma4
+          - ma25
   # Also runs when this file changes, so a new branch can build it before merge.
   push:
     paths:
@@ -57,14 +57,14 @@ jobs:
           case "${VARIANT:-none}" in
             none) ;;
             d042) # MA7 FM phase-modulation depth back to the 1.6.8 value
-              sed -i 's/kMa7PmDepth = 2.5;/kMa7PmDepth = 0.42;/' "$src/ma_fm_core.h"
+              sed -i 's/kMa7PmDepth = 4.0;/kMa7PmDepth = 0.42;/' "$src/ma_fm_core.h"
               grep -q 'kMa7PmDepth = 0.42;' "$src/ma_fm_core.h" ;;
             nopeg) # do not accept the static Pitch-EG form (those voices play as before r94)
               sed -i 's/const bool staticPitchEg = flags == 7/const bool staticPitchEg = false \&\& flags == 7/' "$src/smaf_voice.cpp"
               grep -q 'staticPitchEg = false && flags == 7' "$src/smaf_voice.cpp" ;;
-            ma4) # complete MA7 voices at the same 4-cycle PM depth as VM35
-              sed -i 's/kMa7PmDepth = 2.5;/kMa7PmDepth = 4.0;/' "$src/ma_fm_core.h"
-              grep -q 'kMa7PmDepth = 4.0;' "$src/ma_fm_core.h" ;;
+            ma25) # complete MA7 voices at the r96-r99 PM depth (2.5 cycles)
+              sed -i 's/kMa7PmDepth = 4.0;/kMa7PmDepth = 2.5;/' "$src/ma_fm_core.h"
+              grep -q 'kMa7PmDepth = 2.5;' "$src/ma_fm_core.h" ;;
             vm25) # VM35 phase-modulation depth as in r96-r98 (2.5 cycles)
               sed -i 's/kVm35ModDepth = kVm35PmDepth;/kVm35ModDepth = 2.5;/' "$src/ma_fm_core.cpp"
               grep -q 'kVm35ModDepth = 2.5;' "$src/ma_fm_core.cpp" ;;
@@ -74,8 +74,8 @@ jobs:
             *) echo "unknown variant"; exit 1 ;;
           esac
           if [ "${VARIANT:-none}" != none ]; then
-            sed -i "s/RENDER_CACHE_VERSION = \"r99-vm35-depth4-v1\"/RENDER_CACHE_VERSION = \"r99-vm35-depth4-v1-${VARIANT}\"/" app/src/main/java/app/mmfpocket/player/MmfAudioRepository.java
-            grep -q "r99-vm35-depth4-v1-${VARIANT}" app/src/main/java/app/mmfpocket/player/MmfAudioRepository.java
+            sed -i "s/RENDER_CACHE_VERSION = \"r100-ma7-depth4-v1\"/RENDER_CACHE_VERSION = \"r100-ma7-depth4-v1-${VARIANT}\"/" app/src/main/java/app/mmfpocket/player/MmfAudioRepository.java
+            grep -q "r100-ma7-depth4-v1-${VARIANT}" app/src/main/java/app/mmfpocket/player/MmfAudioRepository.java
           fi
 
       - name: Mark the working copy as a side-by-side test build
