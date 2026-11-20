@@ -38,7 +38,7 @@ MMF Pocketは、Android端末内のYamaha SMAF（`.mmf`）をフォルダ単位�
 ## 対応範囲と制限
 
 - 対応OS：Android 10（API 29）以降
-- 主な対応：MA-1/MA-2/MA-3/MA-5、MA-7 Score Format 3（試験対応）、FM音色、対応形式の埋め込みADPCM・PCM8、スコア内の録音音声
+- 主な対応：MA-1/MA-2/MA-3/MA-5、MA-7 Score Format 3（対応。一部は近似・未再現、下記の制限を参照）、FM音色、対応形式の埋め込みADPCM・PCM8、スコア内の録音音声
 - 制限：MA-7のAnalog Liteフィルター、非ゼロのピッチエンベロープ、固定周波数合成、端末ROM固有音色・エフェクトなどは未再現または近似。MA-7の符号付きPCM8は実験的対応
 - 入力上限：1ファイル16MB
 - 変換キャッシュ上限：512MB
