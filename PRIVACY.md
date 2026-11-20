@@ -1,8 +1,8 @@
 # Privacy policy
 
-Last updated: 2026-10-12
+Last updated: 2026-11-15
 
-MMF Pocket does not collect, transmit, sell or share personal data.
+MMF Pocket processes music on your device and contains no advertising, analytics, crash-reporting or tracking SDKs.
 
 ## Data handled on the device
 
@@ -21,7 +21,18 @@ apps' sound. Its visual measurements are not saved to disk or transmitted.
 
 ## Permissions and network access
 
-The app does not request the Internet permission or broad storage permissions. Folder access is read-only and limited to the folder the user chooses. App backup is disabled.
+The app requests the Internet permission solely to check the latest stable release
+at `https://api.github.com/repos/Meyonze/mmf-pocket/releases/latest` when you tap
+the version label. There are no automatic or background update checks.
+
+The request does not include music, file names, generated audio, usage history or
+an app-specific user identifier. GitHub receives normal connection information,
+including your IP address and the update-check User-Agent header. If a newer
+version exists, the app asks before opening its GitHub release page in your
+browser. Browser requests are handled by that browser and GitHub.
+
+The app does not request broad storage permissions. Folder access is read-only
+and limited to the folder the user chooses. App backup is disabled.
 
 ## Third parties
 

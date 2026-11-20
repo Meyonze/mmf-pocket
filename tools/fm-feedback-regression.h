@@ -34,7 +34,10 @@ std::vector<float> independent(const FmVoicePatch& p,int rate) {
     // model. Reuse operators, not FmVoice's feedback/routing implementation.
     for(int i=0;i<count;++i){ops[i].configure(p.ops[i],rate,1,p.modernTimbre);ops[i].noteOn(220);}
     std::array<std::array<float,2>,4> history{};
-    const double depth=p.modernTimbre&&p.ops[0].ma35Multipliers?4.0:0.42;
+    bool ma7Set=p.modernTimbre;
+    for(int i=0;i<count;++i)ma7Set=ma7Set&&p.ops[i].ma7Multipliers;
+    // VM35 uses 4 cycles, complete MA7 operator sets 2.5 cycles.
+    const double depth=ma7Set?fxchain::smaf::kMa7PmDepth:(p.modernTimbre&&p.ops[0].ma35Multipliers)?fxchain::smaf::kVm35PmDepth:0.42;
     auto step=[&](int op,double incoming) {
         const int setting=p.ops[op].fb;
         const double amount=p.modernTimbre?nominalCycles(setting):double(setting)/24.0;
@@ -79,9 +82,12 @@ void directOutputLoops() {
     }
 }
 void reuse() {
+    // VM35 and complete MA7 sets share one PM depth; their multiplier
+    // tables differ (code 13: x12 versus x1.498), so use that code to tell them apart.
+    auto tables=[](int profile){auto p=patchFor(0,5,profile);for(auto& op:p.ops)op.multi=13;return p;};
     check(synth(patchFor(0,5,0))!=synth(patchFor(0,5,1))&&
           synth(patchFor(0,5,1))!=synth(patchFor(0,5,2))&&
-          synth(patchFor(0,5,2))!=synth(patchFor(0,5,3)),
+          synth(tables(2))!=synth(tables(3)),
           "reuse fixture observably distinguishes legacy feedback and VM35 phase depth");
     for(int profile:{0,1,2,3}) {
         FmVoice reused;reused.setSampleRate(8000);

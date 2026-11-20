@@ -122,7 +122,8 @@ class ContributionCliTest(unittest.TestCase):
         r = json.loads(p.stdout)
         self.assertTrue(r['boost_high_notes'] and r['reference_pcm_exact'] and r['finished'])
         self.assertEqual((r['sine_factor'], r['sine_math'], r['latency_frames']), (8, 'hermite', 72))
-        self.assertGreater(sum(x['boosted_sine_voice_frames'] for x in r['parts']), 0)
+        # Whether this generic probe crosses the 16x edge depends on the modern PM
+        # depth; the high-note fixture below must always be boosted.
         self.assertEqual(r['parts'][0]['boosted_sine_voice_frames'], 0)
         for old, part in zip(self.report['parts'], r['parts']):
             self.assertEqual(part['voice_frames'], old['voice_frames'])
@@ -145,6 +146,7 @@ class ContributionCliTest(unittest.TestCase):
         self.assertEqual(reports[0]['mix'], reports[1]['mix'])
         self.assertEqual(reports[0]['frames'], reports[1]['frames'])
         self.assertEqual(reports[0]['parts'][0]['with_shared_output_gain'], reports[1]['parts'][0]['with_shared_output_gain'])
+        self.assertGreater(reports[0]['parts'][0]['boosted_sine_voice_frames'], 0)
         self.assertEqual(reports[0]['parts'][0]['boosted_sine_voice_frames'], reports[0]['parts'][0]['voice_frames']['fm'])
         for extra in (('--app-quality', '--app-quality'),
                       ('--app-quality', '--experimental-sine-factor=8'),

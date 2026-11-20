@@ -66,3 +66,37 @@ adb shell /data/local/tmp/mmf-synth-benchmark > build/synth-benchmark/device.jso
 実際の音切れは、同じ端末上で通常のアプリを使い、多数の発音を含む MMF を再生して
 別途確認します。聴感と他のプレーヤーとの比較は、[比較録音の手順](reference-capture.md)
 を使います。
+
+## 強い直列FMの負荷を測る
+
+`tools/nested-fm-benchmark.cpp` は、強い直列FM（変調器を何段もつなぐ音色）を、
+実際の `MaPlayer` の描画処理（フィルター・リミッターを含む）で測る開発用ツールです。
+`synth-benchmark` は発音1つ分の計算だけを測りますが、こちらは再生全体の処理を測ります。
+自作の音色だけを使い、楽曲は不要です。1音・8音・32音で次の6条件を測ります。
+
+| 条件 | 内容 |
+| --- | --- |
+| `native_tl12_declined` | 現在の通常再生。変調が強い音は倍率を上げず、従来方式で処理 |
+| `r91_weak_tl24_16x` | 現在の通常再生で、変調が弱い音を16倍で処理 |
+| `adaptive_tl12_16x`〜`128x` | 実験用の適応方式（アプリでは無効）で、16/32/64/128倍を選ばせた場合 |
+
+`synth-benchmark` と同じスクリプトでビルドされます。
+
+```sh
+bash tools/build-synth-benchmark.sh --host    # または --abi arm64-v8a
+build/synth-benchmark/host/nested-fm-benchmark --quick > quick.json
+build/synth-benchmark/host/nested-fm-benchmark > forward.json
+build/synth-benchmark/host/nested-fm-benchmark --reverse > reverse.json
+```
+
+Android では、`synth-benchmark` と同じ手順で `adb push` して実行します。
+結果は1秒の音声あたりのCPU秒数（`cpu_seconds_per_audio_second_median`）です。
+小さいほど軽く、1.0を超えると再生より遅い処理です。`--reverse` は条件の順番を
+逆にします。順番による差（温度上昇など）を見るため、`forward.json` と
+`reverse.json` の両方を保存して比べてください。
+
+ホスト（x86-64、GCC 13、共用環境）での参考値は、32音で、従来方式が約0.23秒/秒、
+16倍が約0.8〜0.9秒/秒、128倍が約5.2秒/秒です。128倍・32音は再生速度の
+約5分の1の速さでしか作れない計算で、段階変換が再生に追いつくかは端末で確かめるまで
+分かりません。これらはホストの数値であり、端末の処理時間・消費電力・発熱を示すものではありません。
+また Android 向けのビルドは、この環境の NDK がないため未確認です。

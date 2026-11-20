@@ -689,17 +689,23 @@ float FmOperator::tick(double modCycles, double lfoSin, double vibratoScale) {
 // ── FmVoice ──────────────────────────────────────────────────────────────────
 namespace {
 // Phase-modulation edge scales, in cycles per unit operator output.
-// Compatibility patches retain their original heuristic. Parsed VM35 tones
-// in the modern profile use the independent FM reference normalization:
-// 2^13 output * 2^15 phase shift / 2^26 phase period = 4 cycles (SiON).
-// Controlled listening supports this DEV candidate, not hardware-exactness.
+// Compatibility patches retain their original heuristic. Parsed VM35 tones in
+// the modern profile and complete MA7 operator sets share one depth. It was 4
+// cycles (an independent FM reference normalization, 2^13 * 2^15 / 2^26). Two
+// external renderings of real scores in different formats (one MA7, one Mobile
+// VM35) were compared at 2..4 cycles: both were brighter than the recording at
+// 4 (by up to 5.3 dB above 1 kHz relative to the band below), and 2.5 gave the
+// smallest worst-case brightness error (1.7 dB) and the best band-envelope
+// error and correlation in both. Two scores only; not a hardware calibration.
 constexpr double kCompatibilityModDepth = 0.42;
-constexpr double kVm35ModDepth = 4.0;
+constexpr double kVm35ModDepth = kVm35PmDepth;
+constexpr double kMa7ModDepth = kMa7PmDepth;
 }
 
 void FmVoice::noteOn(const FmVoicePatch& patch, double freqHz, float velocity) {
     densityFactor_ = 8; densityPhase_ = -1;
     nestedDensityFactor_ = -1; nestedDensityPhase_ = nestedDensityVibrato_ = -1;
+    budget = {};
     patch_ = patch;
     fourOp_ = patch.fourOp;
     algo_ = patch.algorithm & 7;
@@ -723,7 +729,9 @@ void FmVoice::noteOn(const FmVoicePatch& patch, double freqHz, float velocity) {
         vm35 = vm35 && patch.ops[i].ma35Multipliers && !patch.ops[i].ma7Multipliers;
     // Recompute for every allocation/retrigger; never leak a previous family
     // into fallback, VMA, expanded MA7, or mixed synthetic operator patches.
-    modDepth_ = vm35 ? kVm35ModDepth : kCompatibilityModDepth;
+    bool ma7Family = patch.modernTimbre;
+    for (int i = 0; i < nops; ++i) ma7Family = ma7Family && patch.ops[i].ma7Multipliers;
+    modDepth_ = vm35 ? kVm35ModDepth : ma7Family ? kMa7ModDepth : kCompatibilityModDepth;
     for (int i = 0; i < nops; ++i) {
         int offset = patch.ops[i].ksr ? block * 2 + high : block / 2;
         ops_[i].configure(patch.ops[i], sampleRate_, offset, patch.modernTimbre);
@@ -918,10 +926,10 @@ bool FmVoice::weakNestedSine_() const {
         vm35 = vm35 && op.ma35Multipliers && !op.ma7Multipliers;
         ma7 = ma7 && op.ma7Multipliers && !op.fixedFrequency && op.ma7Detune == 0;
     }
-    // MA7's maximum0.42-cycle PM is below VM35's4 cycles at TL24.
-    // Keep the validated families coherent; mixed and compatibility patches
-    // must not enter merely because they use the same modulation-depth value.
-    return ma7 || (vm35 && patch_.ops[1].tl >= 24 && patch_.ops[2].tl >= 24);
+    // Complete MA7 sets share VM35's PM depth, so both families use the TL24
+    // bound validated for VM35 at 4 cycles (conservative at the current depth). Mixed and compatibility patches must not
+    // enter merely because they use the same modulation-depth value.
+    return (ma7 || vm35) && patch_.ops[1].tl >= 24 && patch_.ops[2].tl >= 24;
 }
 
 bool FmVoice::supportsSineSubframes() const {

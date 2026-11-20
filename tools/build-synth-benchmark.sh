@@ -41,3 +41,8 @@ src=$root/third_party/yamaha-smaf-player/src
     "$root/tools/synth-benchmark.cpp" "$src/ma_fm_core.cpp" "$src/ma_player.cpp" \
     "$src/smaf_file.cpp" "$src/smaf_voice.cpp" -o "$out/synth-benchmark"
 printf '%s\n' "$out/synth-benchmark"
+# Strong serial FM through the real MaPlayer render loop (1/8/32 voices).
+"$compiler" -std=c++20 -O3 -DNDEBUG "${flags[@]}" -I"$src" -I"$root/tools" \
+    "$root/tools/nested-fm-benchmark.cpp" "$src/ma_fm_core.cpp" "$src/ma_player.cpp" \
+    "$src/smaf_file.cpp" "$src/smaf_voice.cpp" -o "$out/nested-fm-benchmark"
+printf '%s\n' "$out/nested-fm-benchmark"

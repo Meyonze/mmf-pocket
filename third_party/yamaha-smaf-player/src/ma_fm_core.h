@@ -28,6 +28,11 @@
 #include <vector>
 
 namespace fxchain::smaf {
+// Phase-modulation depth, in cycles per unit operator output, for VM35 voices in
+// the modern profile and for complete MA7 operator sets (see ma_fm_core.cpp).
+inline constexpr double kVm35PmDepth = 4.0;
+inline constexpr double kMa7PmDepth = 4.0;
+
 
 // Low-frequency sine lookup, bounded linear-interpolation error <3e-7.
 // Input is a finite normalized phase [0,1); used by the new PCM LFO path.
@@ -192,6 +197,10 @@ enum class FmSubframeMath : uint8_t { Exact, Hermite };
 // ── a playing voice ─────────────────────────────────────────────────────────
 class FmVoice {
 public:
+    // Player-side oversampling budget (adaptive nested FM only), decided at
+    // note-on. grant: 0 undecided, -1 declined for the whole note, >0 latched
+    // factor. units: sub-samples per frame this voice used last frame.
+    struct NestedBudget { int grant = 0; int units = 0; } budget;
     void setSampleRate(double sr) { sampleRate_ = sr; }
     void noteOn(const FmVoicePatch& patch, double freqHz, float velocity);
     void noteOff(bool holdOn = false);

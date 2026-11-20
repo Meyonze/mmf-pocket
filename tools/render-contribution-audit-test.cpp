@@ -86,7 +86,7 @@ void qualityRoutes(){size_t cases=0;
   FmVoicePatch q;q.modernTimbre=true;q.fourOp=algorithm!=0;q.algorithm=uint8_t(algorithm>=106?6:algorithm);q.lfo=2;
   for(int j=0;j<4;++j){auto& o=q.ops[size_t(j)];o.ar=15;o.dr=o.sr=o.sl=0;o.rr=15;o.multi=uint8_t(j%2?2:3);o.tl=uint8_t(j%2?0:24);o.am=o.vib=true;o.dam=o.dvb=2;}
   if(algorithm==3||algorithm==4||algorithm==6)q.ops[size_t(algorithm==3?2:1)].ar=0;
-  if(algorithm>=106)for(auto& o:q.ops){o.ma35Multipliers=true;o.ma7Multipliers=algorithm==206;o.tl=algorithm==206?0:24;}
+  if(algorithm>=106)for(auto& o:q.ops){o.ma35Multipliers=true;o.ma7Multipliers=algorithm==206;o.tl=24;} // MA7 shares VM35's TL24 weak-nested bound
   for(auto* x:{&p,&b}){x->pool_[0].noteOn(q,317,.6f);x->pool_[0].channel=0;x->poolPanLeft_[0]=.7f;x->poolPanRight_[0]=.3f;
    pcm(*x,0,120,1000);pcm(*x,1,120,2000,true,7);
    std::vector<MaPlayer::Ev> events{{128,MaPlayer::Ev::Volume,0,0,0},{160,MaPlayer::Ev::Volume,0,127,0},{192,MaPlayer::Ev::AllSoundOff,0,0,0},{256,MaPlayer::Ev::AllSoundOff,120,0,0},{384,MaPlayer::Ev::NoteOn,16,69,100,1},{448,MaPlayer::Ev::AllSoundOff,16,0,0}};
@@ -129,8 +129,14 @@ void adaptiveRoutes(){size_t cases=0;
    else if(graph==4||graph==6){q.ops[1].ar=0;q.ops[2].multi=7;q.ops[3].multi=5;if(graph==6)q.ops[0].tl=18;}
    else if(graph>=106){q.ops[0].tl=18;q.ops[1].multi=7;q.ops[1].tl=24;q.ops[2].multi=3;q.ops[2].tl=24;q.ops[3].multi=5;}
    else {q.ops[0].multi=7;q.ops[1].multi=5;if(graph==5){q.ops[2].multi=3;q.ops[2].tl=24;q.ops[3].multi=2;}}
-   if(graph==206)for(auto& o:q.ops){o.ma7Multipliers=true;o.tl=0;}
-   for(int i=0;i<3;++i){auto& v=x->pool_[i];const double f=hz(i==0?84:96);v.noteOn(q,f,.2f);v.setVolume(.2f);v.channel=i==1?1:0;x->poolBaseFreq_[i]=f;x->poolPanLeft_[i]=i==2?.8f:.3f;x->poolPanRight_[i]=i==2?.2f:.7f;}
+   if(graph==206)for(auto& o:q.ops)o.ma7Multipliers=true; // same TL as 106: MA7 shares VM35's weak-nested bound
+   // The lowest note this patch boosts at the current modern PM depth: voice 0 sits one
+   // below it so the +2 semitone bend crosses into 16x; the others start boosted.
+   int edge=0;
+   if(graph<106)for(int n=60;n<=110&&!edge;++n){FmVoice probe;probe.setSampleRate(44100);probe.noteOn(q,hz(n),.2f);if(probe.sineDensityHint()==16)edge=n;}
+   require(graph>=106||edge>0,"adaptive fixture has no boosted edge note");
+   const int lowNote=graph>=106?84:edge-1,highNote=graph>=106?96:std::max(96,edge+2);
+   for(int i=0;i<3;++i){auto& v=x->pool_[i];const double f=hz(i==0?lowNote:highNote);v.noteOn(q,f,.2f);v.setVolume(.2f);v.channel=i==1?1:0;x->poolBaseFreq_[i]=f;x->poolPanLeft_[i]=i==2?.8f:.3f;x->poolPanRight_[i]=i==2?.2f:.7f;}
    pcm(*x,0,120,1000);pcm(*x,1,120,2000,true,7);
    std::vector<MaPlayer::Ev> events{{128,MaPlayer::Ev::PitchBend,0,8191,0},{256,MaPlayer::Ev::PitchBend,0,0,0},{256,MaPlayer::Ev::AllSoundOff,120,0,0},{384,MaPlayer::Ev::AllSoundOff,0,0,0},{512,MaPlayer::Ev::AllSoundOff,1,0,0},{640,MaPlayer::Ev::NoteOn,16,69,100,1},{704,MaPlayer::Ev::AllSoundOff,16,0,0}};
    x->events_.insert(x->events_.begin(),events.begin(),events.end());x->nonAtrGateEventEnd_=x->events_.size();

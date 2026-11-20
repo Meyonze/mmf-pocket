@@ -29,7 +29,7 @@ std::vector<Complex> transform(std::vector<Complex> x,bool inverse) {
 }
 struct Case {bool vm35;int base,carrier,modulator,tl;};
 // Deliberately frozen independent policy values; do not read private core state.
-double depth(const Case& c){return c.vm35?4.:.42;}
+double depth(const Case& c){return c.vm35?fxchain::smaf::kVm35PmDepth:.42;}
 double amplitude(const Case& c){return std::pow(10.,-.75*c.tl/20.);}
 double index(const Case& c){return tau*depth(c)*amplitude(c);}
 std::vector<double> coefficients(double x) {

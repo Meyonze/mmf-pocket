@@ -64,7 +64,7 @@ void sourceChecks() {
         std::array<float,32> b{},fb{};
         for(int n=0;n<512;++n){(void)fm_probe::frame(v,std::span<float>(b.data(),size_t(factor)));(void)fm_probe::frameFast(fast,std::span<float>(fb.data(),size_t(factor)));
             for(int j=0;j<factor;++j){double t=n+double(j+1)/factor;
-                double m=std::sin(tau*17*3*t/4096);double expected=.7*std::sin(tau*17*2*t/4096+tau*(vm35?4:.42)*m);
+                double m=std::sin(tau*17*3*t/4096);double expected=.7*std::sin(tau*17*2*t/4096+tau*(vm35?fxchain::smaf::kVm35PmDepth:.42)*m);
                 require(std::abs(b[size_t(j)]-expected)<3e-6&&std::abs(fb[size_t(j)]-expected)<3e-6,"interior subframes disagree with continuous PM oracle");}}
     }
     // Unsupported algorithms/waves/feedback must be rejected before any tick.

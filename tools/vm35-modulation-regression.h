@@ -60,21 +60,21 @@ void checkVm35Modulation(){
     using namespace vm35_modulation_test;
     FmVoice reused;
     for(int alg=0;alg<8;++alg){
-        const auto vm=patch(alg);checkReference(reused,vm,4);
+        const auto vm=patch(alg);checkReference(reused,vm,fxchain::smaf::kVm35PmDepth);
         auto compat=vm;compat.modernTimbre=false;checkReference(reused,compat,.42);
         compat=vm;for(auto& op:compat.ops)op.ma35Multipliers=false;
         checkReference(reused,compat,.42); // VMA/default/fallback family
         for(auto& op:compat.ops)op.ma7Multipliers=true;
-        checkReference(reused,compat,.42); // native expanded MA7
+        checkReference(reused,compat,fxchain::smaf::kMa7PmDepth); // complete native expanded MA7 set uses the MA7 PM depth
         compat=vm;compat.ops[1].ma35Multipliers=false;checkReference(reused,compat,.42);
         compat=vm;compat.ops[1].ma7Multipliers=true;checkReference(reused,compat,.42);
-        checkReference(reused,vm,4); // reuse must restore VM35 depth
-        if(alg==1||alg==2)check(reference(vm,4)==reference(vm,.42),"additive algorithms ignore PM depth");
-        else check(reference(vm,4)!=reference(vm,.42),"modulation-edge fixture distinguishes both PM depths");
+        checkReference(reused,vm,fxchain::smaf::kVm35PmDepth); // reuse must restore VM35 depth
+        if(alg==1||alg==2)check(reference(vm,fxchain::smaf::kVm35PmDepth)==reference(vm,.42),"additive algorithms ignore PM depth");
+        else check(reference(vm,fxchain::smaf::kVm35PmDepth)!=reference(vm,.42),"modulation-edge fixture distinguishes both PM depths");
     }
     // Inactive operators do not invalidate a complete two-operator family.
     auto two=patch(0);two.ops[2].ma35Multipliers=false;two.ops[3].ma7Multipliers=true;
-    checkReference(reused,two,4);
+    checkReference(reused,two,fxchain::smaf::kVm35PmDepth);
     // Synthetic saw->square ratio2, TL16 is intentionally not a song fixture.
     auto square=patch(5);
     for(int i=0;i<4;++i){square.ops[i].multi=uint8_t(i%2?0:1);
@@ -87,7 +87,11 @@ void checkVm35Modulation(){
             re+=x*std::cos(angle);im+=x*std::sin(angle);}
         return std::hypot(re,im)/2400;
     };
-    check(harmonic(true,5)>harmonic(true,1)*10,"VM35 saw-square retains authored modulation harmonics");
+    // At the shared modern depth the fifth harmonic still exceeds the fundamental
+    // and stands far above the compatibility scale's ratio.
+    check(harmonic(true,5)>harmonic(true,1) &&
+          harmonic(true,5)/harmonic(true,1)>4*harmonic(false,5)/harmonic(false,1),
+          "VM35 saw-square retains authored modulation harmonics");
     check(harmonic(false,1)>harmonic(false,5)*3,"legacy saw-square spectrum retains compatibility scale");
     // Source transports select the same family; score behavior stays deterministic.
     std::vector<uint8_t> direct{0x43,0x79,7,0x7f,1,0,0,0,0,0,0,1,4};

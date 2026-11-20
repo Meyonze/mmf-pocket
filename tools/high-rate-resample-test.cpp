@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Synthetic renderer-quality checks, not handset or ROM calibration.
+#include <cstring>
 #include "smaf_file.h"
 #include "ma_fm_core.h"
 #include "smaf_voice.h"
@@ -186,6 +187,29 @@ void tableEdges() {
     }
 }
 
+// Banks are lazy statics; prepareDownsamplingKernels() only chooses when they
+// are built. Render a sweep before any bank exists, then again after preparing
+// every bank, and require bit-identical samples.
+std::vector<float> lazySweep() {
+    std::vector<int16_t> pcm(2048);
+    for (size_t i = 0; i < pcm.size(); ++i)
+        pcm[i] = int16_t(std::lround(20000 * std::sin(0.37 * double(i)) + 9000 * std::sin(1.91 * double(i))));
+    std::vector<float> out;
+    for (double rate : {0.9, 1.0, 1.03, 1.2, 2.0, 3.9, 4.5, 6.0, 7.9, 8.5, 9.9, 12.0, 40.0, 300.0})
+        for (double fraction : {0.0, 0.173, 0.5, 0.911})
+            out.push_back(pcm_detail::interpolatePcm(pcm.data(), pcm.size(), 700, float(fraction),
+                                                     false, 0, 0, true, rate));
+    return out;
+}
+void lazyBankEquivalence() {
+    const std::vector<float> cold = lazySweep();
+    pcm_detail::prepareDownsamplingKernels(1.5);   // partial, rate-aware
+    pcm_detail::prepareDownsamplingKernels();      // every bank
+    const std::vector<float> warm = lazySweep();
+    require(cold.size() == warm.size() &&
+            std::memcmp(cold.data(), warm.data(), cold.size() * sizeof(float)) == 0,
+            "lazy bank construction leaves resampled output bit-identical");
+}
 void extremeTableAccuracy() {
     double maximumError = 0;
     for (double rate : {10.0, 12.0, 15.99, 16.01, 24.0, 32.0, 64.0, 100.0}) {
@@ -199,18 +223,41 @@ void extremeTableAccuracy() {
                     const double error = std::fabs(sample(pcm, position, rate)
                         - reference(pcm, position, rate, 128));
                     maximumError = std::max(maximumError, error);
-                    require(error < 0.0005,
-                            "off-grid reconstruction stays within 0.0005 of independent continuous FIR");
+                    require(error < 0.00015,
+                            "off-grid reconstruction stays within 0.00015 of independent continuous FIR");
                 }
             }
         }
     }
     std::cout << "128-tap off-grid maximum absolute sample error=" << maximumError << '\n';
+
+    // Wider sweep: frequencies up to 0.9 of the output Nyquist, mid-row rates
+    // and extra phases. The worst error sits here, not in the cases above.
+    double wideMaximum = 0;
+    for (double rate : {10.0, 10.08697, 10.5, 11.0, 12.0, 13.3, 15.99, 16.01, 20.0, 24.0, 32.0, 48.0, 64.0, 100.0}) {
+        for (double frequency : {0.3, 0.35, 0.4, 0.42, 0.45, 0.47, 0.5}) {
+            for (double offset : {0.0, pi / 2, 1.9635}) {
+                std::vector<int16_t> pcm(1024);
+                for (size_t i = 0; i < pcm.size(); ++i)
+                    pcm[i] = int16_t(std::lround(30000 * std::sin(2 * pi * frequency / rate * i + offset)));
+                for (double fraction : {0.037, 0.137, 0.3203, 0.333, 0.731, 0.999}) {
+                    const double position = 256 + fraction;
+                    const double error = std::fabs(sample(pcm, position, rate)
+                        - reference(pcm, position, rate, 128));
+                    wideMaximum = std::max(wideMaximum, error);
+                    require(error < 0.00025,
+                            "wide-sweep reconstruction stays within 0.00025 of independent continuous FIR");
+                }
+            }
+        }
+    }
+    std::cout << "128-tap wide-sweep maximum absolute sample error=" << wideMaximum << '\n';
 }
 #include "pcm-silent-loop-regression.h"
 #include "pcm-unity-regression.h"
 #include "pcm-near-nyquist-regression.h"
 int main() {
+    lazyBankEquivalence();
     spectral(); boundaries(); extremeRatios(); tableEdges(); extremeTableAccuracy();
     pcm_dynamic_regression::run(); pcm_boundary_cursor_regression::run();
     pcm_silent_loop_regression::run();

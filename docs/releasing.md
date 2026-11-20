@@ -29,7 +29,7 @@ differs, set the repository Actions variable `MMF_RELEASE_KEY_ALIAS`.
 Run Signed release from `main` with the intended source commit and version:
 
 - commit: the full commit SHA with successful Android CI.
-- tag: `v1.6.6` (must match that commit's versionName).
+- tag: `v<versionName>`, e.g. `v1.6.8` (must match that commit's versionName).
 - publish: enabled (disable to keep the signed release as a draft).
 
 The workflow checks main ancestry, version/tag agreement and successful Android

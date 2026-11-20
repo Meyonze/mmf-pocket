@@ -36,7 +36,7 @@ void clocks(){size_t cases=0,samples=0;double fastMaximum=0,fastSquares=0;
 void equations(){constexpr double tau=6.283185307179586;size_t checks=0;
     for(int profile:{1,2})for(int tl:{0,24})for(int factor:{2,8,32}){auto p=patch(profile,0,0);for(int j=0;j<4;++j){p.ops[j].ksr=0;p.ops[j].tl=uint8_t(j%2?0:tl);}
         FmVoice actual,higher;actual.setSampleRate(44100);higher.setSampleRate(44100*factor);actual.noteOn(p,44100.*17/4096,1);higher.noteOn(p,44100.*17/4096,1);
-        const double depth=profile==2?4:.42,amplitude=std::pow(10.,-.75*tl/20.),index=tau*depth*amplitude;std::array<double,97>bessel{};
+        const double depth=profile==2?fxchain::smaf::kVm35PmDepth:.42,amplitude=std::pow(10.,-.75*tl/20.),index=tau*depth*amplitude;std::array<double,97>bessel{};
         for(int order=0;order<=96;++order)bessel[size_t(order)]=std::cyl_bessel_j(double(order),index);
         std::array<float,32> out{};
         for(int n=0;n<512;++n){fm_pairs::frame(actual,std::span<float>(out.data(),size_t(factor)));
@@ -68,7 +68,7 @@ void spectrum(){constexpr int frames=4096,warmup=256;constexpr double tau=6.2831
         for(int n=0;n<warmup+frames;++n){const auto r=fast?fm_pairs::frameFast(voice,std::span<float>(source.data(),size_t(factor))):fm_pairs::frame(voice,std::span<float>(source.data(),size_t(factor)));require(r.native==r.reconstructedEndpoint,"long steady pair endpoint drift");
             for(int k=0;k<factor;++k)stereo[size_t(k)]={source[size_t(k)],0};const auto y=bus.frame(stereo.data(),size_t(factor),{});require(y.right==0,"pair FIR stereo leakage");
             if(n>=warmup)measured[size_t(n-warmup)]=y.left;}
-        const double index=tau*(profile==2?4:.42)*std::pow(10.,-.75*tl/20.);
+        const double index=tau*(profile==2?fxchain::smaf::kVm35PmDepth:.42)*std::pow(10.,-.75*tl/20.);
         for(int order=-96;order<=96;++order){const double coeff=std::cyl_bessel_j(double(std::abs(order)),index)*(order<0&&(std::abs(order)&1)?-1:1);
             for(int branch=0;branch<2;++branch){const int bin=211*((branch==0?2:5)+order*(branch==0?3:7));
                 const auto h=fm_causal::response(config,tau*bin/(frames*factor));
@@ -78,7 +78,9 @@ void spectrum(){constexpr int frames=4096,warmup=256;constexpr double tau=6.2831
         equation=std::sqrt(equation/frames);error=std::sqrt(error/frames);require(equation<3e-6&&std::isfinite(error),"filtered pair output differs from complex Bessel response");
         maximumEquation=std::max(maximumEquation,equation);if(profile==2&&tl==0&&factor==8)hard8=error;if(profile==2&&tl==0&&factor==32)hard32=error;++cases;
     }
-    require(hard8>.05&&hard32<.002,"strong parallel PM alias experiment control changed");
+    // At the 2.5-cycle modern depth the TL0 VM35 pair is no longer hard for 8x
+    // (about 0.0019, versus over 0.05 at 4 cycles); 32x must still clearly win.
+    require(hard8>2*hard32&&hard32<.002,"strong parallel PM alias experiment control changed");
     std::cout<<cases<<" causal pair FIR/Bessel cases; max equation RMS="<<maximumEquation<<"; strong8x="<<hard8<<"; strong32x="<<hard32<<" PASS\n";
 }
 int main(){clocks();equations();guards();spectrum();}

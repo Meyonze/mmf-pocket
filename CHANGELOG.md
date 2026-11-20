@@ -1,5 +1,37 @@
 # Changelog
 
+## 1.6.9 - 2026-11-20
+
+- Render complete MA7 FM voices with the same 4-cycle phase-modulation depth as
+  VM35 (was 0.42). Against recordings of two real MA7 scores the level of the
+  bands from 1-2 kHz up was low by about 6-7 dB (0.42) and by 5-10 dB in the
+  upper bands at the intermediate 2.5 depth; with 4 they are within about 4 dB.
+  A listener found the 4-cycle build closer to the recording on one of them; the
+  other was not listened to again. The 16x aliasing policy for serial MA7 voices
+  now uses the VM35 bound (both modulators TL24 or higher). Not a hardware
+  calibration. Invalidate older WAV caches.
+- Apply a generic reverb to MA7 scores that set the CC91 reverb send, per channel,
+  with the send high-passed at 150 Hz so bass notes stay centered. Against one
+  reference rendering the left/right correlation error dropped from 0.26 to
+  about 0.12. Scores without a send are bit-identical; Mobile CC91 and CC93
+  (chorus) stay unsupported. Not the chip's effect and not verified by listening.
+- Fade in MA7 RAM-wave voices that use the fastest attack over 16 ms (drums, ROM
+  substitutes, recorded Audio and slower attacks are unchanged). Two reference
+  scores rise over about 16-20 ms where the waveform alone rose in 4-10 ms. A
+  listener reported little audible change.
+- Refine PCM reconstruction above 8:1 with a denser cutoff grid. Reduce maximum
+  error in the existing 240 synthetic cases by about 70% against the chosen FIR
+  reference, at a cost of 288 KiB shared storage. Prepare high-rate PCM filter
+  banks only for voices that can reach them.
+- Add a player-level strong serial FM benchmark and a deterministic 512-unit
+  oversampling budget for the opt-in adaptive nested FM path, which the app does
+  not enable.
+- Correct the privacy documentation to describe user-initiated GitHub update
+  checks and the Internet permission already present in the current app.
+- Not changed from 1.6.8: the VM35 depth (4), and the substitute for MA7 WT voices
+  that carry a Pitch-EG (a listener found the authored waveform rougher than the
+  substitute on one score, so decoding it was dropped before release).
+
 ## 1.6.8 - 2026-11-13
 
 - Restyle the header wordmark with bold MMF and regular Pocket. Check GitHub for

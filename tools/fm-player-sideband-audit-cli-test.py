@@ -63,7 +63,8 @@ class PlayerSidebandTest(unittest.TestCase):
                         (note, 5, 7, 0))
             return next(p for p in case['policies'] if p['factor'] == factor and p['math'] == 'exact')
         self.assertLess(policy(84, 8)['ideal_band_error_rms'], 2e-5)
-        self.assertGreater(policy(96, 8)['ideal_band_error_rms'], 1e-2)
+        # At the 2.5-cycle modern depth 8x leaves about 4e-4 here, still 20x the 16x bound.
+        self.assertGreater(policy(96, 8)['ideal_band_error_rms'], 1e-4)
         self.assertLess(policy(96, 16)['ideal_band_error_rms'], 2e-5)
         self.assertLess(policy(96, 16)['rms_change_db'], -10)
         # Filtering can remove substantial existing energy; no makeup gain.

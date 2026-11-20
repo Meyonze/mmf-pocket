@@ -185,6 +185,12 @@ void MaPlayer::routeController_(uint64_t at, int ch, int cc, int val, bool ma7) 
             if (ma7) { route = false; status = S::Unsupported; }
             else if (val != 0) { route = false; status = S::Unapplied; }
             break;
+        case 91:
+            // Reverb send. Only the MA7 grammar is evaluated; the effect is a generic
+            // approximation, not the chip's, so the audit reports it as Partial.
+            if (ma7) { type = Ev::ReverbSend; status = S::Partial; }
+            else { route = false; status = S::Unsupported; }
+            break;
         case 6: case 38:
             type = Ev::RpnData; b = cc == 38 ? 1 : 0;
             if (ma7) { route = false; status = S::Unsupported; }
@@ -353,6 +359,7 @@ bool MaPlayer::init(const SmafFile& file, uint32_t sampleRate,
     // ~10 kHz analog-lite output filter (two 1-pole stages).
     lpCoef_ = float(1.0 - std::exp(-2.0 * 3.14159265358979 * 10000.0 / double(rate_)));
     lp1L_ = lp1R_ = lp2L_ = lp2R_ = 0.0f;
+    { EffectParams ep; reverb_.prepare(double(rate_), ep); resetReverb_(); }
     limEnv_ = 0.0f;
     limRelease_ = float(std::exp(-1.0 / (0.15 * double(rate_))));   // ~150 ms
 
@@ -1480,7 +1487,7 @@ bool MaPlayer::startPcm_(int ch, int rawNote, int soundingNote, const ParsedVoic
     pv.loopTravel = 0;
     if (pv.qualityInterpolation) {
         (void)pcm_detail::interpolationKernels();
-        pcm_detail::prepareDownsamplingKernels();
+        pcm_detail::prepareDownsamplingKernels(pv.rate);
         (void)pcm_detail::nearUnityKernels(); // later bend/vibrato may enter1..1.1
     }
     // Share the existing FM approximation rather than invent a different
@@ -1508,6 +1515,13 @@ bool MaPlayer::startPcm_(int ch, int rawNote, int soundingNote, const ParsedVoic
     pv.zeroLoopTail = zeroLoop;
     pv.silentLoop = ws->retireSilentLoop && zeroLoop;
     pv.env.configure(v.pcm.env, double(rate_)); pv.env.keyOn();
+    // MA7 RAM-wave (WT) voices with the fastest authored attack: two external
+    // recordings of different scores rise over about 16 ms (10-90%) where the
+    // waveform alone rises in 4-10 ms, so a short linear fade-in is applied.
+    // Drums, ROM-wave substitutes and recorded Audio keep their instant attack.
+    pv.attackFade = 0; pv.attackAge = 0;
+    if (v.pcm.voiceWaveOnly && !isDrum && v.pcm.env.ar >= 15)
+        pv.attackFade = std::max<uint32_t>(1, uint32_t(std::lround(kMa7WtAttackFadeMs * 0.001 * double(rate_))));
     pv.gain = float(std::pow(10.0, -0.75 * double(v.pcm.env.tl) / 20.0));
     // Match FM voices: authored note velocity is part of the musical balance,
     // not just channel volume. Ignoring it made sampled drums and instruments
@@ -1559,7 +1573,7 @@ void MaPlayer::startAudio_(int ch, int note, float velocity, uint64_t noteId, bo
     slot->qualityInterpolation = modern;
     if (modern && slot->rate < 1.0) (void)pcm_detail::interpolationKernels();
     if (modern && slot->rate > 0.8 && slot->rate < 1.0) (void)pcm_detail::downsamplingKernels();
-    if (modern && slot->rate > 1.0) pcm_detail::prepareDownsamplingKernels();
+    if (modern && slot->rate > 1.0) pcm_detail::prepareDownsamplingKernels(slot->rate);
     if (modern && slot->rate > 1.0 && slot->rate < 1.1) (void)pcm_detail::nearUnityKernels();
     slot->vel = velocity; slot->pan = chans_[ch & 127].pan;
     slot->squaredControllers = ma7;
@@ -1659,6 +1673,7 @@ float MaPlayer::PcmVoice::tick() {
     }
     // Interpolation quality must not reorder the established voice-steal policy.
     recentLevel += (std::fabs(allocationLevel) - recentLevel) * 0.01f;
+    if (attackFade && attackAge < attackFade) { result *= float(attackAge + 1) / float(attackFade); ++attackAge; }
     return result;
 }
 
@@ -1699,6 +1714,10 @@ void MaPlayer::fireEvent_(const Ev& e) {
                 voiceTable_[size_t(e.a)].activated = true;
             break;
         case Ev::Program:   c.program = e.a; break;
+        case Ev::ReverbSend:
+            c.reverbSend = float(e.a & 0x7f) / 127.0f;
+            if (e.a & 0x7f) reverbActive_ = true;
+            break;
         case Ev::BankMsb:   c.bankMsb = e.a; break;
         case Ev::BankLsb:
             // HPS Bank is a full byte, including its drum-bank bit. Mobile
@@ -1925,7 +1944,7 @@ void MaPlayer::fireEvent_(const Ev& e) {
             // unchanged. Unity remains exact; no reconstruction tail is added.
             if (pv.rate < 1.0) (void)pcm_detail::interpolationKernels();
             if (pv.rate > 0.8 && pv.rate < 1.0) (void)pcm_detail::downsamplingKernels();
-            if (pv.rate > 1.0) pcm_detail::prepareDownsamplingKernels();
+            if (pv.rate > 1.0) pcm_detail::prepareDownsamplingKernels(pv.rate);
             if (pv.rate > 1.0 && pv.rate < 1.1) (void)pcm_detail::nearUnityKernels();
             pv.lfoPhase = pv.lfoInc = pv.vibDepth = pv.baseVibDepth = 0.0;
             pv.amDepth = 0.0f; // ATR must not inherit a stolen WT slot's LFO
@@ -2147,6 +2166,7 @@ int MaPlayer::render(float* out, int frames) {
         if (nextEvent_ >= nonAtrGateEventEnd_ &&
             (activeVoices_() == 0 ||
              (cursor_ >= scoreEndSample_ && !hasOutputVoices_())) &&
+            reverbQuiet_() &&
             std::max({std::fabs(lp1L_), std::fabs(lp1R_),
                       std::fabs(lp2L_), std::fabs(lp2R_)}) < 1e-7f) {
             ended_ = true;
@@ -2159,10 +2179,15 @@ int MaPlayer::render(float* out, int frames) {
         // overdriven. with this headroom the knee is a rare safety, not an
         // always-on compressor.
         constexpr float kMixGain = 0.32f;
+        float wl = 0.0f, wr = 0.0f;   // reverb feed (CC91 send), unused while inactive
         for (int i = 0; i < kPoolSize; ++i) {
             if (!pool_[i].active()) continue;
             float s = pool_[i].tick();
             l += s * kMixGain * poolPanLeft_[i]; r += s * kMixGain * poolPanRight_[i];
+            if (reverbActive_) {
+                const float k = s * kMixGain * sendOf_(pool_[i].channel);
+                wl += k * poolPanLeft_[i]; wr += k * poolPanRight_[i];
+            }
         }
         for (int i = 0; i < kPcmPool; ++i) {           // sampled drum/pcm voices
             if (!pcmPool_[i].active) continue;
@@ -2170,12 +2195,25 @@ int MaPlayer::render(float* out, int frames) {
             if (atrEndPending_ && pcmPool_[i].keyNote < 0 && !pcmPool_[i].active)
                 completedAtrEndSample_ = std::max(completedAtrEndSample_, pcmPool_[i].atrEndSample);
             l += s * kMixGain * pcmPool_[i].panLeft; r += s * kMixGain * pcmPool_[i].panRight;
+            if (reverbActive_) {
+                const float k = s * kMixGain * sendOf_(pcmPool_[i].channel);
+                wl += k * pcmPool_[i].panLeft; wr += k * pcmPool_[i].panRight;
+            }
         }
         for (auto& voice : audioPool_) {
             if (!voice.active) continue;
             const float s = voice.tick();
             l += s * kMixGain * voice.panLeft;
             r += s * kMixGain * voice.panRight;
+            if (reverbActive_) {
+                const float k = s * kMixGain * sendOf_(voice.channel);
+                wl += k * voice.panLeft; wr += k * voice.panRight;
+            }
+        }
+        if (reverbActive_) {
+            float rl, rr; reverb_.process(wl, wr, rl, rr);
+            l += kReverbReturn * rl; r += kReverbReturn * rr;
+            reverbPeak_ = std::max({std::fabs(rl), std::fabs(rr), reverbPeak_ * 0.999f});
         }
         // 2-pole one-pole-cascade low-pass (the analog output filter's warmth),
         // then a transparent peak limiter. the old tanh soft-knee WAS the
@@ -2260,6 +2298,7 @@ template<int Capacity,bool Nested,bool Adaptive> int MaPlayer::renderSineImpl_(f
             state.outputCursor >= state.nativeFlushUntil && state.bus.pendingFrames() == 0 &&
             (!state.highBus || state.highBus->pendingFrames() == 0) &&
             (!state.nestedBanks || !state.nestedBanks->pending()) &&
+            reverbQuiet_() &&
             std::max({std::fabs(lp1L_), std::fabs(lp1R_),
                       std::fabs(lp2L_), std::fabs(lp2R_)}) < 1e-7f) {
             ended_ = true; break;
@@ -2272,12 +2311,17 @@ template<int Capacity,bool Nested,bool Adaptive> int MaPlayer::renderSineImpl_(f
         struct Empty {};
         std::conditional_t<Adaptive,sine_output::NestedBankInput,Empty> extra;
         constexpr float kMixGain = .32f;
+        float wl = 0.0f, wr = 0.0f;   // reverb feed (CC91 send), unused while inactive
         if (!state.inputFinished) {
+            int unitsTotal = 0;
+            if constexpr(Adaptive) {
+                for (auto& v : pool_) { if (v.active()) unitsTotal += v.budget.units; else v.budget.units = 0; }
+            }
             for (int i = 0; i < kPoolSize; ++i) {
                 auto& voice = pool_[i]; if (!voice.active()) continue;
                 std::array<float, Capacity> samples;
                 int nestedDensity=0;
-                if constexpr(Adaptive)nestedDensity=voice.nestedSineDensityHint();
+                if constexpr(Adaptive)nestedDensity=grantNestedBudget_(voice.budget,voice.nestedSineDensityHint(),unitsTotal-voice.budget.units);
                 const bool boost = state.highBus && (nestedDensity==16||(!nestedDensity&&voice.sineDensityHint()==16));
                 boostedThisFrame = boostedThisFrame || boost;
                 const int density = nestedDensity ? nestedDensity : boost ? 16 : factor;
@@ -2285,6 +2329,11 @@ template<int Capacity,bool Nested,bool Adaptive> int MaPlayer::renderSineImpl_(f
                 if constexpr(Nested)filtered=voice.tickNestedSubframes(samples.data(),density,state.math);
                 else if constexpr(Adaptive)filtered=nestedDensity?voice.tickNestedSubframes(samples.data(),density,state.math):voice.tickSineSubframes(samples.data(),density,state.math);
                 else filtered=density>1&&voice.tickSineSubframes(samples.data(),density,state.math);
+                if constexpr(Adaptive) {
+                    const int units = filtered ? density : 0;
+                    unitsTotal += units - voice.budget.units;
+                    voice.budget.units = units;
+                }
                 if (filtered) {
                     auto* target = boost ? boosted.data() : high.data();
                     if constexpr(Adaptive)if(nestedDensity>=32)target=extra.use(nestedDensity);
@@ -2292,9 +2341,17 @@ template<int Capacity,bool Nested,bool Adaptive> int MaPlayer::renderSineImpl_(f
                         target[size_t(k)].left += samples[size_t(k)] * kMixGain * poolPanLeft_[i];
                         target[size_t(k)].right += samples[size_t(k)] * kMixGain * poolPanRight_[i];
                     }
+                    if (reverbActive_) {   // the last sub-sample is the native-rate output
+                        const float k = samples[size_t(density - 1)] * kMixGain * sendOf_(voice.channel);
+                        wl += k * poolPanLeft_[i]; wr += k * poolPanRight_[i];
+                    }
                 } else {
                     const float sample = voice.tick();
                     l += sample * kMixGain * poolPanLeft_[i]; r += sample * kMixGain * poolPanRight_[i];
+                    if (reverbActive_) {
+                        const float k = sample * kMixGain * sendOf_(voice.channel);
+                        wl += k * poolPanLeft_[i]; wr += k * poolPanRight_[i];
+                    }
                 }
             }
             for (int i = 0; i < kPcmPool; ++i) {
@@ -2304,14 +2361,28 @@ template<int Capacity,bool Nested,bool Adaptive> int MaPlayer::renderSineImpl_(f
                     completedAtrEndSample_ = std::max(completedAtrEndSample_, pcmPool_[i].atrEndSample);
                 l += sample * kMixGain * pcmPool_[i].panLeft;
                 r += sample * kMixGain * pcmPool_[i].panRight;
+                if (reverbActive_) {
+                    const float k = sample * kMixGain * sendOf_(pcmPool_[i].channel);
+                    wl += k * pcmPool_[i].panLeft; wr += k * pcmPool_[i].panRight;
+                }
             }
             for (auto& voice : audioPool_) {
                 if (!voice.active) continue;
                 const float sample = voice.tick();
                 l += sample * kMixGain * voice.panLeft; r += sample * kMixGain * voice.panRight;
+                if (reverbActive_) {
+                    const float k = sample * kMixGain * sendOf_(voice.channel);
+                    wl += k * voice.panLeft; wr += k * voice.panRight;
+                }
             }
             state.nativeFlushUntil = state.outputCursor + 1 + sine_output::Bus::latency;
             ++cursor_;
+        }
+        // The tail keeps ringing after the last voice, so process it outside the voice block.
+        if (reverbActive_) {
+            float rl, rr; reverb_.process(wl, wr, rl, rr);
+            l += kReverbReturn * rl; r += kReverbReturn * rr;
+            reverbPeak_ = std::max({std::fabs(rl), std::fabs(rr), reverbPeak_ * 0.999f});
         }
         auto aligned = state.bus.frame(std::span<const sine_output::Stereo>(high.data(), size_t(factor)), {l, r});
         if (state.highBus && (boostedThisFrame || state.highBus->pendingFrames() != 0)) {
@@ -2377,6 +2448,7 @@ void MaPlayer::seekToStart() {
     fmSteal_ = pcmSteal_ = 0;
     nextAudioStartOrder_ = 0;
     lp1L_ = lp1R_ = lp2L_ = lp2R_ = 0.0f;
+    resetReverb_();
     limEnv_ = 0.0f;
 }
 

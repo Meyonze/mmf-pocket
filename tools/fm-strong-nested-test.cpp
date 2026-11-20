@@ -50,8 +50,8 @@ void tailBounds() {
     for(const nested::Case c:std::array<nested::Case,2>{{{96,7,3,5,12,24},{96,7,3,5,24,12}}}) {
         const nested::Model model(c);const double base=440*std::pow(2.,double(c.note-69)/12)/44100;
         for(int factor:{16,32,64,128}) {
-            const double bound=fm_nested_tail::bound(nested::tau*4*std::pow(10.,-.75*c.innerTl/20),
-                nested::tau*4*std::pow(10.,-.75*c.middleTl/20),base*c.inner,base*c.middle,base*c.carrier,
+            const double bound=fm_nested_tail::bound(nested::tau*(c.ma7?fxchain::smaf::kMa7PmDepth:fxchain::smaf::kVm35PmDepth)*std::pow(10.,-.75*c.innerTl/20),
+                nested::tau*(c.ma7?fxchain::smaf::kMa7PmDepth:fxchain::smaf::kVm35PmDepth)*std::pow(10.,-.75*c.middleTl/20),base*c.inner,base*c.middle,base*c.carrier,
                 base/2,factor-.5,std::pow(10.,-.75*18/20),base);
             double sum=0;for(auto [h,v]:model.harmonics)if(base*(h/1000.)>=factor-.5)sum+=std::abs(v);
             require(sum<=bound+1e-12,"unequal nested PM indices exceeded analytic tail");++count;
@@ -129,7 +129,7 @@ void spectra() {
             }
             std::cout<<" x"<<factor<<"="<<player_sideband::error(fast,ideal);
             const double base=440*std::pow(2.,double(c.note-69)/12)/44100;
-            const double beta=nested::tau*4*std::pow(10.,-.75*c.innerTl/20);
+            const double beta=nested::tau*(c.ma7?fxchain::smaf::kMa7PmDepth:fxchain::smaf::kVm35PmDepth)*std::pow(10.,-.75*c.innerTl/20);
             const double bound=fm_nested_tail::bound(beta,beta,base*c.inner,base*c.middle,base*c.carrier,
                 base/2,factor-.5,std::pow(10.,-.75*18/20),base);
             double omitted=0;for(auto [h,v]:model.harmonics)if(base*(h/1000.)>=factor-.5)omitted+=std::abs(v);
