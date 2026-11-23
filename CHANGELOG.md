@@ -1,11 +1,16 @@
 # Changelog
 
-## Unreleased
+## 1.7.0 - 2026-11-23
 
 - Bundle an original sample song, Blue Velocity (Meyonze feat.Claude), shown at the
   top of the list before a folder is chosen and at the top of the folder root. It
   plays like any other MMF but is not counted, queued or batch converted with the
-  folder. See docs/builtin-sample-song.md.
+  folder. It is arranged to make the handset-speaker mode easy to hear (sub bass,
+  high sparkle, wide stereo); that is a listening design, not a measured gain.
+  See docs/builtin-sample-song.md.
+- Create release tags with the public identity as tagger in the signed release
+  workflow (release tooling only; no change to playback).
+- No change to the audio engine since 1.6.9.
 
 ## 1.6.9 - 2026-11-20
 
