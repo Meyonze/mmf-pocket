@@ -8,8 +8,9 @@ so that it can be tried before choosing a folder.
   recordings or existing melodies. Distributed under the repository license
   (Apache License 2.0), like the rest of the app.
 - Format: uncompressed Mobile Standard SMAF (MA-5 class), 13 channels of 4-op/2-op
-  FM, 162 BPM, about 57 seconds. SHA-256
-  `241b022d7c96b21dca0160e0a64118b781008b0efabb999b2495c04dd89d72e4`.
+  FM, 162 BPM, about 48 seconds (full band from the first beat; the chorus starts at
+  15 s). SHA-256
+  `d60c70228549979b3266517c11a869e20a5191a75664008bd0a591d5aab64b06`.
 - Checked with this engine: every note resolves to its own voice (no fallback),
   no voice stealing, no clipping (peak -1.8 dBFS).
 
