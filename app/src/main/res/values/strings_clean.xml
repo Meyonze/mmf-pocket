@@ -4,6 +4,7 @@
     <string name="choose_folder_compact">フォルダ</string>
     <string name="no_folder_ja">フォルダが選択されていません</string>
     <string name="empty_folder_ja">このフォルダは空です</string>
+    <string name="builtin_sample_song">Blue Velocity（内蔵サンプル曲）</string>
     <string name="play_description">再生</string>
     <string name="pause_description">一時停止</string>
     <string name="stop_description">停止</string>

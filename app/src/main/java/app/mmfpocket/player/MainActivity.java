@@ -3,6 +3,7 @@ package app.mmfpocket.player;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.ComponentName;
+import android.content.ContentResolver;
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
 import android.content.res.ColorStateList;
@@ -65,6 +66,7 @@ public final class MainActivity extends Activity {
     private String pendingDebugCacheName;
     private static final String PREFS = "mmf_player";
     private static final String PREF_TREE_URI = "tree_uri";
+    private static final String BUILTIN_SONG_FILE_NAME = "Blue Velocity.mmf";
     private static final String PREF_PHONE_SOUND = "phone_sound";
     private static final String PREF_CONTINUOUS_PLAYBACK = "continuous_playback";
     private static final String PREF_RANDOM_PLAYBACK = "random_playback";
@@ -158,7 +160,27 @@ public final class MainActivity extends Activity {
         String saved = getSharedPreferences(PREFS, MODE_PRIVATE).getString(PREF_TREE_URI, null);
         if (saved != null) {
             loadFolder(Uri.parse(saved));
+        } else {
+            showBuiltInSongOnly();
         }
+    }
+
+    /** The bundled original sample song, played like any other MMF. */
+    private BrowserEntry builtInSongEntry() {
+        Uri uri = Uri.parse(ContentResolver.SCHEME_ANDROID_RESOURCE + "://"
+                + getPackageName() + "/" + R.raw.blue_velocity);
+        return BrowserEntry.builtIn(getString(R.string.builtin_sample_song),
+                new MmfEntry(BUILTIN_SONG_FILE_NAME, uri));
+    }
+
+    private void showBuiltInSongOnly() {
+        browserEntries.clear();
+        names.clear();
+        entries.clear();
+        BrowserEntry sample = builtInSongEntry();
+        browserEntries.add(sample);
+        names.add(sample.name);
+        adapter.notifyDataSetChanged();
     }
 
     private View buildUi() {
@@ -337,6 +359,11 @@ public final class MainActivity extends Activity {
                         && browserEntries.get(position).kind == BrowserEntry.DIRECTORY) {
                     row.setCompoundDrawablesRelativeWithIntrinsicBounds(
                             R.drawable.ic_folder_outline, 0, 0, 0);
+                    row.setCompoundDrawablePadding(dp(12));
+                } else if (position < browserEntries.size()
+                        && browserEntries.get(position).builtIn) {
+                    row.setCompoundDrawablesRelativeWithIntrinsicBounds(
+                            R.drawable.ic_music_note, 0, 0, 0);
                     row.setCompoundDrawablePadding(dp(12));
                 } else {
                     row.setCompoundDrawablesRelativeWithIntrinsicBounds(0, 0, 0, 0);
@@ -791,6 +818,12 @@ public final class MainActivity extends Activity {
                 browserEntries.clear();
                 names.clear();
                 entries.clear();
+                if (folderHistory.isEmpty()) {
+                    // Not part of the folder: no count, queue or batch conversion.
+                    BrowserEntry sample = builtInSongEntry();
+                    browserEntries.add(sample);
+                    names.add(sample.name);
+                }
                 int folderCount = 0;
                 for (BrowserEntry entry : found) {
                     browserEntries.add(entry);
@@ -1546,20 +1579,27 @@ public final class MainActivity extends Activity {
         final String name;
         final String documentId;
         final MmfEntry file;
+        final boolean builtIn;
 
-        private BrowserEntry(int kind, String name, String documentId, MmfEntry file) {
+        private BrowserEntry(int kind, String name, String documentId, MmfEntry file,
+                             boolean builtIn) {
             this.kind = kind;
             this.name = name;
             this.documentId = documentId;
             this.file = file;
+            this.builtIn = builtIn;
         }
 
         static BrowserEntry directory(String name, String documentId) {
-            return new BrowserEntry(DIRECTORY, name, documentId, null);
+            return new BrowserEntry(DIRECTORY, name, documentId, null, false);
         }
 
         static BrowserEntry file(MmfEntry file) {
-            return new BrowserEntry(FILE, file.name, null, file);
+            return new BrowserEntry(FILE, file.name, null, file, false);
+        }
+
+        static BrowserEntry builtIn(String label, MmfEntry file) {
+            return new BrowserEntry(FILE, label, null, file, true);
         }
     }
 }

@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Bundle an original sample song, Blue Velocity (Meyonze feat.Claude), shown at the
+  top of the list before a folder is chosen and at the top of the folder root. It
+  plays like any other MMF but is not counted, queued or batch converted with the
+  folder. See docs/builtin-sample-song.md.
+
 ## 1.6.9 - 2026-11-20
 
 - Render complete MA7 FM voices with the same 4-cycle phase-modulation depth as
