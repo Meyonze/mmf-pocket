@@ -30,6 +30,8 @@ import android.widget.ImageButton;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ListView;
+import android.widget.RadioButton;
+import android.widget.RadioGroup;
 import android.widget.SeekBar;
 import android.widget.Switch;
 import android.widget.TextView;
@@ -258,24 +260,10 @@ public final class MainActivity extends Activity {
         versionLabel.setTextSize(11);
         versionLabel.setTextColor(0xFF757575);
         versionLabel.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
-        versionLabel.setPadding(dp(8), 0, dp(4), 0);
+        versionLabel.setPadding(dp(8), 0, 0, 0);
         titleRow.addView(versionLabel, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.MATCH_PARENT));
-
-        ImageButton settingsButton = new ImageButton(this);
-        settingsButton.setImageResource(R.drawable.ic_settings);
-        settingsButton.setContentDescription(getString(R.string.settings_description));
-        settingsButton.setScaleType(ImageView.ScaleType.CENTER);
-        TypedValue borderless = new TypedValue();
-        if (getTheme().resolveAttribute(
-                android.R.attr.selectableItemBackgroundBorderless, borderless, true)) {
-            settingsButton.setBackgroundResource(borderless.resourceId);
-        } else {
-            settingsButton.setBackground(null);
-        }
-        settingsButton.setOnClickListener(view -> showSettings());
-        titleRow.addView(settingsButton, new LinearLayout.LayoutParams(dp(44), dp(44)));
 
         root.addView(titleRow, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
@@ -298,6 +286,20 @@ public final class MainActivity extends Activity {
                 0, LinearLayout.LayoutParams.WRAP_CONTENT, 1);
         folderLabelParams.gravity = Gravity.CENTER_VERTICAL;
         folderControls.addView(folderLabel, folderLabelParams);
+
+        ImageButton settingsButton = new ImageButton(this);
+        settingsButton.setImageResource(R.drawable.ic_settings);
+        settingsButton.setContentDescription(getString(R.string.settings_description));
+        settingsButton.setScaleType(ImageView.ScaleType.CENTER);
+        TypedValue borderless = new TypedValue();
+        if (getTheme().resolveAttribute(
+                android.R.attr.selectableItemBackgroundBorderless, borderless, true)) {
+            settingsButton.setBackgroundResource(borderless.resourceId);
+        } else {
+            settingsButton.setBackground(null);
+        }
+        settingsButton.setOnClickListener(view -> showSettings());
+        folderControls.addView(settingsButton, new LinearLayout.LayoutParams(dp(40), dp(40)));
 
         root.addView(folderControls, folderControlsParams);
 
@@ -1516,54 +1518,91 @@ public final class MainActivity extends Activity {
 
     private void showSettings() {
         boolean converting = batchConverting;
-        String batchLabel = getString(converting
+        boolean batchAvailable = converting || (!scanning && hasConvertibleEntries());
+        int batchLabel = converting
                 ? (batchPaused ? R.string.settings_batch_resume : R.string.settings_batch_pause)
-                : R.string.settings_batch_start);
-        String[] items = {
-                getString(R.string.settings_choose_folder),
-                batchLabel,
-                getString(R.string.settings_check_updates, BuildConfig.VERSION_NAME),
-                getString(R.string.settings_list_names, getString(listShowsTitle
-                        ? R.string.list_names_title : R.string.list_names_file)),
-        };
-        new AlertDialog.Builder(this)
+                : R.string.settings_batch_start;
+
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setPadding(0, dp(4), 0, 0);
+        AlertDialog dialog = new AlertDialog.Builder(this)
                 .setTitle(R.string.settings_title)
-                .setItems(items, (dialog, which) -> {
-                    if (which == 0) {
-                        chooseFolder();
-                    } else if (which == 1) {
-                        if (converting) {
-                            toggleBatchPause();
-                        } else if (scanning) {
-                            Toast.makeText(this, R.string.settings_batch_scanning,
-                                    Toast.LENGTH_SHORT).show();
-                        } else if (!hasConvertibleEntries()) {
-                            Toast.makeText(this, R.string.settings_batch_unavailable,
-                                    Toast.LENGTH_SHORT).show();
-                        } else {
-                            convertAllFiles();
-                        }
-                    } else if (which == 2) {
-                        checkForUpdates();
-                    } else {
-                        showListNameChoice();
-                    }
-                })
+                .setView(content)
                 .setNegativeButton(R.string.settings_close, null)
-                .show();
+                .create();
+
+        content.addView(settingsRow(getString(R.string.settings_choose_folder), true, () -> {
+            dialog.dismiss();
+            chooseFolder();
+        }));
+        content.addView(settingsRow(getString(batchLabel), batchAvailable, () -> {
+            dialog.dismiss();
+            if (converting) {
+                toggleBatchPause();
+            } else if (scanning) {
+                Toast.makeText(this, R.string.settings_batch_scanning, Toast.LENGTH_SHORT).show();
+            } else if (!hasConvertibleEntries()) {
+                Toast.makeText(this, R.string.settings_batch_unavailable,
+                        Toast.LENGTH_SHORT).show();
+            } else {
+                convertAllFiles();
+            }
+        }));
+        content.addView(settingsRow(getString(R.string.settings_check_updates), true, () -> {
+            dialog.dismiss();
+            checkForUpdates();
+        }));
+
+        TextView heading = new TextView(this);
+        heading.setText(R.string.list_names_dialog_title);
+        heading.setTextSize(12);
+        heading.setTextColor(0xFF757575);
+        heading.setPadding(dp(24), dp(14), dp(24), dp(2));
+        content.addView(heading);
+
+        RadioGroup group = new RadioGroup(this);
+        group.setOrientation(RadioGroup.VERTICAL);
+        RadioButton fileName = listNameRadio(R.string.list_names_file, !listShowsTitle);
+        RadioButton title = listNameRadio(R.string.list_names_title, listShowsTitle);
+        group.addView(fileName);
+        group.addView(title);
+        group.setOnCheckedChangeListener((radios, checkedId) ->
+                setListShowsTitle(checkedId == title.getId()));
+        content.addView(group);
+        dialog.show();
     }
 
-    private void showListNameChoice() {
-        String[] choices = {
-                getString(R.string.list_names_file), getString(R.string.list_names_title)};
-        new AlertDialog.Builder(this)
-                .setTitle(R.string.list_names_dialog_title)
-                .setSingleChoiceItems(choices, listShowsTitle ? 1 : 0, (dialog, which) -> {
-                    setListShowsTitle(which == 1);
-                    dialog.dismiss();
-                })
-                .setNegativeButton(android.R.string.cancel, null)
-                .show();
+    private TextView settingsRow(String text, boolean enabled, Runnable action) {
+        TextView row = new TextView(this);
+        row.setText(text);
+        row.setTextSize(16);
+        row.setTextColor(enabled ? 0xFF212121 : 0xFF9E9E9E);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setMinHeight(dp(48));
+        row.setPadding(dp(24), 0, dp(24), 0);
+        TypedValue background = new TypedValue();
+        if (getTheme().resolveAttribute(
+                android.R.attr.selectableItemBackground, background, true)) {
+            row.setBackgroundResource(background.resourceId);
+        }
+        row.setOnClickListener(view -> action.run());
+        return row;
+    }
+
+    private RadioButton listNameRadio(int label, boolean checked) {
+        RadioButton button = new RadioButton(this);
+        button.setId(View.generateViewId());
+        button.setText(label);
+        button.setTextSize(16);
+        button.setChecked(checked);
+        button.setMinHeight(dp(48));
+        button.setPadding(dp(8), 0, dp(24), 0);
+        RadioGroup.LayoutParams params = new RadioGroup.LayoutParams(
+                RadioGroup.LayoutParams.MATCH_PARENT, RadioGroup.LayoutParams.WRAP_CONTENT);
+        params.leftMargin = dp(16);
+        button.setLayoutParams(params);
+        return button;
     }
 
     private void setListShowsTitle(boolean showTitle) {

@@ -2,14 +2,15 @@
 
 ## Unreleased
 
-- Add a settings button at the top right. Choosing a folder, converting the folder
-  (with pause and resume), checking for the latest version and a new setting for
-  the list row names (file name, or the title embedded in the MMF) now live there,
-  replacing the buttons in the folder row and the tappable version label. The
-  embedded title is read from the first 64 KiB of each file in the background and
-  separated from embedded credits like the player heading; files without one keep
-  their file name. The list stays sorted by file name. The progress badge for a
-  running batch conversion stays at the top right.
+- Add a settings button (gear) at the right end of the folder row, where the folder
+  and batch-conversion buttons were. Choosing a folder, converting the folder (with
+  pause and resume) and checking for the latest version are menu rows there, and a
+  new setting chooses what the list rows show, as a radio choice in the same menu:
+  the file name, or the title embedded in the MMF. The version label stays at the
+  top right as plain text. The embedded title is read from the first 64 KiB of each
+  file in the background and separated from embedded credits like the player
+  heading; files without one keep their file name. The list stays sorted by file
+  name. The progress badge for a running batch conversion stays at the top right.
 
 ## 1.7.0 - 2026-11-23
 

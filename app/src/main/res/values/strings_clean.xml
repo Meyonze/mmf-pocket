@@ -12,8 +12,7 @@
     <string name="settings_batch_resume">一括変換を再開</string>
     <string name="settings_batch_unavailable">このフォルダには、一括変換できるMMFがありません</string>
     <string name="settings_batch_scanning">フォルダを読み込み中です。少し待ってからお試しください</string>
-    <string name="settings_check_updates">最新版を確認（現在 v%1$s・GitHubに接続します）</string>
-    <string name="settings_list_names">リストの表示名：%1$s</string>
+    <string name="settings_check_updates">最新版を確認（GitHubに接続）</string>
     <string name="list_names_dialog_title">リストの表示名</string>
     <string name="list_names_file">ファイル名</string>
     <string name="list_names_title">曲名（ファイル内の情報）</string>
