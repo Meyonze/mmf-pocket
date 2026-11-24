@@ -26,8 +26,8 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowInsets;
 import android.widget.ArrayAdapter;
-import android.widget.Button;
 import android.widget.ImageButton;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ListView;
 import android.widget.SeekBar;
@@ -44,6 +44,8 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -67,6 +69,8 @@ public final class MainActivity extends Activity {
     private static final String PREFS = "mmf_player";
     private static final String PREF_TREE_URI = "tree_uri";
     private static final String BUILTIN_SONG_FILE_NAME = "Blue Velocity.mmf";
+    private static final String PREF_LIST_NAME_MODE = "list_name_mode";
+    private static final String LIST_NAME_TITLE = "title";
     private static final String PREF_PHONE_SOUND = "phone_sound";
     private static final String PREF_CONTINUOUS_PLAYBACK = "continuous_playback";
     private static final String PREF_RANDOM_PLAYBACK = "random_playback";
@@ -74,6 +78,11 @@ public final class MainActivity extends Activity {
     private final ExecutorService updateWorker = Executors.newSingleThreadExecutor();
     private boolean checkingForUpdates;
     private final ExecutorService batchWorker = Executors.newSingleThreadExecutor();
+    private final ExecutorService titleWorker = Executors.newSingleThreadExecutor();
+    // File URI -> display title read from the file ("" when it has none).
+    private final Map<String, String> embeddedTitles = new ConcurrentHashMap<>();
+    private boolean listShowsTitle;
+    private volatile boolean scanning;
     private final Object batchPauseLock = new Object();
     private final AtomicInteger scanGeneration = new AtomicInteger();
     private final AtomicInteger batchGeneration = new AtomicInteger();
@@ -118,9 +127,6 @@ public final class MainActivity extends Activity {
     private TextView timeLabel;
     private ListView listView;
     private SeekBar playbackProgress;
-    private Button chooseButton;
-    private Button batchButton;
-    private Button batchPauseButton;
     private ImageButton randomPlaybackButton;
     private Switch phoneSoundSwitch;
     private ImageButton continuousPlaybackButton;
@@ -155,6 +161,8 @@ public final class MainActivity extends Activity {
         if (BuildConfig.DEBUG && savedInstanceState != null) {
             pendingDebugCacheName = savedInstanceState.getString(STATE_DEBUG_WAV);
         }
+        listShowsTitle = LIST_NAME_TITLE.equals(getSharedPreferences(PREFS, MODE_PRIVATE)
+                .getString(PREF_LIST_NAME_MODE, null));
         setContentView(buildUi());
 
         String saved = getSharedPreferences(PREFS, MODE_PRIVATE).getString(PREF_TREE_URI, null);
@@ -179,7 +187,7 @@ public final class MainActivity extends Activity {
         entries.clear();
         BrowserEntry sample = builtInSongEntry();
         browserEntries.add(sample);
-        names.add(sample.name);
+        names.add(displayNameOf(sample));
         adapter.notifyDataSetChanged();
     }
 
@@ -250,17 +258,24 @@ public final class MainActivity extends Activity {
         versionLabel.setTextSize(11);
         versionLabel.setTextColor(0xFF757575);
         versionLabel.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
-        versionLabel.setPadding(dp(8), 0, 0, 0);
-        versionLabel.setPaintFlags(versionLabel.getPaintFlags()
-                | android.graphics.Paint.UNDERLINE_TEXT_FLAG);
-        versionLabel.setContentDescription(getString(R.string.check_updates_description,
-                BuildConfig.VERSION_NAME)
-                + (BuildConfig.DEBUG ? "（長押し：再生WAVを保存）" : ""));
-        versionLabel.setFocusable(true);
-        versionLabel.setOnClickListener(view -> checkForUpdates());
+        versionLabel.setPadding(dp(8), 0, dp(4), 0);
         titleRow.addView(versionLabel, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.MATCH_PARENT));
+
+        ImageButton settingsButton = new ImageButton(this);
+        settingsButton.setImageResource(R.drawable.ic_settings);
+        settingsButton.setContentDescription(getString(R.string.settings_description));
+        settingsButton.setScaleType(ImageView.ScaleType.CENTER);
+        TypedValue borderless = new TypedValue();
+        if (getTheme().resolveAttribute(
+                android.R.attr.selectableItemBackgroundBorderless, borderless, true)) {
+            settingsButton.setBackgroundResource(borderless.resourceId);
+        } else {
+            settingsButton.setBackground(null);
+        }
+        settingsButton.setOnClickListener(view -> showSettings());
+        titleRow.addView(settingsButton, new LinearLayout.LayoutParams(dp(44), dp(44)));
 
         root.addView(titleRow, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
@@ -284,49 +299,6 @@ public final class MainActivity extends Activity {
         folderLabelParams.gravity = Gravity.CENTER_VERTICAL;
         folderControls.addView(folderLabel, folderLabelParams);
 
-        chooseButton = new Button(this);
-        chooseButton.setText(R.string.choose_folder_compact);
-        chooseButton.setTextSize(12);
-        chooseButton.setMinWidth(0);
-        chooseButton.setMinimumWidth(0);
-        chooseButton.setMinHeight(0);
-        chooseButton.setMinimumHeight(0);
-        chooseButton.setOnClickListener(v -> chooseFolder());
-        LinearLayout.LayoutParams chooseParams = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                dp(40));
-        folderControls.addView(chooseButton, chooseParams);
-
-        batchButton = new Button(this);
-        batchButton.setText(R.string.convert_folder_compact);
-        batchButton.setTextSize(12);
-        batchButton.setMinWidth(0);
-        batchButton.setMinimumWidth(0);
-        batchButton.setMinHeight(0);
-        batchButton.setMinimumHeight(0);
-        batchButton.setEnabled(false);
-        batchButton.setOnClickListener(v -> convertAllFiles());
-
-        LinearLayout.LayoutParams batchParams = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                dp(40));
-        batchParams.leftMargin = dp(4);
-        folderControls.addView(batchButton, batchParams);
-
-        batchPauseButton = new Button(this);
-        batchPauseButton.setText(R.string.pause_batch_compact);
-        batchPauseButton.setTextSize(12);
-        batchPauseButton.setMinWidth(0);
-        batchPauseButton.setMinimumWidth(0);
-        batchPauseButton.setMinHeight(0);
-        batchPauseButton.setMinimumHeight(0);
-        batchPauseButton.setVisibility(View.GONE);
-        batchPauseButton.setOnClickListener(v -> toggleBatchPause());
-        LinearLayout.LayoutParams batchPauseParams = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                dp(40));
-        batchPauseParams.leftMargin = dp(4);
-        folderControls.addView(batchPauseButton, batchPauseParams);
         root.addView(folderControls, folderControlsParams);
 
         parentFolderRow = new TextView(this);
@@ -806,7 +778,7 @@ public final class MainActivity extends Activity {
         folderLabel.setText(getString(R.string.selected_folder, folder.displayPath));
         parentFolderRow.setVisibility(folderHistory.isEmpty() ? View.GONE : View.VISIBLE);
         statusLabel.setText(R.string.scanning_folder);
-        batchButton.setEnabled(false);
+        scanning = true;
         listView.setEnabled(false);
         worker.execute(() -> {
             List<BrowserEntry> found = queryDirectory(treeUri, folder.documentId);
@@ -829,16 +801,16 @@ public final class MainActivity extends Activity {
                     browserEntries.add(entry);
                     if (entry.kind == BrowserEntry.DIRECTORY) {
                         folderCount++;
-                        names.add(entry.name);
                     } else {
                         entries.add(entry.file);
-                        names.add(entry.name);
                     }
+                    names.add(displayNameOf(entry));
                 }
                 adapter.notifyDataSetChanged();
                 listView.clearChoices();
                 listView.setEnabled(true);
-                batchButton.setEnabled(hasConvertibleEntries() && !batchConverting);
+                scanning = false;
+                if (listShowsTitle) loadEmbeddedTitles(generation);
                 statusLabel.setText(found.isEmpty()
                         ? getString(R.string.empty_folder_ja)
                         : getString(R.string.folder_item_count, entries.size(), folderCount));
@@ -960,9 +932,6 @@ public final class MainActivity extends Activity {
         batchPaused = false;
         batchCompletedCount = 0;
         batchTotalCount = snapshot.size();
-        batchButton.setEnabled(false);
-        batchPauseButton.setText(R.string.pause_batch_compact);
-        batchPauseButton.setVisibility(View.VISIBLE);
         batchStatusLabel.setText(getString(R.string.batch_progress_compact, 0, snapshot.size()));
         batchStatusLabel.setVisibility(View.VISIBLE);
 
@@ -1008,8 +977,6 @@ public final class MainActivity extends Activity {
                 if (generation != batchGeneration.get() || isFinishing() || isDestroyed()) return;
                 batchConverting = false;
                 batchPaused = false;
-                batchButton.setEnabled(hasConvertibleEntries());
-                batchPauseButton.setVisibility(View.GONE);
                 batchStatusLabel.setVisibility(View.GONE);
                 Toast.makeText(this, getString(R.string.batch_complete,
                         finalConverted, finalReused, finalFailed), Toast.LENGTH_LONG).show();
@@ -1044,11 +1011,9 @@ public final class MainActivity extends Activity {
             if (!batchPaused) batchPauseLock.notifyAll();
         }
         if (batchPaused) {
-            batchPauseButton.setText(R.string.resume_batch_compact);
             batchStatusLabel.setText(getString(R.string.batch_pause_pending_compact,
                     batchCompletedCount, batchTotalCount));
         } else {
-            batchPauseButton.setText(R.string.pause_batch_compact);
             batchStatusLabel.setText(getString(R.string.batch_progress_compact,
                     batchCompletedCount, batchTotalCount));
         }
@@ -1062,8 +1027,6 @@ public final class MainActivity extends Activity {
             batchPaused = false;
             batchPauseLock.notifyAll();
         }
-        batchButton.setEnabled(hasConvertibleEntries());
-        batchPauseButton.setVisibility(View.GONE);
         batchStatusLabel.setVisibility(View.GONE);
     }
 
@@ -1482,8 +1445,134 @@ public final class MainActivity extends Activity {
         progressHandler.removeCallbacks(progressUpdater);
         worker.shutdownNow();
         batchWorker.shutdownNow();
+        titleWorker.shutdownNow();
         updateWorker.shutdownNow();
         super.onDestroy();
+    }
+
+    private String displayNameOf(BrowserEntry entry) {
+        if (entry.kind != BrowserEntry.FILE || entry.builtIn) return entry.name;
+        return ListNames.display(entry.name, embeddedTitles.get(entry.file.uri.toString()),
+                listShowsTitle);
+    }
+
+    private void refreshListNames() {
+        names.clear();
+        for (BrowserEntry entry : browserEntries) names.add(displayNameOf(entry));
+        adapter.notifyDataSetChanged();
+        if (selectedEntry != null) {
+            int index = indexOfBrowserEntry(selectedEntry.uri.toString());
+            if (index != C.INDEX_UNSET) listView.setItemChecked(index, true);
+        }
+    }
+
+    /** Reads the leading bytes of each listed MMF off the main thread. */
+    private void loadEmbeddedTitles(int generation) {
+        List<MmfEntry> pending = new ArrayList<>();
+        for (MmfEntry entry : entries) {
+            if (AudioFileTypes.isMmf(entry.name)
+                    && !embeddedTitles.containsKey(entry.uri.toString())) pending.add(entry);
+        }
+        if (pending.isEmpty()) return;
+        titleWorker.execute(() -> {
+            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND);
+            int sinceRefresh = 0;
+            for (MmfEntry entry : pending) {
+                if (generation != scanGeneration.get() || Thread.currentThread().isInterrupted()) {
+                    return;
+                }
+                embeddedTitles.put(entry.uri.toString(), readEmbeddedTitle(entry.uri));
+                if (++sinceRefresh >= 20) {
+                    sinceRefresh = 0;
+                    postTitleRefresh(generation);
+                }
+            }
+            postTitleRefresh(generation);
+        });
+    }
+
+    private void postTitleRefresh(int generation) {
+        runOnUiThread(() -> {
+            if (generation != scanGeneration.get() || isFinishing() || isDestroyed()) return;
+            refreshListNames();
+        });
+    }
+
+    private String readEmbeddedTitle(Uri uri) {
+        try (java.io.InputStream input = getContentResolver().openInputStream(uri)) {
+            if (input == null) return "";
+            byte[] buffer = new byte[ListNames.MAX_PREFIX_BYTES];
+            int total = 0;
+            int count;
+            while (total < buffer.length
+                    && (count = input.read(buffer, total, buffer.length - total)) > 0) {
+                total += count;
+            }
+            return ListNames.embeddedTitle(buffer, total);
+        } catch (Exception ignored) {
+            return "";
+        }
+    }
+
+    private void showSettings() {
+        boolean converting = batchConverting;
+        String batchLabel = getString(converting
+                ? (batchPaused ? R.string.settings_batch_resume : R.string.settings_batch_pause)
+                : R.string.settings_batch_start);
+        String[] items = {
+                getString(R.string.settings_choose_folder),
+                batchLabel,
+                getString(R.string.settings_check_updates, BuildConfig.VERSION_NAME),
+                getString(R.string.settings_list_names, getString(listShowsTitle
+                        ? R.string.list_names_title : R.string.list_names_file)),
+        };
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.settings_title)
+                .setItems(items, (dialog, which) -> {
+                    if (which == 0) {
+                        chooseFolder();
+                    } else if (which == 1) {
+                        if (converting) {
+                            toggleBatchPause();
+                        } else if (scanning) {
+                            Toast.makeText(this, R.string.settings_batch_scanning,
+                                    Toast.LENGTH_SHORT).show();
+                        } else if (!hasConvertibleEntries()) {
+                            Toast.makeText(this, R.string.settings_batch_unavailable,
+                                    Toast.LENGTH_SHORT).show();
+                        } else {
+                            convertAllFiles();
+                        }
+                    } else if (which == 2) {
+                        checkForUpdates();
+                    } else {
+                        showListNameChoice();
+                    }
+                })
+                .setNegativeButton(R.string.settings_close, null)
+                .show();
+    }
+
+    private void showListNameChoice() {
+        String[] choices = {
+                getString(R.string.list_names_file), getString(R.string.list_names_title)};
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.list_names_dialog_title)
+                .setSingleChoiceItems(choices, listShowsTitle ? 1 : 0, (dialog, which) -> {
+                    setListShowsTitle(which == 1);
+                    dialog.dismiss();
+                })
+                .setNegativeButton(android.R.string.cancel, null)
+                .show();
+    }
+
+    private void setListShowsTitle(boolean showTitle) {
+        if (showTitle == listShowsTitle) return;
+        listShowsTitle = showTitle;
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                .putString(PREF_LIST_NAME_MODE, showTitle ? LIST_NAME_TITLE : "file").apply();
+        refreshListNames();
+        if (showTitle) loadEmbeddedTitles(scanGeneration.get());
     }
 
     private void checkForUpdates() {
