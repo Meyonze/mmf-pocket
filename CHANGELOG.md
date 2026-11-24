@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.8.0 - 2026-11-24
 
 - Add a settings button (gear) at the right end of the folder row, where the folder
   and batch-conversion buttons were. Choosing a folder, converting the folder (with
@@ -11,6 +11,7 @@
   file in the background and separated from embedded credits like the player
   heading; files without one keep their file name. The list stays sorted by file
   name. The progress badge for a running batch conversion stays at the top right.
+- No change to the audio engine since 1.7.0.
 
 ## 1.7.0 - 2026-11-23
 
