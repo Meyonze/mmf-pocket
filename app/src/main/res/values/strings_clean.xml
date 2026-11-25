@@ -1,9 +1,21 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">MMF Pocket</string>
-    <string name="choose_folder_compact">フォルダ</string>
     <string name="no_folder_ja">フォルダが選択されていません</string>
     <string name="empty_folder_ja">このフォルダは空です</string>
+    <string name="settings_description">設定</string>
+    <string name="settings_title">設定</string>
+    <string name="settings_close">閉じる</string>
+    <string name="settings_choose_folder">フォルダを選ぶ</string>
+    <string name="settings_batch_start">このフォルダを一括変換</string>
+    <string name="settings_batch_pause">一括変換を一時停止</string>
+    <string name="settings_batch_resume">一括変換を再開</string>
+    <string name="settings_batch_unavailable">このフォルダには、一括変換できるMMFがありません</string>
+    <string name="settings_batch_scanning">フォルダを読み込み中です。少し待ってからお試しください</string>
+    <string name="settings_check_updates">最新版を確認（GitHubに接続）</string>
+    <string name="list_names_dialog_title">リストの表示名</string>
+    <string name="list_names_file">ファイル名</string>
+    <string name="list_names_title">曲名（ファイル内の情報）</string>
     <string name="builtin_sample_song">Blue Velocity（内蔵サンプル曲）</string>
     <string name="play_description">再生</string>
     <string name="pause_description">一時停止</string>
@@ -27,9 +39,6 @@
     <string name="player_connection_failed">バックグラウンド再生機能へ接続できません</string>
     <string name="player_status_paused">一時停止</string>
     <string name="playback_stopped">停止しました</string>
-    <string name="convert_folder_compact">一括変換</string>
-    <string name="pause_batch_compact">一時停止</string>
-    <string name="resume_batch_compact">再開</string>
     <string name="batch_progress_compact">一括変換 %1$d/%2$d</string>
     <string name="batch_pause_pending_compact">停止待ち %1$d/%2$d</string>
     <string name="batch_paused_compact">一時停止中 %1$d/%2$d</string>
@@ -50,7 +59,6 @@
     <string name="selected_folder">フォルダ: %1$s</string>
     <string name="internal_storage">内部ストレージ</string>
     <string name="selected_folder_fallback">選択済み</string>
-    <string name="check_updates_description">バージョン %1$s。更新を確認（GitHubに接続します）</string>
     <string name="update_browser_unavailable">ブラウザを開けませんでした。ブラウザをインストールしてからお試しください。</string>
     <string name="update_check_title">更新の確認</string>
     <string name="update_checking">GitHubで更新を確認しています…</string>

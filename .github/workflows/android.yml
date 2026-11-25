@@ -50,9 +50,10 @@ jobs:
       - name: Check embedded MMF display metadata
         run: |
           mkdir -p build/mmf-metadata-tests
-          javac -encoding UTF-8 --release 17 -Xlint:all -d build/mmf-metadata-tests app/src/main/java/app/mmfpocket/player/MmfMetadata.java app/src/main/java/app/mmfpocket/player/SongDisplayText.java tools/MmfMetadataTest.java tools/SongDisplayTextTest.java
+          javac -encoding UTF-8 --release 17 -Xlint:all -d build/mmf-metadata-tests app/src/main/java/app/mmfpocket/player/MmfMetadata.java app/src/main/java/app/mmfpocket/player/SongDisplayText.java app/src/main/java/app/mmfpocket/player/ListNames.java tools/MmfMetadataTest.java tools/SongDisplayTextTest.java tools/ListNamesTest.java
           java -cp build/mmf-metadata-tests app.mmfpocket.player.MmfMetadataTest
           java -cp build/mmf-metadata-tests app.mmfpocket.player.SongDisplayTextTest
+          java -cp build/mmf-metadata-tests app.mmfpocket.player.ListNamesTest
 
   native-security-smoke:
     runs-on: ubuntu-latest

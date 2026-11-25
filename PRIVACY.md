@@ -22,8 +22,9 @@ apps' sound. Its visual measurements are not saved to disk or transmitted.
 ## Permissions and network access
 
 The app requests the Internet permission solely to check the latest stable release
-at `https://api.github.com/repos/Meyonze/mmf-pocket/releases/latest` when you tap
-the version label. There are no automatic or background update checks.
+at `https://api.github.com/repos/Meyonze/mmf-pocket/releases/latest` when you choose
+"Check for the latest version" in the settings menu. There are no automatic or
+background update checks.
 
 The request does not include music, file names, generated audio, usage history or
 an app-specific user identifier. GitHub receives normal connection information,
